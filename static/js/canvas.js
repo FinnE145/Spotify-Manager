@@ -1,6 +1,6 @@
 (() => {
-  const CARD_W = 140;
-  const CARD_H = 175;
+  const CARD_W = 98; // 140 * 0.7
+  const CARD_H = 122.5; // 175 * 0.7
   const GRID_DIVISOR = 7; // cards are ~7 grid units tall (falls in the 6-8 range)
 
   const viewportEl = document.getElementById("viewport");
@@ -79,6 +79,8 @@
       const el = document.createElement("div");
       el.className = "card tray-card";
       el.dataset.key = cardKey(card);
+      el.style.width = `${CARD_W}px`;
+      el.style.height = `${CARD_H}px`;
       el.innerHTML = cardInner(card);
       el.addEventListener("mousedown", (e) => startTrayDrag(e, card));
       trayEl.appendChild(el);
@@ -280,19 +282,24 @@
     if (e.button !== 0) return;
     e.preventDefault();
 
+    // Match the card's actual on-canvas size at the current zoom/intrinsic
+    // scale, so the drag preview looks like where/how big it'll land.
+    const ghostW = CARD_W * intrinsicScale * view.zoom;
+    const ghostH = CARD_H * intrinsicScale * view.zoom;
+
     const ghost = document.createElement("div");
     ghost.className = "card";
     ghost.style.position = "fixed";
-    ghost.style.width = `${CARD_W}px`;
-    ghost.style.height = `${CARD_H}px`;
+    ghost.style.width = `${ghostW}px`;
+    ghost.style.height = `${ghostH}px`;
     ghost.style.zIndex = "1000";
     ghost.style.pointerEvents = "none";
     ghost.innerHTML = cardInner(card);
     document.body.appendChild(ghost);
 
     const moveGhost = (ev) => {
-      ghost.style.left = `${ev.clientX - CARD_W / 2}px`;
-      ghost.style.top = `${ev.clientY - CARD_H / 2}px`;
+      ghost.style.left = `${ev.clientX - ghostW / 2}px`;
+      ghost.style.top = `${ev.clientY - ghostH / 2}px`;
     };
     moveGhost(e);
 

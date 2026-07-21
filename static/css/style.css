@@ -69,8 +69,6 @@ html, body {
 
 .card.tray-card {
   position: static;
-  width: 140px;
-  height: 175px;
   margin: 0 auto 10px;
 }
 
