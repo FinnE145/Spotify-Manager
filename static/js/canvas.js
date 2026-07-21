@@ -13,6 +13,7 @@
   const radiusCheckbox = document.getElementById("radius-checkbox");
   const pullBtn = document.getElementById("pull-btn");
   const exportBtn = document.getElementById("export-btn");
+  const downloadBtn = document.getElementById("download-btn");
   const statusEl = document.getElementById("status");
 
   let state = { cards: [], labels: [] };
@@ -496,6 +497,20 @@
       navigator.clipboard.writeText(data.text).then(() => {
         statusEl.textContent = "Copied to clipboard.";
       });
+    });
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    const cutoff = Number(cutoffInput.value) || 300;
+    api(`/api/export?cutoff=${cutoff}`).then((data) => {
+      const blob = new Blob([data.text], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "symr-export.md";
+      a.click();
+      URL.revokeObjectURL(url);
+      statusEl.textContent = "Downloaded.";
     });
   });
 
