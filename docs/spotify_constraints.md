@@ -23,6 +23,12 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 - Calculated over a **rolling 30-second window**. On `429`, honor the **`Retry-After`** header (seconds) and back off — don't retry before it elapses.
 - Spotify does **not** publish an exact numeric limit; it differs between *development mode* and *extended quota mode*. Community testing suggests ≈180 requests/min before `429`. Treat as a guideline, not a guarantee — batch and cache.
 
+## Algorithmic / editorial playlists — NOT retrievable (verified against community reports, Jul 2026)
+- `GET /me/playlists` (Spotipy's `current_user_playlists()`) only returns playlists the user actually owns or follows as real playlist objects.
+- Since a Spotify API policy change on **2024-11-27**, apps without a pre-existing extended-quota grant (any new app, including Symr) **cannot** get algorithmic/Spotify-editorial playlists via this endpoint at all — Daily Mixes, personalized "genre Mix" playlists (e.g. "Indie Mix"), Blends, "Top Songs of 202X", Discover Weekly, Release Radar, etc. are invisible regardless of whether the user follows them.
+- Confirmed empirically: Finn's real 149-playlist pull (Jul 2026) included playlists made *for* him by other real accounts, AI-playlist-maker output, and manually-curated "choose the songs" playlists, but none of his algorithmic/personalized mixes.
+- Consequence: the "Spotify Playlists auto-sort" backlog idea (splitting Mixes/Blends/curated) doesn't apply to true algorithmic Mixes since they're not fetchable at all; it still applies to Blends and Spotify-curated genre playlists (e.g. "Summer Indie"), which are real followed playlist objects and do come through.
+
 ## Data sources beyond the API
 - Spotify GDPR "extended streaming history" export (per-play timestamps).
 - ListenBrainz (live play tracking / storage) — potential integration.
