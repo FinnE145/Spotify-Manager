@@ -4,11 +4,12 @@
 A Flask app for maintaining and verifying a Spotify library that follows a specific set of personal conventions (an append-only "Finn All" master playlist, semver-named "current favs" playlists, an ATG playlist, and a CI/CL intake playlist). The full library/usage spec lives in `docs/library_spec.md` (TBD).
 
 ## Tech Stack
-- Python / Flask (exact versions TBD — record them here once chosen).
-- Spotify Web API access: TBD (raw requests vs a client library).
-- Storage: TBD (likely SQLite for snapshots, version history, and the cover library).
-- Frontend: minimal to start — function over form (see **Frontend**).
-- Fill this section in as each choice is made during a feature spec. Never assume an unstated version or library.
+- **Python 3.14.5** (fall back to 3.12 if something doesn't work), **Flask**.
+- **Spotipy** for Spotify Web API access — handles OAuth, token refresh, and paging.
+- **SQLite** via the stdlib `sqlite3` + a thin helper (no ORM unless the schema forces it): library snapshot, version history, folder-structure record, cover library, canvas boards, etc.
+- **Frontend:** server-rendered **Jinja templates + vanilla JS**, no SPA framework. Richer interactive JS only where a feature needs it (e.g. the org canvas) — settle those specifics in that feature's spec.
+- **Env:** `venv` + `requirements.txt`.
+- v1 is read-only. Fill in remaining choices (charts, etc.) as features are specced. Never assume an unstated version or library.
 
 ## Codebase Map
 - `docs/` — specs and reference. Feature specs at `docs/specs/<feature>.md`; per-feature extra files (sub-specs, notes, verification reports) in `docs/<feature>/`; hard Spotify API limits in `docs/spotify_constraints.md`.

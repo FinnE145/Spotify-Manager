@@ -3,8 +3,8 @@
 Living list of features surfaced during planning. Not yet specced unless linked to a `docs/specs/<feature>.md`. Ordering is rough priority, not commitment.
 
 ## Next up (first build)
-- **Org canvas** — read-only pull of every playlist as draggable cards on an open canvas. Drag to cluster, add freeform text labels, and "copy as text list" to paste into claude.ai for bouncing organization ideas. This is the tool Finn uses to do the one-time categorization pass, which then feeds `docs/library_spec.md`. Read-only. Foundation: needs the library snapshot below.
-- **Library snapshot (read-only)** — pull all playlists (name, owner, track list, `added_at`, counts) into SQLite; underlies the canvas and every later feature. Folder placement is NOT readable via the API — tracked separately (see Organization).
+- **Org canvas** — SPECCED → `docs/specs/org-canvas.md` (ready to implement). Read-only pull of every playlist as draggable cards on a canvas with a side tray; drag to cluster, add freeform text labels, "copy as text" export (with coordinates) to paste into claude.ai. The tool Finn uses for the one-time categorization pass that feeds `docs/library_spec.md`. Phase 1.5 adds chained grouping; later tiers add album/song/artist cards, download export, and refresh reconciliation.
+- **Library snapshot (read-only)** — folded into the org-canvas spec as its snapshot layer (playlists → SQLite). Will grow (added_at, track lists, counts) as later features need it. Folder placement is NOT readable via the API — tracked separately (see Organization).
 
 ## Verification / problems dashboard (read-only first)
 - **Finn All dedup** — flag exact-duplicate tracks, and fuzzy dups (same song as single vs album version, wrong-version/album-cover cases). These + moral removals are the only sanctioned deletions from append-only playlists.
