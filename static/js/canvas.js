@@ -2,6 +2,7 @@
   const CARD_W = 98; // 140 * 0.7
   const CARD_H = 122.5; // 175 * 0.7
   const GRID_DIVISOR = 7; // cards are ~7 grid units tall (falls in the 6-8 range)
+  const LABEL_FONT_SIZE = 17.5; // 14 * 1.25
 
   const viewportEl = document.getElementById("viewport");
   const worldEl = document.getElementById("world");
@@ -136,7 +137,7 @@
       el.style.left = `${label.x}px`;
       el.style.top = `${label.y}px`;
       el.style.transform = "translate(-50%, -50%)";
-      el.style.fontSize = `${14 * intrinsicScale}px`;
+      el.style.fontSize = `${LABEL_FONT_SIZE * intrinsicScale}px`;
       el.textContent = label.text;
       el.addEventListener("mousedown", (e) => startMove(e, labelKey(label)));
       worldEl.appendChild(el);
@@ -178,16 +179,25 @@
     });
   }
 
-  function deleteSelectedLabels() {
-    const toDelete = [...selection].filter((k) => k.startsWith("label:"));
-    for (const key of toDelete) {
-      const id = Number(key.split(":")[1]);
-      api(`/api/label/${id}`, { method: "DELETE" }).then(() => {
+  function handleDeleteKey() {
+    for (const key of [...selection]) {
+      const [kind, idStr] = key.split(":");
+      const id = Number(idStr);
+      if (kind === "label") {
         state.labels = state.labels.filter((l) => l.id !== id);
-        selection.delete(key);
-        renderWorld();
-      });
+        api(`/api/label/${id}`, { method: "DELETE" });
+      } else {
+        const card = state.cards.find((c) => c.id === id);
+        if (card) {
+          card.placement = "tray";
+          card.x = null;
+          card.y = null;
+          persistPosition(key, card);
+        }
+      }
+      selection.delete(key);
     }
+    renderAll();
   }
 
   // ---------- drag: moving cards/labels on the canvas ----------
@@ -228,17 +238,30 @@
       renderWorld();
     };
 
-    const onUp = () => {
+    const onUp = (upEvent) => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       if (dragState.moved) {
+        const trayRect = trayEl.getBoundingClientRect();
+        const droppedOnTray =
+          upEvent.clientX >= trayRect.left &&
+          upEvent.clientX <= trayRect.right &&
+          upEvent.clientY >= trayRect.top &&
+          upEvent.clientY <= trayRect.bottom;
+
         for (const k of dragState.origins.keys()) {
           const item = findItem(k);
-          item.x = snap(item.x);
-          item.y = snap(item.y);
+          if (droppedOnTray && k.startsWith("card:")) {
+            item.placement = "tray";
+            item.x = null;
+            item.y = null;
+          } else {
+            item.x = snap(item.x);
+            item.y = snap(item.y);
+          }
           persistPosition(k, item);
         }
-        renderWorld();
+        renderAll();
       } else if (!dragState.modifier && dragState.key.startsWith("label:")) {
         const label = findItem(dragState.key);
         const el = worldEl.querySelector(`[data-key="${dragState.key}"]`);
@@ -265,7 +288,7 @@
       api(`/api/card/${id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ placement: "placed", x: item.x, y: item.y }),
+        body: JSON.stringify({ placement: item.placement, x: item.x, y: item.y }),
       });
     } else {
       api(`/api/label/${id}`, {
@@ -337,7 +360,7 @@
       viewportEl.classList.add("panning");
     } else if (e.key === "Delete" || e.key === "Backspace") {
       if (document.activeElement && document.activeElement.isContentEditable) return;
-      deleteSelectedLabels();
+      handleDeleteKey();
     }
   });
   document.addEventListener("keyup", (e) => {
