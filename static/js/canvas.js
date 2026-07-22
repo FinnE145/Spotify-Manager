@@ -3,6 +3,9 @@
   const CARD_H = 122.5; // 175 * 0.7
   const GRID_DIVISOR = 7; // cards are ~7 grid units tall (falls in the 6-8 range)
   const LABEL_FONT_SIZE = 17.5; // 14 * 1.25
+  const LABEL_MIN_WIDTH = 117; // 60 * 1.5 * 1.3
+  const LABEL_PADDING_V = 5.2; // 4 * 1.3
+  const LABEL_PADDING_H = 10.4; // 8 * 1.3
 
   const viewportEl = document.getElementById("viewport");
   const worldEl = document.getElementById("world");
@@ -138,6 +141,8 @@
       el.style.top = `${label.y}px`;
       el.style.transform = "translate(-50%, -50%)";
       el.style.fontSize = `${LABEL_FONT_SIZE * intrinsicScale}px`;
+      el.style.minWidth = `${LABEL_MIN_WIDTH * intrinsicScale}px`;
+      el.style.padding = `${LABEL_PADDING_V * intrinsicScale}px ${LABEL_PADDING_H * intrinsicScale}px`;
       el.textContent = label.text;
       el.addEventListener("mousedown", (e) => startMove(e, labelKey(label)));
       worldEl.appendChild(el);
