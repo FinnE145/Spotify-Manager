@@ -41,7 +41,10 @@ html, body {
   position: relative;
   flex: 1;
   overflow: hidden;
-  background: #eee;
+  background-color: #eee;
+  /* Dotted snap grid. background-size/position are set in JS to track pan/zoom. */
+  background-image: radial-gradient(circle, #c2c2c2 1.1px, transparent 1.4px);
+  background-size: 17.5px 17.5px;
   cursor: default;
 }
 
@@ -74,18 +77,34 @@ html, body {
 
 .card img {
   width: 100%;
-  height: 70%;
+  aspect-ratio: 1 / 1; /* square cover, matching Spotify's square art */
   object-fit: cover;
   display: block;
   pointer-events: none;
 }
 
 .card .name {
-  padding: 4px;
+  padding: 2px 4px;
   font-size: 12px;
+  font-weight: 600;
   line-height: 1.2;
   text-align: center;
   pointer-events: none;
+}
+
+.card .note {
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: left; /* notes read left-aligned, unlike the centered name */
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #333;
+}
+
+.card .note:focus {
+  outline: none;
+  background: #fffef2;
 }
 
 .card.selected {
@@ -102,6 +121,10 @@ html, body {
 
 .label {
   position: absolute;
+  display: flex;
+  align-items: center; /* vertically center text within the grid-sized box */
+  justify-content: center; /* and horizontally */
+  text-align: center;
   font-weight: 600;
   background: rgba(255, 235, 150, 0.85);
   border: 1px solid #d8b800;

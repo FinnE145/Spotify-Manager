@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS card (
     entity_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
     image_url TEXT,
+    note TEXT NOT NULL DEFAULT '',
     placement TEXT NOT NULL DEFAULT 'tray' CHECK (placement IN ('tray', 'placed')),
     x REAL,
     y REAL,
@@ -63,9 +64,17 @@ def close_db(e=None):
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.execute(
         "INSERT INTO board (id, name) SELECT 1, 'Default' "
         "WHERE NOT EXISTS (SELECT 1 FROM board WHERE id = 1)"
     )
     conn.commit()
     conn.close()
+
+
+def _migrate(conn):
+    """Additive migrations for DBs created before a column existed."""
+    card_columns = {row[1] for row in conn.execute("PRAGMA table_info(card)")}
+    if "note" not in card_columns:
+        conn.execute("ALTER TABLE card ADD COLUMN note TEXT NOT NULL DEFAULT ''")

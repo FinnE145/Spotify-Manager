@@ -1,9 +1,14 @@
 (() => {
-  const CARD_W = 98; // 140 * 0.7
-  const CARD_H = 122.5; // 175 * 0.7
-  const GRID_DIVISOR = 7; // cards are ~7 grid units tall (falls in the 6-8 range)
+  // GRID is the primitive: the snap step, the dotted-grid spacing, and the unit
+  // that card/label sizes are multiples of (all in world units at scale 1).
+  const GRID = 17.5;
+  // Even cell counts so that, with the midpoint snapped to a grid dot, every
+  // edge (±W/2, ±H/2) also lands on a dot. Card is a square cover (6x6) + a
+  // 2-cell name strip.
+  const CARD_W = 6 * GRID; // 105
+  const CARD_H = 8 * GRID; // 140
   const LABEL_FONT_SIZE = 17.5; // 14 * 1.25
-  const LABEL_MIN_WIDTH = 117; // 60 * 1.5 * 1.3
+  const LABEL_MIN_WIDTH = 7 * GRID; // 122.5 (label box snaps up from here, in grid units)
   const LABEL_PADDING_V = 5.2; // 4 * 1.3
   const LABEL_PADDING_H = 10.4; // 8 * 1.3
 
@@ -41,12 +46,42 @@
   }
 
   function gridUnit() {
-    return (CARD_H * intrinsicScale) / GRID_DIVISOR;
+    return GRID * intrinsicScale;
   }
 
   function snap(v) {
     const unit = gridUnit();
     return Math.round(v / unit) * unit;
+  }
+
+  // Round a label's box up to whole grid cells so it tiles with the dotted grid
+  // like the (fixed-size) cards do. Clearing width/height first re-measures the
+  // natural, text-driven size before rounding.
+  function sizeLabelToGrid(el) {
+    // Round up to an even number of cells (like the cards) so a midpoint-snapped
+    // label has all four edges on grid dots too.
+    const step = gridUnit() * 2;
+    el.style.width = "";
+    el.style.height = "";
+    el.style.width = `${Math.ceil(el.offsetWidth / step) * step}px`;
+    el.style.height = `${Math.ceil(el.offsetHeight / step) * step}px`;
+  }
+
+  // Set a placed card's height + top. A card with no note keeps the fixed 8-cell
+  // size; a card with a note (present as a .note child) grows to fit, rounded up
+  // to an even number of cells so its edges still land on the grid. Height grows
+  // symmetrically about the (grid-snapped) midpoint, so y stays on a dot.
+  function fitCardHeight(el, card) {
+    let h;
+    if (el.querySelector(".note")) {
+      const step = gridUnit() * 2;
+      el.style.height = "";
+      h = Math.ceil(el.offsetHeight / step) * step;
+    } else {
+      h = CARD_H * intrinsicScale;
+    }
+    el.style.height = `${h}px`;
+    el.style.top = `${card.y - h / 2}px`;
   }
 
   // ---------- coordinate transforms ----------
@@ -61,6 +96,11 @@
 
   function applyViewTransform() {
     worldEl.style.transform = `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`;
+    // Keep the dotted grid locked to world space: dots sit on the snap lattice
+    // (world multiples of gridUnit) and pan/zoom with the cards.
+    const spacing = gridUnit() * view.zoom;
+    viewportEl.style.backgroundSize = `${spacing}px ${spacing}px`;
+    viewportEl.style.backgroundPosition = `${view.panX}px ${view.panY}px`;
   }
 
   // ---------- rendering ----------
@@ -92,7 +132,7 @@
   }
 
   function cardInner(card) {
-    const img = card.image_url ? `<img src="${card.image_url}" alt="">` : "";
+    const img = card.image_url ? `<img src="${escapeHtml(card.image_url)}" alt="">` : "";
     return `${img}<div class="name">${escapeHtml(card.display_name)}</div>`;
   }
 
@@ -105,7 +145,6 @@
   function renderWorld() {
     worldEl.innerHTML = "";
     const w = CARD_W * intrinsicScale;
-    const h = CARD_H * intrinsicScale;
 
     for (const card of state.cards.filter((c) => c.placement === "placed")) {
       const el = document.createElement("div");
@@ -113,17 +152,23 @@
       if (selection.has(cardKey(card))) el.classList.add("selected");
       el.dataset.key = cardKey(card);
       el.style.left = `${card.x - w / 2}px`;
-      el.style.top = `${card.y - h / 2}px`;
       el.style.width = `${w}px`;
-      el.style.height = `${h}px`;
       el.innerHTML = cardInner(card);
+      if (card.note) {
+        const noteEl = document.createElement("div");
+        noteEl.className = "note";
+        noteEl.textContent = card.note;
+        el.appendChild(noteEl);
+      }
       el.addEventListener("mousedown", (e) => startMove(e, cardKey(card)));
       worldEl.appendChild(el);
+      fitCardHeight(el, card); // sets height + top (variable when the card has a note)
 
       if (showRadius) {
         const cutoff = Number(cutoffInput.value) || 0;
         const circle = document.createElement("div");
         circle.className = "radius-circle";
+        circle.dataset.radiusFor = card.id;
         circle.style.width = `${cutoff * 2}px`;
         circle.style.height = `${cutoff * 2}px`;
         circle.style.left = `${card.x - cutoff}px`;
@@ -146,29 +191,136 @@
       el.textContent = label.text;
       el.addEventListener("mousedown", (e) => startMove(e, labelKey(label)));
       worldEl.appendChild(el);
+      sizeLabelToGrid(el);
     }
 
     applyViewTransform();
   }
 
+  // Toggle the 'selected' outline on existing elements without rebuilding the
+  // DOM. Rebuilding on mousedown would replace the card element between the two
+  // clicks of a double-click, so the browser would never fire dblclick on it.
+  function updateSelectionClasses() {
+    for (const el of worldEl.querySelectorAll("[data-key]")) {
+      el.classList.toggle("selected", selection.has(el.dataset.key));
+    }
+  }
+
+  // Reposition a single placed card/label (and, for a card, its radius circle)
+  // in-place. Used during a drag so we don't rebuild the whole world each frame.
+  function positionMovedEl(key, item) {
+    const el = worldEl.querySelector(`[data-key="${key}"]`);
+    if (!el) return;
+    if (key.startsWith("card:")) {
+      const w = CARD_W * intrinsicScale;
+      // The card's height varies with its note; use the height set at render.
+      const h = parseFloat(el.style.height) || CARD_H * intrinsicScale;
+      el.style.left = `${item.x - w / 2}px`;
+      el.style.top = `${item.y - h / 2}px`;
+      if (showRadius) {
+        const cutoff = Number(cutoffInput.value) || 0;
+        const circle = worldEl.querySelector(`.radius-circle[data-radius-for="${item.id}"]`);
+        if (circle) {
+          circle.style.left = `${item.x - cutoff}px`;
+          circle.style.top = `${item.y - cutoff}px`;
+        }
+      }
+    } else {
+      el.style.left = `${item.x}px`;
+      el.style.top = `${item.y}px`;
+    }
+  }
+
   // ---------- label editing ----------
 
-  function editLabel(el, label) {
+  // Shared inline-text editing for labels and card notes.
+  //   original  - text to restore if the edit is cancelled with Esc
+  //   onInput   - optional per-keystroke callback (e.g. live-resize a card)
+  //   commit    - fn(text) that saves the final/cancelled text to model + server
+  //   rerender  - fn() to redraw after the edit closes
+  // Enter commits and exits; Shift/Ctrl/⌘+Enter inserts a newline; Esc reverts.
+  function beginEdit(el, { original, onInput, commit, rerender }) {
     el.contentEditable = "true";
     el.focus();
     document.execCommand("selectAll", false, null);
+    let cancelled = false;
+
+    const onKey = (ev) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancelled = true;
+        el.blur();
+      } else if (ev.key === "Enter") {
+        ev.preventDefault();
+        if (ev.shiftKey || ev.ctrlKey || ev.metaKey) {
+          document.execCommand("insertLineBreak");
+          if (onInput) onInput();
+        } else {
+          el.blur();
+        }
+      }
+    };
+    const onInputEvt = () => {
+      if (onInput) onInput();
+    };
     const finish = () => {
       el.contentEditable = "false";
-      const text = el.textContent;
       el.removeEventListener("blur", finish);
-      label.text = text;
-      api(`/api/label/${label.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
+      el.removeEventListener("keydown", onKey);
+      el.removeEventListener("input", onInputEvt);
+      // innerText (not textContent) preserves <br> line breaks as "\n";
+      // browsers tack on a trailing newline, so drop one.
+      const text = cancelled ? original : el.innerText.replace(/\n$/, "");
+      commit(text);
+      rerender();
     };
+
+    el.addEventListener("keydown", onKey);
+    el.addEventListener("input", onInputEvt);
     el.addEventListener("blur", finish);
+  }
+
+  function editLabel(el, label) {
+    // Let the box grow freely with the text while editing; it re-snaps to the
+    // grid on commit (rerender -> sizeLabelToGrid).
+    el.style.width = "";
+    el.style.height = "";
+    beginEdit(el, {
+      original: label.text,
+      onInput: null,
+      commit: (text) => {
+        label.text = text;
+        api(`/api/label/${label.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+      },
+      rerender: renderWorld,
+    });
+  }
+
+  function editCardNote(cardEl, card) {
+    let noteEl = cardEl.querySelector(".note");
+    if (!noteEl) {
+      noteEl = document.createElement("div");
+      noteEl.className = "note";
+      cardEl.appendChild(noteEl);
+    }
+    fitCardHeight(cardEl, card); // make room for the (possibly empty) editable line
+    beginEdit(noteEl, {
+      original: card.note || "",
+      onInput: () => fitCardHeight(cardEl, card), // grow the card live as you type
+      commit: (text) => {
+        card.note = text;
+        api(`/api/card/${card.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: text }),
+        });
+      },
+      rerender: renderWorld,
+    });
   }
 
   function createLabelAt(x, y) {
@@ -211,6 +363,9 @@
 
   function startMove(e, key) {
     if (e.button !== 0 || spaceHeld) return;
+    // Don't start a drag (which re-renders and would drop the edit) when the
+    // click lands in text that's being edited — let the caret move instead.
+    if (e.target.isContentEditable) return;
     e.stopPropagation();
 
     const modifier = e.shiftKey || e.metaKey || e.ctrlKey;
@@ -220,7 +375,7 @@
     } else if (!selection.has(key)) {
       selection = new Set([key]);
     }
-    renderWorld();
+    updateSelectionClasses();
 
     const startWorld = screenToWorld(e.clientX, e.clientY);
     const origins = new Map();
@@ -239,8 +394,8 @@
         const item = findItem(k);
         item.x = origin.x + dx;
         item.y = origin.y + dy;
+        positionMovedEl(k, item);
       }
-      renderWorld();
     };
 
     const onUp = (upEvent) => {
@@ -260,6 +415,7 @@
             item.placement = "tray";
             item.x = null;
             item.y = null;
+            selection.delete(k); // tray cards don't render a selection outline
           } else {
             item.x = snap(item.x);
             item.y = snap(item.y);
@@ -427,6 +583,12 @@
   });
 
   viewportEl.addEventListener("dblclick", (e) => {
+    const cardEl = e.target.closest(".card");
+    if (cardEl && worldEl.contains(cardEl)) {
+      const card = findItem(cardEl.dataset.key);
+      if (card) editCardNote(cardEl, card);
+      return;
+    }
     if (e.target !== viewportEl && e.target !== worldEl) return;
     const world = screenToWorld(e.clientX, e.clientY);
     createLabelAt(world.x, world.y);

@@ -1,13 +1,16 @@
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+import secrets
+
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 import db
-from config import APP_PORT
+from config import APP_DEBUG, APP_PORT, SECRET_KEY
 from grouping import render_export_text
 from spotify_client import get_auth_manager, get_spotify_client
 
 
 def create_app():
     app = Flask(__name__)
+    app.secret_key = SECRET_KEY
     db.init_db()
 
     app.teardown_appcontext(db.close_db)
@@ -24,13 +27,26 @@ def create_app():
 
     @app.route("/login")
     def login():
+        state = secrets.token_urlsafe(32)
+        session["oauth_state"] = state
         auth_manager = get_auth_manager()
-        return redirect(auth_manager.get_authorize_url())
+        return redirect(auth_manager.get_authorize_url(state=state))
 
     @app.route("/callback")
     def callback():
-        auth_manager = get_auth_manager()
+        error = request.args.get("error")
+        if error:
+            return f"Spotify authorization failed: {error}", 400
+
+        expected = session.pop("oauth_state", None)
+        if not expected or request.args.get("state") != expected:
+            return "Invalid OAuth state.", 400
+
         code = request.args.get("code")
+        if not code:
+            return "Missing authorization code.", 400
+
+        auth_manager = get_auth_manager()
         auth_manager.get_access_token(code, as_dict=False)
         return redirect(url_for("index"))
 
@@ -111,6 +127,23 @@ def create_app():
         conn.commit()
         return jsonify({"ok": True})
 
+    @app.route("/api/card/<int:card_id>", methods=["PATCH"])
+    def patch_card(card_id):
+        body = request.get_json()
+        conn = db.get_db()
+        fields, params = [], []
+        for key in ("note", "x", "y", "placement"):
+            if key in body:
+                fields.append(f"{key} = ?")
+                params.append(body[key])
+        if fields:
+            params.extend([card_id, db.DEFAULT_BOARD_ID])
+            conn.execute(
+                f"UPDATE card SET {', '.join(fields)} WHERE id = ? AND board_id = ?", params
+            )
+            conn.commit()
+        return jsonify({"ok": True})
+
     # -- Labels -------------------------------------------------------
 
     @app.route("/api/label", methods=["POST"])
@@ -181,4 +214,4 @@ def _board_state(conn):
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(port=APP_PORT, debug=True)
+    app.run(port=APP_PORT, debug=APP_DEBUG)

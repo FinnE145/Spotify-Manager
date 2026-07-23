@@ -1,4 +1,5 @@
 import os
+import secrets
 
 from dotenv import load_dotenv
 
@@ -13,3 +14,9 @@ DB_PATH = os.environ.get("SYMR_DB_PATH", "symr.db")
 SPOTIPY_CACHE_PATH = os.environ.get("SYMR_SPOTIPY_CACHE", ".spotipy_cache")
 
 APP_PORT = int(os.environ.get("SYMR_PORT", "45660"))
+APP_DEBUG = os.environ.get("SYMR_DEBUG", "0") == "1"
+
+# Signs the Flask session cookie that carries the OAuth state token. A random
+# fallback works for local single-user use; set SYMR_SECRET_KEY to keep sessions
+# valid across restarts (e.g. an auth flow spanning a server restart).
+SECRET_KEY = os.environ.get("SYMR_SECRET_KEY", secrets.token_hex(32))
