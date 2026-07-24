@@ -54,4 +54,4 @@ When I say a session is done / "looks good" / "finish up":
 - Commit logically; put separate features/fixes in their own commits (there may be leftover changes from prior sessions).
 - Typically 1–2 commits per session, depending on scope.
 - **Commit in my name only. Do NOT add any Claude/AI co-author or attribution line** to commit messages or PR bodies.
-- Commit when I ask. **I always push — never push yourself.**
+- Commit when I ask. **I always push — never push yourself unless I explicitly tell you to.**
