@@ -13,6 +13,9 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 
 ## Codebase Map
 - `docs/` — specs and reference. Feature specs at `docs/specs/<feature>.md`; per-feature extra files (sub-specs, notes, verification reports) in `docs/<feature>/`; hard Spotify API limits in `docs/spotify_constraints.md`.
+- `app.py` — Flask app factory. Page routes (`/` home, `/canvas`, and stubs `/audit`, `/covers`, `/folders`, `/analytics`, `/snapshot`), OAuth (`/login`, `/callback`), `/api/*` endpoints, and an app-wide `before_request` login guard (exempts `login`/`callback`/`static`).
+- `templates/` — Jinja templates. `base.html` (shared shell: navbar + content block; `body_class` block for the immersive full-viewport pages); `home.html`; `canvas.html` (org canvas, extends base); `coming_soon.html` (shared stub placeholder).
+- `static/css/style.css` — the single stylesheet (navbar, shared page styles, canvas).
 - (Rest TBD — update this map as directories are created.)
 
 ## Keep It Simple

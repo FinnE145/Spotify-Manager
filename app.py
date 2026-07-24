@@ -15,13 +15,52 @@ def create_app():
 
     app.teardown_appcontext(db.close_db)
 
+    # -- Auth guard ---------------------------------------------------
+
+    # Endpoints reachable without a Spotify login. Everything else is gated.
+    _PUBLIC_ENDPOINTS = {"login", "callback", "static"}
+
+    @app.before_request
+    def require_login():
+        if request.endpoint in _PUBLIC_ENDPOINTS:
+            return None
+        if get_spotify_client() is None:
+            return redirect(url_for("login"))
+        return None
+
     # -- Pages --------------------------------------------------------
 
     @app.route("/")
     def index():
-        if get_spotify_client() is None:
-            return redirect(url_for("login"))
-        return render_template("canvas.html")
+        return render_template("home.html", active="home")
+
+    @app.route("/canvas")
+    def canvas():
+        return render_template("canvas.html", active="canvas")
+
+    @app.route("/audit")
+    def audit():
+        return render_template("coming_soon.html", active="audit", page_name="Audit")
+
+    @app.route("/covers")
+    def covers():
+        return render_template(
+            "coming_soon.html", active="covers", page_name="Cover Library"
+        )
+
+    @app.route("/folders")
+    def folders():
+        return render_template(
+            "coming_soon.html", active="folders", page_name="Folder Structure"
+        )
+
+    @app.route("/analytics")
+    def analytics():
+        return render_template("coming_soon.html", active="analytics", page_name="Analytics")
+
+    @app.route("/snapshot")
+    def snapshot():
+        return render_template("coming_soon.html", active="snapshot", page_name="Snapshot")
 
     # -- OAuth ----------------------------------------------------------
 

@@ -13,7 +13,8 @@ Living list of features surfaced during planning. Not yet specced unless linked 
 - **One-time report: Finn All songs not in ANY current-favs playlist** — historical curiosity; can't fix the frozen old playlists, but interesting.
 - **AI / dodgy-artist cross-check** — compile community-made AI-artist lists (later maybe release-cadence heuristics), cross-check the library, flag candidates for moral removal.
 
-## Version engine (verification, not auto-edit)
+## Version engine (verification, not auto-edit) — an Audit sub-section
+Lives under the **Audit** page (`/audit`), not its own nav entry.
 - Detect adds via `added_at`; propose a **minor bump** based on day boundaries or an N-hour gap between adds. Propose the playlist rename. Track the major-version lifecycle (new playlist = new major; minor/patch = rename of the active playlist). Verification-only for now; automate later if reliable.
 
 ## Organization

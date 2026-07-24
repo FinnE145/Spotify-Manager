@@ -1,11 +1,9 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Symr — Org Canvas</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
+{% extends "base.html" %}
+
+{% block title %}Symr — Org Canvas{% endblock %}
+{% block body_class %}immersive{% endblock %}
+
+{% block content %}
   <div id="toolbar">
     <button id="pull-btn">Pull library</button>
     <button id="export-btn">Copy as text</button>
@@ -35,5 +33,4 @@
   </div>
 
   <script src="{{ url_for('static', filename='js/canvas.js') }}"></script>
-</body>
-</html>
+{% endblock %}

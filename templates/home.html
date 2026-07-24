@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Symr{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Symr</h1>
+
+  <section class="panel">
+    <h2>Problems at a glance</h2>
+    <p class="empty">Nothing to show yet.</p>
+    <p><a href="{{ url_for('audit') }}">Go to Audit →</a></p>
+  </section>
+
+  <section class="quick-links">
+    <h2>Jump to</h2>
+    <ul>
+      <li><a href="{{ url_for('canvas') }}">Org Canvas</a></li>
+      <li><a href="{{ url_for('audit') }}">Audit</a></li>
+      <li><a href="{{ url_for('covers') }}">Cover Library</a></li>
+      <li><a href="{{ url_for('folders') }}">Folder Structure</a></li>
+      <li><a href="{{ url_for('analytics') }}">Analytics</a></li>
+    </ul>
+  </section>
+</main>
+{% endblock %}

@@ -4,7 +4,91 @@ html, body {
   height: 100%;
   margin: 0;
   font-family: system-ui, sans-serif;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+/* Immersive pages (the canvas) fill the viewport and never scroll the
+   document; ordinary pages get default flow and scroll normally. */
+body.immersive {
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* -- Navbar ------------------------------------------------------- */
+
+#navbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 45px;
+  flex: none;
+  padding: 0 12px;
+  border-bottom: 1px solid #ccc;
+  background: #ececec;
+}
+
+.nav-primary,
+.nav-utility {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.nav-utility {
+  margin-left: auto; /* push the utility slot to the far right */
+  padding-left: 16px;
+  border-left: 1px solid #ccc;
+}
+
+#navbar a {
+  text-decoration: none;
+  color: #333;
+  font-size: 14px;
+}
+
+#navbar a:hover {
+  color: #000;
+}
+
+#navbar a.active {
+  color: #000;
+  font-weight: 700;
+}
+
+.nav-wordmark {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.nav-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* -- Ordinary content pages -------------------------------------- */
+
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.page .panel {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 16px 0;
+  background: #fafafa;
+}
+
+.page .empty {
+  color: #888;
+}
+
+.page .quick-links ul {
+  padding-left: 20px;
 }
 
 #toolbar {
@@ -25,7 +109,8 @@ html, body {
 
 #main {
   display: flex;
-  height: calc(100% - 45px);
+  flex: 1; /* fills the viewport below the navbar + toolbar (immersive column) */
+  min-height: 0;
 }
 
 #tray {

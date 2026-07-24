@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Symr{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <nav id="navbar">
+    <div class="nav-primary">
+      <a href="{{ url_for('index') }}" class="nav-wordmark">Symr</a>
+      <a href="{{ url_for('index') }}" class="{{ 'active' if active == 'home' }}">Home</a>
+      <a href="{{ url_for('canvas') }}" class="{{ 'active' if active == 'canvas' }}">Canvas</a>
+      <a href="{{ url_for('audit') }}" class="{{ 'active' if active == 'audit' }}">Audit</a>
+      <a href="{{ url_for('covers') }}" class="{{ 'active' if active == 'covers' }}">Cover Library</a>
+      <a href="{{ url_for('folders') }}" class="{{ 'active' if active == 'folders' }}">Folder Structure</a>
+      <a href="{{ url_for('analytics') }}" class="{{ 'active' if active == 'analytics' }}">Analytics</a>
+    </div>
+    <div class="nav-utility">
+      <a href="{{ url_for('snapshot') }}" class="nav-icon {{ 'active' if active == 'snapshot' }}"
+         title="Snapshot" aria-label="Snapshot">🗄</a>
+    </div>
+  </nav>
+
+  {% block content %}{% endblock %}
+</body>
+</html>
