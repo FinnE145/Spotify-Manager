@@ -16,6 +16,7 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 - `app.py` — Flask app factory. Page routes (`/` home, `/canvas`, and stubs `/audit`, `/covers`, `/folders`, `/analytics`, `/snapshot`), OAuth (`/login`, `/callback`), `/api/*` endpoints, an app-wide `before_request` login guard (exempts `login`/`callback`/`static`), and centralized error handlers (`HTTPException` + `Exception`) that render `error.html` for pages and JSON for `/api/*`.
 - `templates/` — Jinja templates. `base.html` (shared shell: navbar + content block; `body_class` block for the immersive full-viewport pages); `home.html`; `canvas.html` (org canvas, extends base); `coming_soon.html` (shared stub placeholder); `error.html` (generic HTTP error page, extends base).
 - `static/css/style.css` — the single stylesheet (navbar, shared page styles, canvas).
+- `.claude/skills/` — the phase skills (`plan`, `implement`, `verify`); committed.
 - (Rest TBD — update this map as directories are created.)
 
 ## Keep It Simple
@@ -27,11 +28,12 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 - TBD (run / test / lint). Record the exact commands here as they're established, and use them verbatim.
 
 ## The Workflow: Plan → Implement → Verify
-Work moves through three phases, each in its own chat, and **every phase is question-driven**. Roles are model-agnostic (today: planning & verification run on Opus, implementation on Sonnet; these may become custom agents later).
+Work moves through three phases, each in its own chat, each **question-driven**. Every phase's specific rules live in its own skill — invoke it at the start of the chat:
+- **Plan** → `/plan <brain-dump>` — question-driven spec authoring; output is a committed `docs/specs/<feature>.md`.
+- **Implement** → `/implement [spec]` — build from that spec, asking live.
+- **Verify** → `/verify` — review the diff against the spec, run the app, finish up.
 
-1. **Plan.** Conversational and question-driven. I brain-dump; you ask lots of questions and make no assumptions. The output is a committed feature spec at `docs/specs/<feature>.md` that serves as **both the all-decisions-made spec and the standard implementation prompt** — complete enough that I can begin an implementation session by simply saying "go look at `docs/specs/<feature>.md`" with no extra prompt. You build that spec *with* me; you do not decide it for me. If a feature needs extra files (sub-specs, notes, verification reports), they live in `docs/<feature>/`, referenced from the spec.
-2. **Implement.** The implementer reads the spec and asks me implementation questions **live, one at a time**, rather than figuring anything out on its own. It is **not in a decision-making position** on code — when a real choice arises, it stops and asks. It works from the spec + my answers; I should not have to re-prompt from scratch.
-3. **Verify.** A fresh planning-role chat reviews the diff against the spec, runs the app/tests, and reports. It may make fixes **only with my explicit confirmation**; otherwise it reports and hands back to a new implementation chat.
+If I'm clearly in one phase but didn't invoke its skill, infer and load that **one** skill (never load all three; if the phase is ambiguous, ask which one). The skills are self-contained — this file holds only what's true across all three.
 
 ## No Assumptions & the Stop-and-Ask Rule
 - Never assume behavior, versions, libraries, or intent I haven't stated. If something is undefined, ask.
@@ -49,9 +51,12 @@ Work moves through three phases, each in its own chat, and **every phase is ques
 ## Spotify API Constraints
 - Before proposing anything that reads or writes the library, check `docs/spotify_constraints.md` for hard limits (e.g. playlist folders are not accessible via the Web API, cover-image upload rules, required scopes, rate limits). Don't design features the API can't support — flag the limit and ask.
 
-## End of Implementation
-When I say a session is done / "looks good" / "finish up":
-- Commit logically; put separate features/fixes in their own commits (there may be leftover changes from prior sessions).
-- Typically 1–2 commits per session, depending on scope.
-- **Commit in my name only. Do NOT add any Claude/AI co-author or attribution line** to commit messages or PR bodies.
-- Commit when I ask. **I always push — never push yourself unless I explicitly tell you to.**
+## Git Workflow
+Solo repo, single checkout at `/Users/finne/Projects/Spotify-Manager` (no worktrees). Branch prefixes: **`feat/`** features, **`chore/`** tooling/docs, **`fix/`** fixes. A feature branch carries both the spec (its first commit) and the implementation commits stacked on top.
+
+These are **always-on tripwires** — warn *before* acting, then do whatever I decide. Never silently proceed past one; never refuse once I've answered.
+1. **No committing to `main`.** Before any commit, check `git branch --show-current`; if it's `main` and this isn't a tiny main-level fix, stop and flag it — the work belongs on a branch.
+2. **Confirm the branch before new work.** A fresh session inherits whatever branch was last checked out, which is likely wrong for new work. Confirming the branch is the *first* action of any new phase, before reading code: check `git branch --show-current`, propose a fresh branch off up-to-date `main` (or a switch to the right existing one), wait for my OK, then dive in.
+3. **No premature merge/push.** Merging a branch into `main` and pushing happen only in the Verify finish-up — never during Plan or Implement.
+
+Commits: commit only when I ask, in logical units — one for the spec, a few for implementation as needed, optionally one or more from verify. Commit in my name only — no Claude/AI co-author or attribution line. **Don't push without being asked.** The sanctioned merge+push is the Verify finish-up: a **`git merge --ff-only`** into `main` (keeps history linear, no merge-commit clutter) then push. This repo is solo and single-copy, so `--force-with-lease` is safe when a rewrite is the agreed fix.
