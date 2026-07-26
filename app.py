@@ -1,6 +1,7 @@
 import secrets
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.exceptions import HTTPException
 
 import db
 import snapshot
@@ -28,6 +29,43 @@ def create_app():
         if get_spotify_client() is None:
             return redirect(url_for("login"))
         return None
+
+    # -- Error handling -------------------------------------------------
+
+    def render_error(code, name, detail=None, exc=None):
+        if request.path.startswith("/api/"):
+            slug = name.lower().replace(" ", "_")
+            message = exc if exc is not None else detail
+            return jsonify({"error": slug, "detail": message}), code
+
+        try:
+            return (
+                render_template(
+                    "error.html",
+                    code=code,
+                    name=name,
+                    detail=detail,
+                    exc=exc,
+                    method=request.method,
+                    path=request.path,
+                ),
+                code,
+            )
+        except Exception:
+            return (
+                f"<h1>Error {code}.</h1>"
+                "<p>An error occurred, and the templated error page could not be rendered.</p>",
+                code,
+            )
+
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(e):
+        return render_error(e.code, e.name, detail=e.description)
+
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        exc = f"{type(e).__name__}: {e}"
+        return render_error(500, "Internal Server Error", exc=exc)
 
     # -- Pages --------------------------------------------------------
 
@@ -113,7 +151,7 @@ def create_app():
             "SELECT * FROM snapshot WHERE playlist_id = ?", (playlist_id,)
         ).fetchone()
         if playlist is None:
-            return "Playlist not found.", 404
+            abort(404, description="Playlist not found.")
 
         rows = conn.execute(
             """
@@ -136,7 +174,7 @@ def create_app():
         conn = db.get_db()
         track = conn.execute("SELECT * FROM track WHERE track_id = ?", (track_id,)).fetchone()
         if track is None:
-            return "Track not found.", 404
+            abort(404, description="Track not found.")
 
         rows = conn.execute(
             """
@@ -165,15 +203,15 @@ def create_app():
     def callback():
         error = request.args.get("error")
         if error:
-            return f"Spotify authorization failed: {error}", 400
+            abort(400, description=f"Spotify authorization failed: {error}")
 
         expected = session.pop("oauth_state", None)
         if not expected or request.args.get("state") != expected:
-            return "Invalid OAuth state.", 400
+            abort(400, description="Invalid OAuth state.")
 
         code = request.args.get("code")
         if not code:
-            return "Missing authorization code.", 400
+            abort(400, description="Missing authorization code.")
 
         auth_manager = get_auth_manager()
         auth_manager.get_access_token(code, as_dict=False)
