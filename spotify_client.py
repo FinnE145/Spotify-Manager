@@ -1,6 +1,8 @@
+import requests
 import spotipy
 from spotipy.cache_handler import CacheFileHandler
 from spotipy.oauth2 import SpotifyOAuth
+from urllib3.util import Retry
 
 from config import (
     SPOTIFY_CLIENT_ID,
@@ -27,4 +29,27 @@ def get_spotify_client():
     token_info = auth_manager.cache_handler.get_cached_token()
     if not auth_manager.validate_token(token_info):
         return None
-    return spotipy.Spotify(auth_manager=auth_manager)
+
+    # Spotipy's default retry setup still auto-retries 429s and blocks for
+    # however long Retry-After says (urllib3 treats 429 specially via its
+    # hardcoded RETRY_AFTER_STATUS_CODES, independent of status_forcelist).
+    # An app-level quota block can carry an hours-long Retry-After, so we
+    # build our own session with respect_retry_after_header=False: retry
+    # transient 5xx a few times, but let a 429 raise immediately so
+    # snapshot.py's own _call() can fail fast on a long wait.
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        connect=None,
+        read=False,
+        allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+        status=3,
+        backoff_factor=0.3,
+        status_forcelist=(500, 502, 503, 504),
+        respect_retry_after_header=False,
+    )
+    adapter = requests.adapters.HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    return spotipy.Spotify(auth_manager=auth_manager, requests_session=session)

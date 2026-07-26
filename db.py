@@ -20,7 +20,43 @@ CREATE TABLE IF NOT EXISTS snapshot (
     image_url TEXT,
     owner TEXT,
     track_count INTEGER,
-    pulled_at TEXT NOT NULL DEFAULT (datetime('now'))
+    pulled_at TEXT NOT NULL DEFAULT (datetime('now')),
+    snapshot_id TEXT,
+    last_changed_at TEXT,
+    tracks_pulled_at TEXT,
+    unfollowed_at TEXT,
+    description TEXT,
+    last_pull_error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS track (
+    track_id TEXT PRIMARY KEY,
+    name TEXT,
+    artists TEXT,
+    album_id TEXT,
+    album_name TEXT,
+    duration_ms INTEGER,
+    explicit INTEGER,
+    popularity INTEGER,
+    preview_url TEXT,
+    external_url TEXT
+);
+
+CREATE TABLE IF NOT EXISTS membership (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id TEXT NOT NULL REFERENCES snapshot(playlist_id),
+    track_id TEXT NOT NULL REFERENCES track(track_id),
+    position INTEGER,
+    added_at TEXT,
+    removed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_membership_playlist ON membership(playlist_id);
+CREATE INDEX IF NOT EXISTS idx_membership_track ON membership(track_id);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 
 CREATE TABLE IF NOT EXISTS card (
@@ -55,6 +91,15 @@ def get_db():
     return g.db
 
 
+def connect():
+    """A standalone connection for use outside a Flask request context
+    (e.g. the snapshot pull's background thread)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
 def close_db(e=None):
     conn = g.pop("db", None)
     if conn is not None:
@@ -63,6 +108,11 @@ def close_db(e=None):
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
+    # WAL lets the snapshot pull's background-thread writes and page-load
+    # reads run concurrently instead of blocking each other (a long pull
+    # would otherwise risk "database is locked" on a page load). This is a
+    # persistent, database-level setting — applied once here is enough.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.execute(
@@ -78,3 +128,15 @@ def _migrate(conn):
     card_columns = {row[1] for row in conn.execute("PRAGMA table_info(card)")}
     if "note" not in card_columns:
         conn.execute("ALTER TABLE card ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+
+    snapshot_columns = {row[1] for row in conn.execute("PRAGMA table_info(snapshot)")}
+    for column, ddl in (
+        ("snapshot_id", "ALTER TABLE snapshot ADD COLUMN snapshot_id TEXT"),
+        ("last_changed_at", "ALTER TABLE snapshot ADD COLUMN last_changed_at TEXT"),
+        ("tracks_pulled_at", "ALTER TABLE snapshot ADD COLUMN tracks_pulled_at TEXT"),
+        ("unfollowed_at", "ALTER TABLE snapshot ADD COLUMN unfollowed_at TEXT"),
+        ("description", "ALTER TABLE snapshot ADD COLUMN description TEXT"),
+        ("last_pull_error", "ALTER TABLE snapshot ADD COLUMN last_pull_error TEXT"),
+    ):
+        if column not in snapshot_columns:
+            conn.execute(ddl)

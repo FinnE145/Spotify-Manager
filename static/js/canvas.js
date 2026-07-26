@@ -681,12 +681,53 @@
 
   pullBtn.addEventListener("click", () => {
     statusEl.textContent = "Pulling library…";
-    api("/api/snapshot/pull", { method: "POST" }).then((data) => {
-      state = data;
-      renderAll();
-      statusEl.textContent = `Pulled ${state.cards.length} playlists.`;
-    });
+    pullBtn.disabled = true;
+    api("/api/snapshot/pull", { method: "POST" })
+      .then((data) => {
+        if (data.error) {
+          pullBtn.disabled = false;
+          statusEl.textContent = `Pull failed: ${data.error}`;
+          return;
+        }
+        pollPullStatus();
+      })
+      .catch((e) => {
+        pullBtn.disabled = false;
+        statusEl.textContent = `Request failed: ${e}. The dev server may have restarted — try again.`;
+      });
   });
+
+  function pollPullStatus() {
+    api("/api/snapshot/status")
+      .then((status) => {
+        if (status.error) {
+          pullBtn.disabled = false;
+          statusEl.textContent = `Pull failed: ${status.error}`;
+          return;
+        }
+        if (status.running) {
+          const phase =
+            status.phase === "tracks"
+              ? `Pulling tracks: ${status.run_done}/${status.run_total}`
+              : status.phase === "liked_songs"
+              ? "Pulling Liked Songs…"
+              : "Pulling playlists…";
+          statusEl.textContent = phase;
+          setTimeout(pollPullStatus, 1000);
+          return;
+        }
+        pullBtn.disabled = false;
+        api("/api/board").then((data) => {
+          state = data;
+          renderAll();
+          statusEl.textContent = `Pulled ${state.cards.length} playlists.`;
+        });
+      })
+      .catch(() => {
+        // Transient failure (e.g. dev server restart mid-pull) — keep polling.
+        setTimeout(pollPullStatus, 1000);
+      });
+  }
 
   exportBtn.addEventListener("click", () => {
     const cutoff = Number(cutoffInput.value) || 300;

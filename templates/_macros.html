@@ -1,0 +1,5 @@
+{% macro datetime_span(value) -%}
+{%- if value -%}
+<span data-datetime="{{ value }}">{{ value }}</span>
+{%- endif -%}
+{%- endmacro %}

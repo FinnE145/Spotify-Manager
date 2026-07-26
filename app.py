@@ -3,6 +3,7 @@ import secrets
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 import db
+import snapshot
 from config import APP_DEBUG, APP_PORT, SECRET_KEY
 from grouping import render_export_text
 from spotify_client import get_auth_manager, get_spotify_client
@@ -58,9 +59,98 @@ def create_app():
     def analytics():
         return render_template("coming_soon.html", active="analytics", page_name="Analytics")
 
-    @app.route("/snapshot")
-    def snapshot():
-        return render_template("coming_soon.html", active="snapshot", page_name="Snapshot")
+    @app.route("/snapshot", endpoint="snapshot")
+    def snapshot_index():
+        conn = db.get_db()
+        playlists = conn.execute("SELECT * FROM snapshot ORDER BY name COLLATE NOCASE").fetchall()
+
+        q = request.args.get("q", "").strip()
+        track_matches = []
+        if q:
+            like = f"%{q}%"
+            track_matches = conn.execute(
+                """
+                SELECT t.track_id, t.name, t.artists, COUNT(m.id) AS appearances
+                FROM track t
+                JOIN membership m ON m.track_id = t.track_id AND m.removed_at IS NULL
+                WHERE t.name LIKE ? OR t.artists LIKE ?
+                GROUP BY t.track_id
+                ORDER BY t.name COLLATE NOCASE
+                LIMIT 50
+                """,
+                (like, like),
+            ).fetchall()
+
+        changes = conn.execute(
+            """
+            SELECT m.playlist_id, s.name AS playlist_name, m.track_id, t.name AS track_name,
+                   t.artists, m.added_at, m.removed_at,
+                   COALESCE(m.removed_at, m.added_at) AS event_at,
+                   CASE WHEN m.removed_at IS NOT NULL THEN 'removed' ELSE 'added' END AS kind
+            FROM membership m
+            JOIN snapshot s ON s.playlist_id = m.playlist_id
+            JOIN track t ON t.track_id = m.track_id
+            ORDER BY event_at DESC
+            LIMIT 50
+            """
+        ).fetchall()
+
+        return render_template(
+            "snapshot.html",
+            active="snapshot",
+            playlists=playlists,
+            summary=snapshot.summary_counts(conn),
+            query=q,
+            track_matches=track_matches,
+            changes=changes,
+            liked_playlist_id=snapshot.LIKED_PLAYLIST_ID,
+        )
+
+    @app.route("/snapshot/playlist/<playlist_id>")
+    def snapshot_playlist(playlist_id):
+        conn = db.get_db()
+        playlist = conn.execute(
+            "SELECT * FROM snapshot WHERE playlist_id = ?", (playlist_id,)
+        ).fetchone()
+        if playlist is None:
+            return "Playlist not found.", 404
+
+        rows = conn.execute(
+            """
+            SELECT m.id, m.track_id, t.name, t.artists, t.album_name, m.added_at, m.removed_at,
+                   m.position
+            FROM membership m
+            JOIN track t ON t.track_id = m.track_id
+            WHERE m.playlist_id = ?
+            ORDER BY m.position
+            """,
+            (playlist_id,),
+        ).fetchall()
+
+        return render_template(
+            "snapshot_playlist.html", active="snapshot", playlist=playlist, rows=rows
+        )
+
+    @app.route("/snapshot/track/<track_id>")
+    def snapshot_track(track_id):
+        conn = db.get_db()
+        track = conn.execute("SELECT * FROM track WHERE track_id = ?", (track_id,)).fetchone()
+        if track is None:
+            return "Track not found.", 404
+
+        rows = conn.execute(
+            """
+            SELECT m.id, m.playlist_id, s.name AS playlist_name, m.added_at, m.removed_at,
+                   m.position
+            FROM membership m
+            JOIN snapshot s ON s.playlist_id = m.playlist_id
+            WHERE m.track_id = ?
+            ORDER BY s.name COLLATE NOCASE, m.added_at
+            """,
+            (track_id,),
+        ).fetchall()
+
+        return render_template("snapshot_track.html", active="snapshot", track=track, rows=rows)
 
     # -- OAuth ----------------------------------------------------------
 
@@ -93,61 +183,26 @@ def create_app():
 
     @app.route("/api/snapshot/pull", methods=["POST"])
     def pull_snapshot():
-        sp = get_spotify_client()
-        if sp is None:
+        if get_spotify_client() is None:
             return jsonify({"error": "not_authenticated"}), 401
+        if not snapshot.start_full_pull():
+            return jsonify({"error": "already_running"}), 409
+        return jsonify({"started": True})
 
+    @app.route("/api/snapshot/refresh", methods=["POST"])
+    def refresh_snapshot():
+        if get_spotify_client() is None:
+            return jsonify({"error": "not_authenticated"}), 401
+        if not snapshot.start_refresh():
+            return jsonify({"error": "already_running"}), 409
+        return jsonify({"started": True})
+
+    @app.route("/api/snapshot/status")
+    def snapshot_status():
         conn = db.get_db()
-        results = sp.current_user_playlists(limit=50)
-        playlists = list(results["items"])
-        while results["next"]:
-            results = sp.next(results)
-            playlists.extend(results["items"])
-
-        for playlist in playlists:
-            if playlist is None:
-                # Spotify returns a null entry for playlists that were deleted
-                # but are still in the user's followed list.
-                continue
-
-            images = playlist.get("images") or []
-            image_url = images[0]["url"] if images else None
-            owner = (playlist.get("owner") or {}).get("display_name")
-            track_count = (playlist.get("tracks") or {}).get("total")
-
-            conn.execute(
-                """
-                INSERT INTO snapshot (playlist_id, name, image_url, owner, track_count, pulled_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(playlist_id) DO UPDATE SET
-                    name=excluded.name,
-                    image_url=excluded.image_url,
-                    owner=excluded.owner,
-                    track_count=excluded.track_count,
-                    pulled_at=excluded.pulled_at
-                """,
-                (
-                    playlist["id"],
-                    playlist["name"],
-                    image_url,
-                    owner,
-                    track_count,
-                ),
-            )
-
-            conn.execute(
-                """
-                INSERT INTO card (board_id, entity_type, entity_id, display_name, image_url, placement)
-                VALUES (?, 'playlist', ?, ?, ?, 'tray')
-                ON CONFLICT(board_id, entity_type, entity_id) DO UPDATE SET
-                    display_name=excluded.display_name,
-                    image_url=excluded.image_url
-                """,
-                (db.DEFAULT_BOARD_ID, playlist["id"], playlist["name"], image_url),
-            )
-        conn.commit()
-
-        return jsonify(_board_state(conn))
+        status = snapshot.get_status()
+        status.update(snapshot.summary_counts(conn))
+        return jsonify(status)
 
     # -- Board state -------------------------------------------------
 
