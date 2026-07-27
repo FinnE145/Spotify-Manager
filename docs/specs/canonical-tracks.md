@@ -170,12 +170,14 @@ The snapshot pages are developer/inspection tools, and more will follow. Give th
 - `_parse_track_item` also reads `external_ids.isrc` and the album cover URL (300px rule above).
 - `_upsert_track` writes both new columns, including in its `ON CONFLICT DO UPDATE` clause, so re-seen tracks get topped up.
 
-**One-time backfill** — `scripts/backfill_track_details.py`, committed:
-- Selects `track_id` from `track` where `isrc IS NULL OR album_image_url IS NULL`.
-- Batches of 50 through `sp.tracks(ids)` — ~72 calls for the current 3,589 tracks. Also stores `popularity` when present (harmless; nothing depends on it).
-- Uses `spotify_client.get_spotify_client()` (reads the existing `.spotipy_cache` token) and `db.connect()`. Prints progress; commits as it goes so an interrupted run resumes cleanly on the next invocation.
-- Short back-off on `429` then fail fast — **never** blind-sleep on `Retry-After`, per the quota section of `docs/spotify_constraints.md`.
-- **The columns and this script are built and run during the planning session, not by the implementation session** — the data is a hard prerequisite for phases 3–6, so it's verified up front. An implementation session should confirm the columns are populated (`SELECT COUNT(*) FROM track WHERE isrc IS NULL`) rather than rebuild this. The script stays committed so a rebuilt DB or a straggler row can be topped up.
+**How the existing 3,589 rows get filled.** `GET /v1/tracks?ids=` — the 50-at-a-time batch endpoint — **403s for this app** (verified Jul 2026; see `docs/spotify_constraints.md`), so there is no cheap bulk top-up. A **full snapshot pull** is the primary mechanism instead: playlist items are full track objects carrying `external_ids` and `album.images`, so ~350 requests populate both columns for every track in a live playlist.
+
+**Mop-up** — `scripts/backfill_track_details.py`, committed, for what a pull can't reach (tracks in the 7 playlists that 403 on item reads, and tracks surviving only in removed memberships):
+- Selects `track_id` where `isrc IS NULL OR album_image_url IS NULL`, one request each via `sp.track(id)` (the single-track endpoint works).
+- Refuses to run against more than 300 rows without `--yes`, since one request per track is exactly the burst pattern that exhausts the app-level quota (~24h lockout). `--limit N` chips away safely.
+- Uses `spotify_client.get_spotify_client()` (reads the existing `.spotipy_cache` token) and `db.connect()`. Prints progress; commits as it goes so an interrupted run resumes cleanly.
+- Reuses `snapshot._call`, which sleeps once through a short `429` but raises `RateLimited` on a long `Retry-After` — **never** blind-sleep, per the quota section of `docs/spotify_constraints.md`.
+- **The columns, the pull capture, and this script are built and run during the planning session, not by the implementation session** — the data is a hard prerequisite for phases 3–6, so it's verified up front. An implementation session should confirm the columns are populated (`SELECT COUNT(*) FROM track WHERE isrc IS NULL`) rather than rebuild this.
 
 Also add the ISRC and relinking facts from this spec's *Terminology* section to `docs/spotify_constraints.md`.
 

@@ -36,6 +36,12 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 - Confirmed empirically: Finn's real 149-playlist full pull (Jul 2026) — 7 playlists 403'd on item reads, all owned by other users (`since11music`, `Atul Gokhale` x2, `Filtr US`, `yuva`, `jasmine.`, `claire ♫˚.🎧`); other non-Finn-owned followed playlists read fine.
 - Consequence: Symr's snapshot pull treats a per-playlist track-read failure as **skip and continue** (see `docs/specs/snapshot.md`), not a fatal error — logs which playlists failed and why, keeps the rest of the pull going.
 
+## Bulk track reads — `GET /v1/tracks` 403s, single-track reads work (verified Jul 2026)
+- **`GET /v1/tracks?ids=…` (Spotipy `sp.tracks()`) returns 403 Forbidden**, with or without a `market` parameter, at any batch size. The endpoint needs no scope, and the token used was valid, unexpired, and carried the app's normal scopes — so this is an app-level restriction on the dev-mode app, not an auth failure.
+- **`GET /v1/tracks/{id}` (Spotipy `sp.track()`) works fine** and returns the full track object, including `external_ids.isrc` and `album.images`.
+- Consequence: there is **no 50-per-request batch path** for topping up track metadata. Backfilling *N* tracks costs *N* requests, which for a full library (~3,600) is far past the burst that triggers app-level quota exhaustion. Get bulk track metadata from **playlist item reads instead** — `GET /playlists/{id}/items` returns full track objects carrying `external_ids` and `album.images` (verified Jul 2026), so a normal snapshot pull populates them ~10x cheaper. Reserve single-track reads for small mop-up passes.
+- **`popularity` is NULL everywhere**, from both the playlist-items and single-track endpoints — Spotify no longer populates it for this app. Don't design anything that depends on it (`docs/specs/canonical-tracks.md` drops it from its representative tie-break for this reason).
+
 ## Playlist item track/episode key — schema quirk (verified Jul 2026)
 - `GET /playlists/{id}/items` items key the track/episode object as **`"item"`**, not `"track"` (Spotipy's raw dict). This differs from `GET /me/tracks` (Saved Tracks / Liked Songs), whose items still use `"track"`. Likely because playlist items can hold either a track or an episode (`additional_types=track,episode`) while saved tracks are track-only. Easy to miss since most docs/examples assume `"track"` everywhere — verify against a live response before trusting either key name.
 
