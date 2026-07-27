@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Symr — Canonical Tracks{% endblock %}
+
+{% macro render_group(g) %}
+<div class="panel">
+  <h3>{{ g.base }} — impact {{ g.impact }} ({{ g.track_ids|length }} tracks)</h3>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Track</th><th>Artists</th><th>Album</th><th>Duration (ms)</th><th>ISRC</th>
+        <th>Explicit</th><th>Live#</th><th>Class</th><th>Song</th><th>Version</th><th>Recording</th><th>Release</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tid in g.track_ids %}
+      {% set t = g.tracks[tid] %}
+      {% set l = g.labels[tid] %}
+      <tr>
+        <td>{{ t.title }}</td>
+        <td>{{ t.artists }}</td>
+        <td>{{ t.album or "" }}</td>
+        <td>{{ t.duration_ms if t.duration_ms is not none else "" }}</td>
+        <td>{{ t.isrc or "" }}</td>
+        <td>{{ "yes" if t.explicit else "no" }}</td>
+        <td>{{ t.live_count }}</td>
+        <td>{{ t.suffix_class }}</td>
+        <td>{{ l.song }}</td>
+        <td>{{ l.version }}</td>
+        <td>{{ l.recording }}</td>
+        <td>{{ l.release }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{% block content %}
+<main class="page">
+  <h1>Canonical Tracks</h1>
+  <p class="meta">
+    Throwaway detection-quality listing (phase 4) — no interaction yet, phase 6 replaces this page.
+    {{ main_groups|length }} candidate group{{ "s" if main_groups|length != 1 }},
+    {{ cross_groups|length }} cross-artist group{{ "s" if cross_groups|length != 1 }}.
+  </p>
+
+  <section class="panel">
+    <h2>Tier totals</h2>
+    <table class="data-table">
+      <thead><tr><th>Tier</th><th>Groups</th><th>Non-singleton</th></tr></thead>
+      <tbody>
+        {% for tier in ('release', 'recording', 'version', 'song') %}
+        <tr>
+          <td>{{ tier }}</td>
+          <td>{{ tier_counts[tier].total }}</td>
+          <td>{{ tier_counts[tier].non_singleton }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Candidate groups ({{ main_groups|length }})</h2>
+    {% for g in main_groups %}
+      {{ render_group(g) }}
+    {% else %}
+      <p class="empty">No candidate groups.</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <h2>Cross-artist candidates ({{ cross_groups|length }})</h2>
+    {% for g in cross_groups %}
+      {{ render_group(g) }}
+    {% else %}
+      <p class="empty">No cross-artist candidates.</p>
+    {% endfor %}
+  </section>
+</main>
+{% endblock %}

@@ -3,6 +3,8 @@ import secrets
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
+import canonical
+import canonical_detect
 import db
 import snapshot
 from config import APP_DEBUG, APP_PORT, SECRET_KEY
@@ -100,6 +102,20 @@ def create_app():
     @app.route("/dev")
     def dev_index():
         return render_template("dev.html", active="dev")
+
+    @app.route("/dev/canonical", endpoint="dev_canonical")
+    def canonical_index():
+        conn = db.get_db()
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        return render_template(
+            "canonical.html",
+            active="dev_canonical",
+            main_groups=canonical_detect.candidate_groups(conn),
+            cross_groups=canonical_detect.cross_artist_groups(conn),
+            tier_counts=canonical.tier_counts(conn),
+        )
 
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
