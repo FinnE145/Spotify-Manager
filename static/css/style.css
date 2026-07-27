@@ -303,3 +303,172 @@ body.immersive {
   background: rgba(59, 130, 246, 0.08);
   pointer-events: none;
 }
+
+/* -- Canonical review queue ---------------------------------------- */
+
+#review-app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+#review-header {
+  flex: none;
+  padding: 8px 12px;
+  border-bottom: 1px solid #ccc;
+  background: #f5f5f5;
+}
+
+#progress-label {
+  font-size: 13px;
+  color: #444;
+}
+
+#queue-name {
+  font-size: 12px;
+  color: #888;
+  margin-top: 2px;
+}
+
+#tier-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  position: relative;
+}
+
+.tier-btn {
+  font-size: 13px;
+  padding: 4px 10px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.tier-btn:hover {
+  background: #eee;
+}
+
+#help-toggle {
+  margin-left: 8px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #bbb;
+  border-radius: 50%;
+  font-size: 12px;
+  cursor: pointer;
+  color: #666;
+}
+
+#help-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 6px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 8px 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+  font-size: 12px;
+}
+
+#help-popover td {
+  padding: 2px 8px 2px 0;
+  white-space: nowrap;
+}
+
+#help-popover hr {
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  margin: 6px 0;
+}
+
+.tier-meanings th {
+  text-align: left;
+  padding: 2px 8px 2px 0;
+  color: #444;
+}
+
+.tier-meanings td {
+  white-space: normal;
+}
+
+.tier-meanings .muted,
+#item-table .muted {
+  color: #888;
+}
+
+#review-item {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 16px;
+}
+
+#item-title {
+  margin: 0 0 4px;
+}
+
+#dragged-in-note[hidden] {
+  display: none;
+}
+
+#dragged-in-note {
+  font-size: 12px;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  padding: 4px 8px;
+  display: inline-block;
+}
+
+#item-table img.cover {
+  width: 48px;
+  height: 48px;
+}
+
+#item-table tr.focused {
+  outline: 2px solid #3b82f6;
+  outline-offset: -2px;
+}
+
+#item-table tr.selected {
+  background: #eff6ff;
+}
+
+.chip-cell {
+  white-space: nowrap;
+}
+
+.tier-chip {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  color: #fff;
+}
+
+.tier-chip.singleton {
+  background: #e5e5e5;
+  color: #777;
+  font-weight: 400;
+}
+
+.chip-id {
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+#review-done,
+#review-empty {
+  overflow-y: auto;
+}

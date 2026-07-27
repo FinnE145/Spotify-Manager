@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Symr — Review{% endblock %}
+{% block body_class %}immersive{% endblock %}
+
+{% block content %}
+<div id="review-app">
+  <header id="review-header">
+    <div class="progress-bar"><div id="progress-fill" class="progress-bar-fill"></div></div>
+    <div id="progress-label"></div>
+    <div id="queue-name"></div>
+    <div id="tier-legend">
+      <button class="tier-btn" data-tier="song" title="Song — the composition, any performance (AAA / AAA Acoustic / AAA Remix all together)">1 Song</button>
+      <button class="tier-btn" data-tier="version" title="Version — sounds different (AAA vs. AAA Acoustic)">2 Version</button>
+      <button class="tier-btn" data-tier="recording" title="Recording — sounds the same, different master (remaster, Taylor's Version, deluxe, clean/explicit)">3 Recording</button>
+      <button class="tier-btn" data-tier="release" title="Release — same audio, different album/EP/single (or a duplicate album upload)">4 Release</button>
+      <span id="help-toggle" tabindex="0">?</span>
+      <div id="help-popover" hidden>
+        <table class="tier-meanings">
+          <tr><th>Song</th><td>the composition, any performance</td><td class="muted">AAA / AAA (Acoustic) / AAA (Remix) — all one song</td></tr>
+          <tr><th>Version</th><td>sounds different</td><td class="muted">AAA (Acoustic) &ne; AAA</td></tr>
+          <tr><th>Recording</th><td>sounds the same, different master</td><td class="muted">remaster, Taylor's Version, deluxe, clean/explicit</td></tr>
+          <tr><th>Release</th><td>same audio, different album/EP/single</td><td class="muted">AAA's four track ids, or a duplicate album upload</td></tr>
+        </table>
+        <hr>
+        <table>
+          <tr><td>&uarr; / &darr;, j / k</td><td>move focus</td></tr>
+          <tr><td>Space, click</td><td>toggle selection</td></tr>
+          <tr><td>Shift+click</td><td>select range</td></tr>
+          <tr><td>a</td><td>select all</td></tr>
+          <tr><td>1 2 3 4</td><td>apply Song / Version / Recording / Release</td></tr>
+          <tr><td>r</td><td>pin focused track as representative</td></tr>
+          <tr><td>Esc</td><td>clear all grouping on this item</td></tr>
+          <tr><td>Cmd+Z</td><td>undo last action (this item, this session)</td></tr>
+          <tr><td>Enter</td><td>commit and advance</td></tr>
+          <tr><td>Backspace</td><td>discard edits, go to previous item</td></tr>
+        </table>
+      </div>
+    </div>
+  </header>
+
+  <main id="review-item" hidden>
+    <h2 id="item-title"></h2>
+    <p id="dragged-in-note" hidden></p>
+    <table id="item-table" class="data-table">
+      <thead>
+        <tr>
+          <th></th><th></th><th>Track</th><th>Artists</th><th>Album</th><th>Duration</th>
+          <th>ISRC</th><th>Playlists</th><th>Class</th>
+          <th>Song</th><th>Version</th><th>Recording</th><th>Release</th>
+        </tr>
+      </thead>
+      <tbody id="item-rows"></tbody>
+    </table>
+  </main>
+
+  <div id="review-empty" class="page" hidden>
+    <p>Nothing to review.</p>
+    <p><a href="{{ url_for('dev_canonical') }}">&larr; Canonical Tracks</a></p>
+  </div>
+
+  <div id="review-done" class="page" hidden>
+    <p>Got through <span id="done-count"></span> item(s).</p>
+    <p><a href="{{ url_for('dev_canonical') }}">&larr; Canonical Tracks</a></p>
+  </div>
+
+  <div id="review-error" class="error page" hidden></div>
+</div>
+
+<script src="{{ url_for('static', filename='js/canonical_review.js') }}"></script>
+{% endblock %}

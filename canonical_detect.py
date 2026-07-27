@@ -124,6 +124,7 @@ def _display_fields(rec):
         "isrc": rec["isrc"],
         "live_count": rec["live_count"],
         "suffix_class": rec["suffix_class"],
+        "suffix": rec["suffix"],
     }
 
 
@@ -223,7 +224,14 @@ def _prefill_labels(track_ids, tracks):
         for tid in shared_version:
             labels[tid]["version"] = version_label
 
-        for comp in _group_by_rule(shared_version, lambda a, b: _same_recording(tracks, a, b)):
+        def _same_recording_or_release(a, b):
+            # A release-tier match (same ISRC + same album) must also merge
+            # at recording tier, since release <= recording nesting requires
+            # it -- even when the recording-specific rule (which only fires
+            # on a *different* album) doesn't independently agree.
+            return _same_recording(tracks, a, b) or _same_release(tracks, a, b)
+
+        for comp in _group_by_rule(shared_version, _same_recording_or_release):
             recording_label = counter.label("recording")
             for tid in comp:
                 labels[tid]["recording"] = recording_label

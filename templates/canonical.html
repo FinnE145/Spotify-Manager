@@ -44,6 +44,11 @@
     {{ main_groups|length }} candidate group{{ "s" if main_groups|length != 1 }},
     {{ cross_groups|length }} cross-artist group{{ "s" if cross_groups|length != 1 }}.
   </p>
+  <p>
+    <a href="{{ url_for('canonical_review') }}">Review queue &rarr;</a>
+    &middot;
+    <a href="{{ url_for('canonical_review', queue='cross-artist') }}">Cross-artist review queue &rarr;</a>
+  </p>
 
   <section class="panel">
     <h2>Tier totals</h2>

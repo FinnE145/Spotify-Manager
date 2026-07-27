@@ -117,6 +117,68 @@ def create_app():
             tier_counts=canonical.tier_counts(conn),
         )
 
+    @app.route("/dev/canonical/review")
+    def canonical_review():
+        tracks_param = request.args.get("tracks")
+        if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) < 2:
+            abort(400, description="tracks= needs at least 2 track ids")
+        return render_template("canonical_review.html", active="dev_canonical")
+
+    @app.route("/api/canonical/queue")
+    def api_canonical_queue():
+        conn = db.get_db()
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        tracks_param = request.args.get("tracks")
+        if tracks_param is not None:
+            track_ids = [t for t in tracks_param.split(",") if t]
+            if len(track_ids) < 2:
+                abort(400, description="tracks= needs at least 2 track ids")
+            placeholders = ",".join("?" for _ in track_ids)
+            existing = {
+                row["track_id"]
+                for row in conn.execute(
+                    f"SELECT track_id FROM track WHERE track_id IN ({placeholders})", track_ids
+                )
+            }
+            missing = set(track_ids) - existing
+            if missing:
+                abort(400, description=f"unknown track ids: {sorted(missing)}")
+            queue_name = "ad-hoc"
+            items = [canonical_detect.ad_hoc_group(conn, track_ids)]
+        elif request.args.get("queue") == "cross-artist":
+            queue_name = "cross-artist"
+            items = canonical_detect.cross_artist_groups(conn)
+        else:
+            queue_name = "main"
+            items = canonical_detect.candidate_groups(conn)
+
+        for item in items:
+            item["current_ids"] = {
+                tid: canonical.groups_for_track(conn, tid) for tid in item["track_ids"]
+            }
+
+        return jsonify({"queue": queue_name, "items": items})
+
+    @app.route("/api/canonical/apply", methods=["POST"])
+    def api_canonical_apply():
+        body = request.get_json()
+        track_ids = body.get("track_ids") or []
+        labels = body.get("labels") or {}
+        pin = body.get("pin_representative")
+
+        conn = db.get_db()
+        try:
+            result = canonical.apply_partition(conn, labels)
+        except ValueError as e:
+            abort(400, description=str(e))
+        canonical.mark_reviewed(conn, track_ids)
+        if pin:
+            canonical.pin_representative(conn, pin)
+        conn.commit()
+        return jsonify(result)
+
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
         conn = db.get_db()
