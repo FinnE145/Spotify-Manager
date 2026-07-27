@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from spotipy.exceptions import SpotifyException
 
+import canonical
 import db
 from spotify_client import get_spotify_client
 
@@ -173,6 +174,7 @@ def _run_pull(force_all):
             _record_failure(conn, LIKED_PLAYLIST_ID, "Liked Songs", e)
 
         _set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", _now_iso())
+        canonical.ensure_track_groups(conn)
         conn.commit()
 
         _set_status(phase="done", finished_at=_now_iso())

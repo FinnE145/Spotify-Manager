@@ -82,6 +82,33 @@ CREATE TABLE IF NOT EXISTS label (
     x REAL NOT NULL,
     y REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS canonical_group (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tier TEXT NOT NULL CHECK (tier IN ('song', 'version', 'recording', 'release')),
+    representative_track_id TEXT REFERENCES track(track_id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS track_group (
+    track_id TEXT PRIMARY KEY REFERENCES track(track_id),
+    song_id INTEGER NOT NULL REFERENCES canonical_group(id),
+    version_id INTEGER NOT NULL REFERENCES canonical_group(id),
+    recording_id INTEGER NOT NULL REFERENCES canonical_group(id),
+    release_id INTEGER NOT NULL REFERENCES canonical_group(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_track_group_song ON track_group(song_id);
+CREATE INDEX IF NOT EXISTS idx_track_group_version ON track_group(version_id);
+CREATE INDEX IF NOT EXISTS idx_track_group_recording ON track_group(recording_id);
+CREATE INDEX IF NOT EXISTS idx_track_group_release ON track_group(release_id);
+
+CREATE TABLE IF NOT EXISTS reviewed_pair (
+    track_id_a TEXT NOT NULL REFERENCES track(track_id),
+    track_id_b TEXT NOT NULL REFERENCES track(track_id),
+    decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (track_id_a, track_id_b)
+);
 """
 
 
