@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS track (
     explicit INTEGER,
     popularity INTEGER,
     preview_url TEXT,
-    external_url TEXT
+    external_url TEXT,
+    isrc TEXT,
+    album_image_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS membership (
@@ -139,4 +141,12 @@ def _migrate(conn):
         ("last_pull_error", "ALTER TABLE snapshot ADD COLUMN last_pull_error TEXT"),
     ):
         if column not in snapshot_columns:
+            conn.execute(ddl)
+
+    track_columns = {row[1] for row in conn.execute("PRAGMA table_info(track)")}
+    for column, ddl in (
+        ("isrc", "ALTER TABLE track ADD COLUMN isrc TEXT"),
+        ("album_image_url", "ALTER TABLE track ADD COLUMN album_image_url TEXT"),
+    ):
+        if column not in track_columns:
             conn.execute(ddl)

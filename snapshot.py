@@ -294,10 +294,23 @@ def _upsert_card(conn, p):
 # -- Track contents -------------------------------------------------
 
 
+def _album_image_url(album):
+    """The 300px cover (Spotify returns 640/300/64), falling back to the
+    middle entry, then the first."""
+    images = album.get("images") or []
+    if not images:
+        return None
+    for image in images:
+        if image.get("width") == 300:
+            return image.get("url")
+    return images[len(images) // 2].get("url")
+
+
 def _parse_track_item(track, added_at, position):
     artists = ", ".join(a["name"] for a in track.get("artists") or [])
     album = track.get("album") or {}
     external_urls = track.get("external_urls") or {}
+    external_ids = track.get("external_ids") or {}
     return {
         "track_id": track["id"],
         "name": track.get("name"),
@@ -309,6 +322,8 @@ def _parse_track_item(track, added_at, position):
         "popularity": track.get("popularity"),
         "preview_url": track.get("preview_url"),
         "external_url": external_urls.get("spotify"),
+        "isrc": external_ids.get("isrc"),
+        "album_image_url": _album_image_url(album),
         "added_at": added_at,
         "position": position,
     }
@@ -367,8 +382,9 @@ def _upsert_track(conn, it):
     conn.execute(
         """
         INSERT INTO track (track_id, name, artists, album_id, album_name, duration_ms,
-                            explicit, popularity, preview_url, external_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            explicit, popularity, preview_url, external_url,
+                            isrc, album_image_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(track_id) DO UPDATE SET
             name=excluded.name,
             artists=excluded.artists,
@@ -378,7 +394,12 @@ def _upsert_track(conn, it):
             explicit=excluded.explicit,
             popularity=excluded.popularity,
             preview_url=excluded.preview_url,
-            external_url=excluded.external_url
+            external_url=excluded.external_url,
+            -- COALESCE, not plain overwrite: Spotify sometimes omits
+            -- external_ids/images on a track object, and a NULL from one pull
+            -- must not wipe a value we already have.
+            isrc=COALESCE(excluded.isrc, isrc),
+            album_image_url=COALESCE(excluded.album_image_url, album_image_url)
         """,
         (
             it["track_id"],
@@ -391,6 +412,8 @@ def _upsert_track(conn, it):
             it["popularity"],
             it["preview_url"],
             it["external_url"],
+            it["isrc"],
+            it["album_image_url"],
         ),
     )
 
