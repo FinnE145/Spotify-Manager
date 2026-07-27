@@ -5,7 +5,7 @@
 
 {% block content %}
 <main class="page">
-  <p><a href="{{ url_for('snapshot') }}">&larr; Snapshot</a></p>
+  <p><a href="{{ url_for('dev_snapshot') }}">&larr; Snapshot</a></p>
   <h1>{{ track.name }}</h1>
   <p class="meta">{{ track.artists }}{% if track.album_name %} &middot; {{ track.album_name }}{% endif %}</p>
 
@@ -22,7 +22,7 @@
     <tbody>
       {% for r in rows %}
       <tr class="{{ 'removed' if r.removed_at }}">
-        <td><a href="{{ url_for('snapshot_playlist', playlist_id=r.playlist_id) }}">{{ r.playlist_name }}</a></td>
+        <td><a href="{{ url_for('dev_snapshot_playlist', playlist_id=r.playlist_id) }}">{{ r.playlist_name }}</a></td>
         <td>{{ datetime_span(r.added_at) }}</td>
         <td>{{ datetime_span(r.removed_at) }}</td>
         <td>{{ r.position if r.position is not none else "" }}</td>

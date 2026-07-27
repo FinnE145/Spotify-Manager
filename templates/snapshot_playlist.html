@@ -5,7 +5,7 @@
 
 {% block content %}
 <main class="page">
-  <p><a href="{{ url_for('snapshot') }}">&larr; Snapshot</a></p>
+  <p><a href="{{ url_for('dev_snapshot') }}">&larr; Snapshot</a></p>
   <h1>{{ playlist.name }}</h1>
   <p class="meta">
     Owner: {{ playlist.owner or "" }}
@@ -29,7 +29,7 @@
     <tbody>
       {% for r in rows %}
       <tr class="{{ 'removed' if r.removed_at }}">
-        <td><a href="{{ url_for('snapshot_track', track_id=r.track_id) }}">{{ r.name }}</a></td>
+        <td><a href="{{ url_for('dev_snapshot_track', track_id=r.track_id) }}">{{ r.name }}</a></td>
         <td>{{ r.artists }}</td>
         <td>{{ r.album_name or "" }}</td>
         <td>{{ datetime_span(r.added_at) }}</td>

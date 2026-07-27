@@ -18,8 +18,8 @@
       <a href="{{ url_for('analytics') }}" class="{{ 'active' if active == 'analytics' }}">Analytics</a>
     </div>
     <div class="nav-utility">
-      <a href="{{ url_for('snapshot') }}" class="nav-icon {{ 'active' if active == 'snapshot' }}"
-         title="Snapshot" aria-label="Snapshot">🗄</a>
+      <a href="{{ url_for('dev_index') }}" class="nav-icon {{ 'active' if active and active.startswith('dev') }}"
+         title="Dev" aria-label="Dev">⚙</a>
     </div>
   </nav>
 

@@ -97,7 +97,11 @@ def create_app():
     def analytics():
         return render_template("coming_soon.html", active="analytics", page_name="Analytics")
 
-    @app.route("/snapshot", endpoint="snapshot")
+    @app.route("/dev")
+    def dev_index():
+        return render_template("dev.html", active="dev")
+
+    @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
         conn = db.get_db()
         playlists = conn.execute("SELECT * FROM snapshot ORDER BY name COLLATE NOCASE").fetchall()
@@ -135,7 +139,7 @@ def create_app():
 
         return render_template(
             "snapshot.html",
-            active="snapshot",
+            active="dev_snapshot",
             playlists=playlists,
             summary=snapshot.summary_counts(conn),
             query=q,
@@ -144,7 +148,7 @@ def create_app():
             liked_playlist_id=snapshot.LIKED_PLAYLIST_ID,
         )
 
-    @app.route("/snapshot/playlist/<playlist_id>")
+    @app.route("/dev/snapshot/playlist/<playlist_id>", endpoint="dev_snapshot_playlist")
     def snapshot_playlist(playlist_id):
         conn = db.get_db()
         playlist = conn.execute(
@@ -166,10 +170,10 @@ def create_app():
         ).fetchall()
 
         return render_template(
-            "snapshot_playlist.html", active="snapshot", playlist=playlist, rows=rows
+            "snapshot_playlist.html", active="dev_snapshot", playlist=playlist, rows=rows
         )
 
-    @app.route("/snapshot/track/<track_id>")
+    @app.route("/dev/snapshot/track/<track_id>", endpoint="dev_snapshot_track")
     def snapshot_track(track_id):
         conn = db.get_db()
         track = conn.execute("SELECT * FROM track WHERE track_id = ?", (track_id,)).fetchone()
@@ -188,7 +192,7 @@ def create_app():
             (track_id,),
         ).fetchall()
 
-        return render_template("snapshot_track.html", active="snapshot", track=track, rows=rows)
+        return render_template("snapshot_track.html", active="dev_snapshot", track=track, rows=rows)
 
     # -- OAuth ----------------------------------------------------------
 

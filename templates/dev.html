@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Dev — Symr{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Dev</h1>
+  <p>Developer and inspection tools.</p>
+
+  <ul>
+    <li>
+      <a href="{{ url_for('dev_snapshot') }}">Snapshot</a>
+      — pull/refresh the library snapshot, browse playlists and tracks.
+    </li>
+    <li>
+      <a href="/dev/canonical">Canonical Tracks</a>
+      — review and manage the four-tier track grouping.
+    </li>
+  </ul>
+</main>
+{% endblock %}

@@ -13,8 +13,8 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 
 ## Codebase Map
 - `docs/` — specs and reference. Feature specs at `docs/specs/<feature>.md`; per-feature extra files (sub-specs, notes, verification reports) in `docs/<feature>/`; hard Spotify API limits in `docs/spotify_constraints.md`.
-- `app.py` — Flask app factory. Page routes (`/` home, `/canvas`, and stubs `/audit`, `/covers`, `/folders`, `/analytics`, `/snapshot`), OAuth (`/login`, `/callback`), `/api/*` endpoints, an app-wide `before_request` login guard (exempts `login`/`callback`/`static`), and centralized error handlers (`HTTPException` + `Exception`) that render `error.html` for pages and JSON for `/api/*`.
-- `templates/` — Jinja templates. `base.html` (shared shell: navbar + content block; `body_class` block for the immersive full-viewport pages); `home.html`; `canvas.html` (org canvas, extends base); `coming_soon.html` (shared stub placeholder); `error.html` (generic HTTP error page, extends base).
+- `app.py` — Flask app factory. Page routes (`/` home, `/canvas`, `/dev` dev-tools landing, `/dev/snapshot*`, and stubs `/audit`, `/covers`, `/folders`, `/analytics`), OAuth (`/login`, `/callback`), `/api/*` endpoints, an app-wide `before_request` login guard (exempts `login`/`callback`/`static`), and centralized error handlers (`HTTPException` + `Exception`) that render `error.html` for pages and JSON for `/api/*`.
+- `templates/` — Jinja templates. `base.html` (shared shell: navbar + content block; `body_class` block for the immersive full-viewport pages); `home.html`; `canvas.html` (org canvas, extends base); `dev.html` (dev-tools landing page); `snapshot.html`, `snapshot_playlist.html`, `snapshot_track.html`; `coming_soon.html` (shared stub placeholder); `error.html` (generic HTTP error page, extends base).
 - `static/css/style.css` — the single stylesheet (navbar, shared page styles, canvas).
 - `.claude/skills/` — the phase skills (`plan`, `implement`, `verify`); committed.
 - (Rest TBD — update this map as directories are created.)
