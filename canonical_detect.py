@@ -92,6 +92,18 @@ def _fetch_tracks(conn):
         """
     ).fetchall()
 
+    real_groups = {
+        row["track_id"]: {
+            "song": row["song_id"],
+            "version": row["version_id"],
+            "recording": row["recording_id"],
+            "release": row["release_id"],
+        }
+        for row in conn.execute(
+            "SELECT track_id, song_id, version_id, recording_id, release_id FROM track_group"
+        )
+    }
+
     tracks = {}
     for row in rows:
         base, suffix = normalize_title(row["name"])
@@ -109,6 +121,7 @@ def _fetch_tracks(conn):
             "suffix_class": classify_suffix(suffix),
             "artist_set": normalize_artists(row["artists"]),
             "album_norm": _normalize_base_string(row["album_name"] or ""),
+            "real_groups": real_groups.get(row["track_id"]),
         }
     return tracks
 
@@ -186,6 +199,13 @@ def _same_release(tracks, a, b):
     )
 
 
+def _same_real(tracks, a, b, tier):
+    """Already sharing this tier for real, per the last-saved grouping --
+    an existing decision always outranks the heuristics below."""
+    ra, rb = tracks[a]["real_groups"], tracks[b]["real_groups"]
+    return bool(ra and rb and ra[tier] == rb[tier])
+
+
 # -- Pre-fill -----------------------------------------------------------
 
 
@@ -198,52 +218,77 @@ class _Counter:
         return f"{prefix}{self.n}"
 
 
+def _eligible(tracks, tid):
+    return tracks[tid]["suffix_class"] in ("base", "version", "recording")
+
+
 def _prefill_labels(track_ids, tracks):
     labels = {tid: {} for tid in track_ids}
     counter = _Counter()
 
-    eligible = [tid for tid in track_ids if tracks[tid]["suffix_class"] in ("base", "version", "recording")]
-    isolated = [tid for tid in track_ids if tid not in eligible]
+    def same_song(a, b):
+        # Same song requires some artist overlap -- a title match alone
+        # (covers, Christmas songs, coincidental titles) is never enough.
+        # An undecided/unknown-suffixed track (a or b) never merges by
+        # heuristic at all -- guessing there is worse than a click -- but
+        # an existing real match always wins regardless of eligibility or
+        # artist, since it's a fact, not a guess.
+        if _same_real(tracks, a, b, "song"):
+            return True
+        return _eligible(tracks, a) and _eligible(tracks, b) and bool(tracks[a]["artist_set"] & tracks[b]["artist_set"])
 
-    for tid in isolated:
-        for tier in canonical.TIER_ORDER:
-            labels[tid][tier] = counter.label(tier)
+    def same_recording_group(a, b):
+        # A release-tier match (same ISRC + same album) must also merge at
+        # recording tier, since release <= recording nesting requires it --
+        # even when the recording-specific rule (which only fires on a
+        # *different* album) doesn't independently agree.
+        if _same_real(tracks, a, b, "recording"):
+            return True
+        return _eligible(tracks, a) and _eligible(tracks, b) and (
+            _same_recording(tracks, a, b) or _same_release(tracks, a, b)
+        )
 
-    if not eligible:
-        return labels
+    def same_release_group(a, b):
+        if _same_real(tracks, a, b, "release"):
+            return True
+        return _eligible(tracks, a) and _eligible(tracks, b) and _same_release(tracks, a, b)
 
-    song_label = counter.label("song")
-    for tid in eligible:
-        labels[tid]["song"] = song_label
-
-    shared_version = [tid for tid in eligible if tracks[tid]["suffix_class"] != "version"]
-    version_only = [tid for tid in eligible if tracks[tid]["suffix_class"] == "version"]
-
-    if shared_version:
-        version_label = counter.label("version")
-        for tid in shared_version:
-            labels[tid]["version"] = version_label
-
-        def _same_recording_or_release(a, b):
-            # A release-tier match (same ISRC + same album) must also merge
-            # at recording tier, since release <= recording nesting requires
-            # it -- even when the recording-specific rule (which only fires
-            # on a *different* album) doesn't independently agree.
-            return _same_recording(tracks, a, b) or _same_release(tracks, a, b)
-
-        for comp in _group_by_rule(shared_version, _same_recording_or_release):
+    def assign_recording_release(members):
+        for comp in _group_by_rule(members, same_recording_group):
             recording_label = counter.label("recording")
             for tid in comp:
                 labels[tid]["recording"] = recording_label
-            for rel_comp in _group_by_rule(comp, lambda a, b: _same_release(tracks, a, b)):
+            for rel_comp in _group_by_rule(comp, same_release_group):
                 release_label = counter.label("release")
                 for tid in rel_comp:
                     labels[tid]["release"] = release_label
 
-    for tid in version_only:
-        labels[tid]["version"] = counter.label("version")
-        labels[tid]["recording"] = counter.label("recording")
-        labels[tid]["release"] = counter.label("release")
+    for song_component in _group_by_rule(track_ids, same_song):
+        song_label = counter.label("song")
+        for tid in song_component:
+            labels[tid]["song"] = song_label
+
+        # base/recording-classified tracks share one version -- a remaster
+        # sounds the same as the original. Everything else (version-
+        # classified, or undecided/unknown) only merges via a real match:
+        # two different live cuts are two different-sounding things, and an
+        # unrecognized suffix could mean anything.
+        shared_version = [
+            tid for tid in song_component if _eligible(tracks, tid) and tracks[tid]["suffix_class"] != "version"
+        ]
+        rest = [tid for tid in song_component if tid not in shared_version]
+
+        if shared_version:
+            version_label = counter.label("version")
+            for tid in shared_version:
+                labels[tid]["version"] = version_label
+            assign_recording_release(shared_version)
+
+        for comp in _group_by_rule(rest, lambda a, b: _same_real(tracks, a, b, "version")):
+            version_label = counter.label("version")
+            for tid in comp:
+                labels[tid]["version"] = version_label
+            assign_recording_release(comp)
 
     return labels
 

@@ -14,7 +14,7 @@ The click-through: one candidate group on screen at a time, keyboard-first, deci
 | `/dev/canonical/review?queue=cross-artist` | same-title/no-shared-artist candidates (covers, Christmas songs) |
 | `/dev/canonical/review?tracks=<id>,<id>,…` | a single ad-hoc item from an arbitrary selection (phase 6's search sends you here) |
 
-All three render the identical UI; only the item list differs.
+All three render the identical UI; only the item list differs — including the cross-artist queue, which uses the same prefill as everywhere else. The song-tier prefill rule requires artist overlap (see `detection.md`), so cross-artist items no longer arrive pre-merged into one song by default; they only start merged where there's already a real existing match or a genuine artist overlap within the bucket.
 
 ## Layout
 
@@ -34,7 +34,7 @@ All three render the identical UI; only the item list differs.
 
 ### Tier chips
 
-Each chip shows a short local tag (`S1`, `V2`, `R1`, `L3`) and a colour, so two rows in the same group are unmistakable. Singletons render neutral grey; only real groups get colour, so the eye catches groupings rather than noise. Where a chip corresponds to a group that already exists in the DB, its `canonical_group.id` appears muted next to the tag (and in the chip's `title` tooltip) — pre-commit groups have no id yet and show nothing.
+Each chip shows a short local tag (`S1`, `V2`, `R1`, `L3`) and a colour. Every distinct group at a tier gets a colour — including singletons — assigned in a fixed high-contrast rotation by order of first appearance within the item (1st group blue, 2nd red, 3rd green, …), cycling if there are more groups than colours. This reads as "here are the groups," not "here's what's selected" — colour identifies which rows belong together, full stop. Chips show only the local tag, never the underlying `canonical_group.id` — the tag is all a reviewer needs, and showing a real id for one chip but not another made "already merged for real" and "proposed here" easy to conflate.
 
 ## The label model
 
@@ -44,21 +44,21 @@ This keeps every grouping rule server-side; the client's only job is assigning l
 
 ## Keys
 
-Pressing a **tier key** `1`–`4` acts on the current selection:
+Pressing a **level key** `0`–`4` sets the exact relationship for the current selection `S` in one shot — the highest tier its members are the same at:
 
-**Step 0 — expand.** The selection first grows to its *finer closure* within the item: any track sharing a finer-tier label with a selected track joins the selection. (Detaching one half of a release pair at recording level would otherwise break nesting.)
+| Key | Sets `S` to... |
+|---|---|
+| `0` | not even the same song — fully separate at all four tiers |
+| `1` | same song |
+| `2` | same version |
+| `3` | same recording |
+| `4` | same release |
 
-**Then, with `L` = the set of tier-*N* labels in the expanded selection `S`:**
+Tiers at or coarser than the chosen level get **one shared fresh label** across all of `S`. Every tier finer than that gets a **fresh, individually-unique label per track** in `S` — no two members of `S` share anything finer than the chosen level, even if they did before. This redefines `S`'s relationship outright rather than incrementally merging/splitting; whatever `S` was grouped with previously (inside or outside the selection) no longer matters once you press a level key.
 
-| Case | Condition | Result |
-|---|---|---|
-| **Ungroup** | `\|L\| == 1` and every track in the item with that label is in `S` | `S` splits into its constituent finer groups, each taking a fresh label (at the release tier, into singletons) |
-| **Detach** | `\|L\| == 1` but tracks outside `S` share the label | `S` takes one fresh label; the rest keep the old one |
-| **Merge** | `\|L\| > 1` | `S` takes one fresh label |
+This only ever touches the tracks in `S` — it never reaches beyond the selection into other rows in the item, even ones that currently share a tier with a selected track. (An earlier closure-expansion step that pulled in finer-tier neighbors caused surprise pairings when only one track was selected, so it was removed — the server's own reconciliation in `apply_partition` already handles any DB-side nesting consequences beyond this item when the item commits.)
 
-After a **merge**, coarser tiers unify automatically — everything now sharing the tier-*N* label is given one label at each coarser tier, because nesting demands it. Ungroup and detach leave coarser tiers alone.
-
-That yields exactly the behaviour discussed: select A B C D, press `3` → one recording group. Then select C D, press `3` → C and D detach into their own recording group (this is also how you split a group in two). Select just C, press `3` → C alone. Select the whole group, press `3` → it ungroups.
+That means: select A B C D, press `3` (same recording) → all four share one recording (and song/version, since nesting requires it), each keeping its own unique release. Select just C D, press `4` (same release) → C and D become one release, splitting off from whatever they were release-grouped with before. Select just C alone, press `0` → C is detached from everything, at every tier, regardless of what it was grouped with.
 
 **Full key map:**
 
@@ -68,16 +68,17 @@ That yields exactly the behaviour discussed: select A B C D, press `3` → one r
 | `Space`, click | toggle selection of the focused / clicked row |
 | `Shift`+click | select a range |
 | `a` | select all rows in the item |
-| `1` `2` `3` `4` | apply Song / Version / Recording / Release to the selection |
+| `1` `2` `3` `4` | set the selection's relationship: same song / same version / same recording / same release |
+| `0` | not even the same song |
 | `r` | pin the focused track as representative for its groups (all four tiers) |
-| `Esc` | clear every grouping on this item — all four tiers back to singletons |
+| `Esc` / **Clear** button | clear every grouping on this item — all four tiers back to singletons |
 | `Cmd`+`Z` | undo the last action on this item (in-session only) |
-| `Enter` | **commit** and advance to the next item |
-| `Backspace` | discard uncommitted edits and go back to the previous item |
+| `Enter` / **Save →** button | **commit** and advance to the next item |
+| `Backspace` / **← Back** button | discard uncommitted edits and go back to the previous item |
 
 ### Legend
 
-The four tier keys are **always-visible clickable buttons** (`1 Song`, `2 Version`, `3 Recording`, `4 Release`) so a decision can be made with the mouse and a misclick is hard. The rest of the key map sits behind a `?` hover/dropdown next to them.
+The five level keys are **always-visible clickable buttons** (`1 Song`, `2 Version`, `3 Recording`, `4 Release`, `0 None`) so a decision can be made with the mouse and a misclick is hard. **Clear**, **← Back**, and **Save →** buttons on the right of the same row mirror `Esc`, `Backspace`, and `Enter`. The rest of the key map sits behind a `?` hover/dropdown next to them.
 
 ### Commit semantics
 

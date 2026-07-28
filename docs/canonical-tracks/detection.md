@@ -55,15 +55,16 @@ An empty suffix classifies as **base**. A non-empty suffix matching no keyword c
 
 ## Pre-fill rules
 
-Within a candidate group, in order:
+Within a candidate group, in order. At every tier, a pair that **already shares that tier for real** (its last-saved grouping, not just this pre-fill) always merges too, regardless of whether the rule below would independently agree — an existing decision is never silently proposed as undone. This is what makes the cross-artist queue safe to prefill the same way as everywhere else: a real prior match survives even where the heuristics alone wouldn't have found it.
 
-**Song.** Every track classified `base`, `version`, or `recording` goes into **one** song group. Tracks classified `undecided` or `unknown` are left entirely alone — all four tiers singleton, not even the same song. (An unrecognized suffix like `(Bonus Track)` or `- 2011 Version` could mean anything; guessing there is worse than a click.)
+**Song.** Every track classified `base`, `version`, or `recording` goes into a song group **with tracks it has artist overlap with** — completely disjoint artists (no shared artist at all) are never the same song by title alone, even an exact match. This is what keeps covers, Christmas songs, and coincidental same-title tracks by unrelated artists from merging by default; a bucket can therefore prefill into more than one song group. Tracks classified `undecided` or `unknown` are left entirely alone — all four tiers singleton, not even the same song. (An unrecognized suffix like `(Bonus Track)` or `- 2011 Version` could mean anything; guessing there is worse than a click.)
 
-**Version.** All `base` and `recording` tracks share **one** version group — a remaster sounds the same as the original, so it's the same version. Each `version`-classified track gets **its own** version group, *not* merged with same-keyword siblings: two different live cuts are two different-sounding things.
+**Version.** Within a song group, all `base` and `recording` tracks share **one** version group — a remaster sounds the same as the original, so it's the same version. Each `version`-classified track gets **its own** version group, *not* merged with same-keyword siblings: two different live cuts are two different-sounding things.
 
-**Recording.** Within a version group, merge when either holds:
+**Recording.** Within a version group, merge when any holds:
 - **Same ISRC, different normalized album name** → same recording, different releases. This is the AAA-on-four-releases case, and it's the workhorse rule.
 - **Clean/explicit pair**: identical normalized *full* title (base **and** suffix), artist overlap, durations within 2s, and differing `track.explicit` → same recording, with the **explicit** track pinned as representative. Clean editions carry no telltale suffix and a *different* ISRC, so nothing else catches them.
+- **A release-tier match** (below) between the pair — release ⊆ recording nesting means same release always implies same recording, even when neither recording rule fires on its own (e.g. a literal duplicate upload: same ISRC *and* same album).
 
 Otherwise each track is its own recording.
 

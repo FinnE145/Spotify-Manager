@@ -10,17 +10,19 @@
     <div id="progress-label"></div>
     <div id="queue-name"></div>
     <div id="tier-legend">
-      <button class="tier-btn" data-tier="song" title="Song — the composition, any performance (AAA / AAA Acoustic / AAA Remix all together)">1 Song</button>
-      <button class="tier-btn" data-tier="version" title="Version — sounds different (AAA vs. AAA Acoustic)">2 Version</button>
-      <button class="tier-btn" data-tier="recording" title="Recording — sounds the same, different master (remaster, Taylor's Version, deluxe, clean/explicit)">3 Recording</button>
-      <button class="tier-btn" data-tier="release" title="Release — same audio, different album/EP/single (or a duplicate album upload)">4 Release</button>
+      <button class="tier-btn" data-level="2" title="Song — the composition, any performance (AAA / AAA Acoustic / AAA Remix all together)">1 Song</button>
+      <button class="tier-btn" data-level="3" title="Version — sounds different (AAA vs. AAA Acoustic)">2 Version</button>
+      <button class="tier-btn" data-level="4" title="Recording — sounds the same, different master (remaster, Taylor's Version, deluxe, clean/explicit)">3 Recording</button>
+      <button class="tier-btn" data-level="5" title="Release — same audio, different album/EP/single (or a duplicate album upload)">4 Release</button>
+      <button class="tier-btn" data-level="1" title="Not even the same song">0 None</button>
       <span id="help-toggle" tabindex="0">?</span>
       <div id="help-popover" hidden>
         <table class="tier-meanings">
-          <tr><th>Song</th><td>the composition, any performance</td><td class="muted">AAA / AAA (Acoustic) / AAA (Remix) — all one song</td></tr>
-          <tr><th>Version</th><td>sounds different</td><td class="muted">AAA (Acoustic) &ne; AAA</td></tr>
-          <tr><th>Recording</th><td>sounds the same, different master</td><td class="muted">remaster, Taylor's Version, deluxe, clean/explicit</td></tr>
-          <tr><th>Release</th><td>same audio, different album/EP/single</td><td class="muted">AAA's four track ids, or a duplicate album upload</td></tr>
+          <tr><th>1 Song</th><td>the composition, any performance</td><td class="muted">AAA / AAA (Acoustic) / AAA (Remix) — all one song</td></tr>
+          <tr><th>2 Version</th><td>sounds different</td><td class="muted">AAA (Acoustic) &ne; AAA</td></tr>
+          <tr><th>3 Recording</th><td>sounds the same, different master</td><td class="muted">remaster, Taylor's Version, deluxe, clean/explicit</td></tr>
+          <tr><th>4 Release</th><td>same audio, different album/EP/single</td><td class="muted">AAA's four track ids, or a duplicate album upload</td></tr>
+          <tr><th>0 None</th><td colspan="2">not even the same song — fully separate at every tier</td></tr>
         </table>
         <hr>
         <table>
@@ -28,13 +30,19 @@
           <tr><td>Space, click</td><td>toggle selection</td></tr>
           <tr><td>Shift+click</td><td>select range</td></tr>
           <tr><td>a</td><td>select all</td></tr>
-          <tr><td>1 2 3 4</td><td>apply Song / Version / Recording / Release</td></tr>
+          <tr><td>1 2 3 4</td><td>set the selection's relationship: same song / same version / same recording / same release</td></tr>
+          <tr><td>0</td><td>not even the same song</td></tr>
           <tr><td>r</td><td>pin focused track as representative</td></tr>
           <tr><td>Esc</td><td>clear all grouping on this item</td></tr>
           <tr><td>Cmd+Z</td><td>undo last action (this item, this session)</td></tr>
           <tr><td>Enter</td><td>commit and advance</td></tr>
           <tr><td>Backspace</td><td>discard edits, go to previous item</td></tr>
         </table>
+      </div>
+      <div id="action-buttons">
+        <button id="clear-btn" type="button" title="Esc">Clear</button>
+        <button id="back-btn" type="button" title="Backspace">&lt; Back</button>
+        <button id="save-btn" type="button" title="Enter">Save &gt;</button>
       </div>
     </div>
   </header>

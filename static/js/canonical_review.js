@@ -4,9 +4,7 @@
   }
 
   const TIERS = ["song", "version", "recording", "release"]; // coarsest -> finest
-  const TIER_KEYS = { 1: "song", 2: "version", 3: "recording", 4: "release" };
   const TIER_ABBR = { song: "S", version: "V", recording: "R", release: "L" };
-  const NESTING_ORDER = ["release", "recording", "version", "song"]; // finest -> coarsest
   const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777"];
 
   const headerProgress = document.getElementById("progress-label");
@@ -96,81 +94,35 @@
     render();
   }
 
-  // ---------- Nesting / partition logic ----------
+  // ---------- Partition logic ----------
 
-  function enforceNesting(item) {
-    for (let i = 0; i < NESTING_ORDER.length - 1; i++) {
-      const finer = NESTING_ORDER[i];
-      const coarser = NESTING_ORDER[i + 1];
-      const groups = new Map();
-      for (const tid of item.track_ids) {
-        const key = item.labels[tid][finer];
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(tid);
-      }
-      for (const members of groups.values()) {
-        const winner = item.labels[members[0]][coarser];
-        for (const tid of members) item.labels[tid][coarser] = winner;
-      }
-    }
-  }
-
-  function expandSelection(item, tier) {
-    const idx = TIERS.indexOf(tier);
-    const expanded = new Set(selection);
-    if (idx === TIERS.length - 1) return expanded; // release: finest, no closure
-    const finer = TIERS[idx + 1];
-    const finerLabels = new Set();
-    for (const tid of selection) finerLabels.add(item.labels[tid][finer]);
-    for (const tid of item.track_ids) {
-      if (finerLabels.has(item.labels[tid][finer])) expanded.add(tid);
-    }
-    return expanded;
-  }
-
-  function applyTier(tier) {
+  // Sets the exact relationship for the current selection in one shot:
+  // level 1 = not even the same song (fully separate at all 4 tiers),
+  // level 2 = same song, 3 = same version, 4 = same recording, 5 = same
+  // release. Tiers at or coarser than the chosen level are shared across
+  // the whole selection; every tier finer than that is split back out to
+  // a fresh, individually-unique label per track. This only ever touches
+  // the selected tracks -- it never reaches out to unselected neighbors,
+  // and the server's own closure (on commit) handles any DB-side nesting
+  // consequences beyond this item.
+  function applyLevel(level) {
     if (!selection.size) return;
     const item = items[index];
     pushUndo();
 
-    const expanded = expandSelection(item, tier);
-    const labelsAtTier = new Set([...expanded].map((tid) => item.labels[tid][tier]));
+    const sharedThroughIndex = level - 2; // -1 (level 1) .. 3 (level 5)
+    const members = [...selection];
 
-    if (labelsAtTier.size === 1) {
-      const [label] = labelsAtTier;
-      const fullMembers = item.track_ids.filter((tid) => item.labels[tid][tier] === label);
-      const isFull = fullMembers.every((tid) => expanded.has(tid));
-      if (isFull) {
-        ungroupTier(item, tier, expanded);
+    TIERS.forEach((tier, i) => {
+      if (i <= sharedThroughIndex) {
+        const label = freshLabel(tier);
+        for (const tid of members) item.labels[tid][tier] = label;
       } else {
-        assignFreshLabel(item, tier, expanded); // detach
+        for (const tid of members) item.labels[tid][tier] = freshLabel(tier);
       }
-    } else {
-      assignFreshLabel(item, tier, expanded); // merge
-    }
-    enforceNesting(item);
-    selection = expanded;
+    });
+
     render();
-  }
-
-  function assignFreshLabel(item, tier, members) {
-    const label = freshLabel(tier);
-    for (const tid of members) item.labels[tid][tier] = label;
-  }
-
-  function ungroupTier(item, tier, members) {
-    const idx = TIERS.indexOf(tier);
-    if (idx === TIERS.length - 1) {
-      for (const tid of members) item.labels[tid][tier] = freshLabel(tier);
-      return;
-    }
-    const finer = TIERS[idx + 1];
-    const byFiner = new Map();
-    for (const tid of members) {
-      const key = item.labels[tid][finer];
-      if (!byFiner.has(key)) byFiner.set(key, freshLabel(tier));
-      item.labels[tid][tier] = byFiner.get(key);
-    }
   }
 
   function isGrouped(item, tid) {
@@ -375,17 +327,15 @@
     return seen;
   }
 
+  // Every distinct group at this tier gets a color, in order of first
+  // appearance, cycling through the palette -- this reads as "here are
+  // the groups" rather than "here's what's selected/merged".
   function tierColorMap(item, tier) {
-    const counts = new Map();
-    for (const tid of item.track_ids) {
-      const label = item.labels[tid][tier];
-      counts.set(label, (counts.get(label) || 0) + 1);
-    }
     const colorMap = new Map();
     let ci = 0;
     for (const tid of item.track_ids) {
       const label = item.labels[tid][tier];
-      if (counts.get(label) >= 2 && !colorMap.has(label)) {
+      if (!colorMap.has(label)) {
         colorMap.set(label, COLORS[ci % COLORS.length]);
         ci += 1;
       }
@@ -444,27 +394,7 @@
     const chip = document.createElement("span");
     chip.className = "tier-chip";
     chip.textContent = `${TIER_ABBR[tier]}${displayNums.get(label)}`;
-    const color = colorMap.get(label);
-    if (color) {
-      chip.style.background = color;
-    } else {
-      chip.classList.add("singleton");
-    }
-
-    const currentForTrack = item.current_ids && item.current_ids[tid] ? item.current_ids[tid][tier] : null;
-    if (currentForTrack != null) {
-      const membersWithLabel = item.track_ids.filter((id2) => item.labels[id2][tier] === label);
-      const allSameId = membersWithLabel.every(
-        (id2) => item.current_ids[id2] && item.current_ids[id2][tier] === currentForTrack
-      );
-      if (allSameId) {
-        chip.title = `canonical_group.id ${currentForTrack}`;
-        const idSpan = document.createElement("span");
-        idSpan.className = "chip-id";
-        idSpan.textContent = ` ${currentForTrack}`;
-        chip.appendChild(idSpan);
-      }
-    }
+    chip.style.background = colorMap.get(label);
 
     td.appendChild(chip);
     return td;
@@ -561,8 +491,25 @@
   });
 
   document.querySelectorAll(".tier-btn").forEach((btn) => {
-    btn.addEventListener("click", () => applyTier(btn.dataset.tier));
+    btn.addEventListener("click", () => {
+      if (itemSection.hidden) return;
+      applyLevel(parseInt(btn.dataset.level, 10));
+    });
   });
+
+  document.getElementById("clear-btn").addEventListener("click", () => {
+    if (!itemSection.hidden) clearAll();
+  });
+  document.getElementById("back-btn").addEventListener("click", () => {
+    if (!itemSection.hidden) goBack();
+  });
+  document.getElementById("save-btn").addEventListener("click", () => {
+    if (!itemSection.hidden) commit();
+  });
+
+  // Display keys 0-4 map to the internal 1-5 "relationship level" scale
+  // (0 None = level 1 .. 4 Release = level 5); see applyLevel().
+  const KEY_TO_LEVEL = { 0: 1, 1: 2, 2: 3, 3: 4, 4: 5 };
 
   document.addEventListener("keydown", (e) => {
     if (itemSection.hidden) return;
@@ -581,9 +528,9 @@
     } else if (e.key === "a") {
       e.preventDefault();
       selectAll();
-    } else if (["1", "2", "3", "4"].includes(e.key)) {
+    } else if (e.key in KEY_TO_LEVEL) {
       e.preventDefault();
-      applyTier(TIER_KEYS[e.key]);
+      applyLevel(KEY_TO_LEVEL[e.key]);
     } else if (e.key === "r") {
       e.preventDefault();
       pinRepresentative();

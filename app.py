@@ -210,11 +210,6 @@ def create_app():
             queue_name = "main"
             items = canonical_detect.candidate_groups(conn)
 
-        for item in items:
-            item["current_ids"] = {
-                tid: canonical.groups_for_track(conn, tid) for tid in item["track_ids"]
-            }
-
         return jsonify({"queue": queue_name, "items": items})
 
     @app.route("/api/canonical/apply", methods=["POST"])
