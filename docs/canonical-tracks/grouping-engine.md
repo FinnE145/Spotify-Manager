@@ -94,7 +94,7 @@ Returns `canonical_group.representative_track_id` when set; otherwise computes i
 pin_representative(conn, track_id)
 ```
 
-Sets that track as the pinned representative for its groups at **all four tiers** at once (the "★" action in the review UI). There's no per-tier pinning — the point is "this is the one I want to see," and a track that's the best face for its recording is the best face for its song too.
+Sets that track as the pinned representative for its **song** group only (the "★" action in the review UI, and the clickable star on `/dev/canonical`). Song is the only tier anything displays or consumes a representative for — pinning at the finer tiers too was tried and dropped: a version-classified track's own singleton version/recording/release groups would trivially "self-pin" alongside a genuinely different track's own trivial self-pin, showing two "representatives" for what's really one decision.
 
 `track.popularity` is NULL library-wide (Spotify stopped returning it on playlist-item track objects), so it is not part of the tie-break.
 

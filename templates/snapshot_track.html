@@ -9,6 +9,30 @@
   <h1>{{ track.name }}</h1>
   <p class="meta">{{ track.artists }}{% if track.album_name %} &middot; {{ track.album_name }}{% endif %}</p>
 
+  <section class="panel">
+    <h2>Canonical</h2>
+    <table class="data-table">
+      <thead><tr><th>Tier</th><th>Group</th><th>Siblings</th></tr></thead>
+      <tbody>
+        {% for tier in ('song', 'version', 'recording', 'release') %}
+        <tr>
+          <td>{{ tier|capitalize }}</td>
+          <td><a href="{{ url_for('canonical_group_deep_link', group_id=canonical_groups[tier]) }}">{{ canonical_groups[tier] }}</a></td>
+          <td>
+            {% if canonical_siblings[tier] %}
+              {% for s in canonical_siblings[tier] %}
+                <a href="{{ url_for('dev_snapshot_track', track_id=s.track_id) }}">{{ s.name }}</a>{{ ", " if not loop.last }}
+              {% endfor %}
+            {% else %}
+              <span class="empty">none (singleton)</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
   {% if rows %}
   <table class="data-table sortable" id="appearance-table">
     <thead>

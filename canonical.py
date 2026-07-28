@@ -222,18 +222,17 @@ def representative(conn, group_id):
 
 
 def pin_representative(conn, track_id):
-    """Pins track_id as the representative for its groups at all four tiers."""
+    """Pins track_id as the representative for its song group. Song is the
+    only tier anything displays or consumes a representative for."""
     row = conn.execute(
-        "SELECT song_id, version_id, recording_id, release_id FROM track_group WHERE track_id = ?",
-        (track_id,),
+        "SELECT song_id FROM track_group WHERE track_id = ?", (track_id,)
     ).fetchone()
     if row is None:
         raise ValueError(f"no track_group row for track {track_id}")
-    for tier in TIER_ORDER:
-        conn.execute(
-            "UPDATE canonical_group SET representative_track_id = ? WHERE id = ?",
-            (track_id, row[TIER_COLUMN[tier]]),
-        )
+    conn.execute(
+        "UPDATE canonical_group SET representative_track_id = ? WHERE id = ?",
+        (track_id, row["song_id"]),
+    )
 
 
 def group_members(conn, group_id):
@@ -287,6 +286,120 @@ def nested_tree(conn, song_id):
             recordings.append({"recording_id": r["recording_id"], "releases": releases})
         tree.append({"version_id": v["version_id"], "recordings": recordings})
     return tree
+
+
+def _is_pinned(conn, group_id):
+    row = conn.execute(
+        "SELECT representative_track_id FROM canonical_group WHERE id = ?", (group_id,)
+    ).fetchone()
+    return bool(row and row["representative_track_id"])
+
+
+def track_display(conn, track_id):
+    row = conn.execute("SELECT * FROM track WHERE track_id = ?", (track_id,)).fetchone()
+    live_count = conn.execute(
+        "SELECT COUNT(*) FROM membership WHERE track_id = ? AND removed_at IS NULL", (track_id,)
+    ).fetchone()[0]
+    info = dict(row)
+    info["live_count"] = live_count
+    return info
+
+
+def song_groups(conn, query="", include_singletons=False):
+    """Song-tier group summaries for the /dev/canonical browser, ordered by
+    playlist impact (summed live memberships) descending."""
+    rows = conn.execute(
+        """
+        SELECT tg.song_id, COUNT(*) AS track_count,
+               COALESCE(SUM(
+                   (SELECT COUNT(*) FROM membership m
+                    WHERE m.track_id = tg.track_id AND m.removed_at IS NULL)
+               ), 0) AS impact
+        FROM track_group tg
+        GROUP BY tg.song_id
+        """
+    ).fetchall()
+
+    like = f"%{query}%" if query else None
+    results = []
+    for row in rows:
+        if not include_singletons and row["track_count"] <= 1:
+            continue
+        song_id = row["song_id"]
+        if like:
+            match = conn.execute(
+                """
+                SELECT 1 FROM track_group tg
+                JOIN track t ON t.track_id = tg.track_id
+                WHERE tg.song_id = ? AND (t.name LIKE ? OR t.artists LIKE ?)
+                LIMIT 1
+                """,
+                (song_id, like, like),
+            ).fetchone()
+            if not match:
+                continue
+        rep_id = representative(conn, song_id)
+        rep = track_display(conn, rep_id) if rep_id else None
+        results.append(
+            {
+                "song_id": song_id,
+                "track_count": row["track_count"],
+                "impact": row["impact"],
+                "representative_track_id": rep_id,
+                "representative": rep,
+                "pinned": _is_pinned(conn, song_id),
+            }
+        )
+    results.sort(key=lambda r: (-r["impact"], r["song_id"]))
+    return results
+
+
+def song_tree(conn, song_id):
+    """Full version -> recording -> release -> track nesting for one song
+    group, enriched with track display fields and each node's full
+    descendant track-id list (for "Edit in queue" links). Representative is
+    a song-level-only concept -- only the song node carries it."""
+    tree = nested_tree(conn, song_id)
+
+    versions = []
+    for v in tree:
+        recordings = []
+        for r in v["recordings"]:
+            releases = []
+            for rel in r["releases"]:
+                tracks = [track_display(conn, tid) for tid in rel["track_ids"]]
+                releases.append(
+                    {
+                        "release_id": rel["release_id"],
+                        "track_ids": rel["track_ids"],
+                        "tracks": tracks,
+                    }
+                )
+            recording_track_ids = [tid for rel in releases for tid in rel["track_ids"]]
+            recordings.append(
+                {
+                    "recording_id": r["recording_id"],
+                    "track_ids": recording_track_ids,
+                    "releases": releases,
+                }
+            )
+        version_track_ids = [tid for r in recordings for tid in r["track_ids"]]
+        versions.append(
+            {
+                "version_id": v["version_id"],
+                "track_ids": version_track_ids,
+                "recordings": recordings,
+            }
+        )
+    song_track_ids = [tid for v in versions for tid in v["track_ids"]]
+
+    return {
+        "song_id": song_id,
+        "representative_track_id": representative(conn, song_id),
+        "pinned": _is_pinned(conn, song_id),
+        "track_ids": song_track_ids,
+        "versions": versions,
+    }
 
 
 def tier_counts(conn):

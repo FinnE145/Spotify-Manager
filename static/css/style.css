@@ -352,6 +352,31 @@ body.immersive {
   background: #eee;
 }
 
+#action-buttons {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+#action-buttons button {
+  font-size: 13px;
+  padding: 4px 10px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+#action-buttons button:hover {
+  background: #eee;
+}
+
+#save-btn {
+  font-weight: 600;
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
 #help-toggle {
   margin-left: 8px;
   width: 18px;
@@ -457,18 +482,138 @@ body.immersive {
   color: #fff;
 }
 
-.tier-chip.singleton {
-  background: #e5e5e5;
-  color: #777;
-  font-weight: 400;
-}
-
-.chip-id {
-  font-weight: 400;
-  opacity: 0.85;
-}
-
 #review-done,
 #review-empty {
   overflow-y: auto;
+}
+
+/* -- Canonical viewer (group browser) ------------------------------ */
+
+.cover {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.inline-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.rep-marker {
+  font-size: 14px;
+  cursor: default;
+}
+
+.rep-marker.pinned {
+  color: #d97706;
+}
+
+.rep-marker.computed {
+  color: #ccc;
+}
+
+.pin-star {
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #ddd;
+}
+
+.pin-star:hover {
+  color: #d97706;
+}
+
+.pin-star.current {
+  color: #ccc;
+}
+
+.pin-star.filled {
+  color: #d97706;
+}
+
+.edit-link {
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.song-group {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.song-group summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.song-title {
+  font-weight: 600;
+}
+
+.tree {
+  margin: 10px 0 0 16px;
+  padding-left: 12px;
+  border-left: 2px solid #eee;
+}
+
+.tree-node {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 2px solid #eee;
+}
+
+.tree-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.tier-chip.version {
+  background: #2563eb;
+  color: #fff;
+}
+
+.tier-chip.recording {
+  background: #059669;
+  color: #fff;
+}
+
+.tier-chip.release {
+  background: #d97706;
+  color: #fff;
+}
+
+.tree-leaf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0 3px 20px;
+  font-size: 13px;
+}
+
+.leaf-title {
+  font-weight: 500;
+}
+
+.leaf-meta {
+  color: #888;
+  font-size: 12px;
+}
+
+.cross-artist-entry {
+  margin-bottom: 10px;
 }

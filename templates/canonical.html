@@ -1,87 +1,187 @@
 {% extends "base.html" %}
+{% from "_macros.html" import datetime_span %}
 
 {% block title %}Symr — Canonical Tracks{% endblock %}
 
-{% macro render_group(g) %}
-<div class="panel">
-  <h3>{{ g.base }} — impact {{ g.impact }} ({{ g.track_ids|length }} tracks)</h3>
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Track</th><th>Artists</th><th>Album</th><th>Duration (ms)</th><th>ISRC</th>
-        <th>Explicit</th><th>Live#</th><th>Class</th><th>Song</th><th>Version</th><th>Recording</th><th>Release</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for tid in g.track_ids %}
-      {% set t = g.tracks[tid] %}
-      {% set l = g.labels[tid] %}
-      <tr>
-        <td>{{ t.title }}</td>
-        <td>{{ t.artists }}</td>
-        <td>{{ t.album or "" }}</td>
-        <td>{{ t.duration_ms if t.duration_ms is not none else "" }}</td>
-        <td>{{ t.isrc or "" }}</td>
-        <td>{{ "yes" if t.explicit else "no" }}</td>
-        <td>{{ t.live_count }}</td>
-        <td>{{ t.suffix_class }}</td>
-        <td>{{ l.song }}</td>
-        <td>{{ l.version }}</td>
-        <td>{{ l.recording }}</td>
-        <td>{{ l.release }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% macro edit_link(track_ids) %}<a class="edit-link" href="{{ url_for('canonical_review', tracks=track_ids|join(',')) }}">Edit in queue</a>{% endmacro %}
+
+{% macro pin_star(track_id, is_current, pinned) %}
+<button type="button" class="pin-star{{ ' filled' if (is_current and pinned) }}{{ ' current' if (is_current and not pinned) }}"
+        data-track-id="{{ track_id }}"
+        title="{{ 'Pinned representative' if (is_current and pinned) else ('Current representative (computed)' if is_current else 'Set as representative') }}">{{ "★" if (is_current and pinned) else "☆" }}</button>
+{% endmacro %}
+
+{% macro track_row(t, is_current_rep, pinned) %}
+<div class="tree-leaf">
+  {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
+  <span class="leaf-title">
+    {{ pin_star(t.track_id, is_current_rep, pinned) }}
+    <a href="{{ url_for('dev_snapshot_track', track_id=t.track_id) }}">{{ t.name }}</a>
+  </span>
+  <span class="leaf-meta">
+    {{ t.album_name or "" }} &middot; {{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}
+    &middot; {{ t.isrc or "—" }} &middot; {{ t.live_count }} playlist{{ "s" if t.live_count != 1 }}
+  </span>
 </div>
 {% endmacro %}
 
 {% block content %}
 <main class="page">
   <h1>Canonical Tracks</h1>
-  <p class="meta">
-    Throwaway detection-quality listing (phase 4) — no interaction yet, phase 6 replaces this page.
-    {{ main_groups|length }} candidate group{{ "s" if main_groups|length != 1 }},
-    {{ cross_groups|length }} cross-artist group{{ "s" if cross_groups|length != 1 }}.
-  </p>
-  <p>
-    <a href="{{ url_for('canonical_review') }}">Review queue &rarr;</a>
-    &middot;
-    <a href="{{ url_for('canonical_review', queue='cross-artist') }}">Cross-artist review queue &rarr;</a>
-  </p>
 
   <section class="panel">
-    <h2>Tier totals</h2>
+    <h2>Stats</h2>
+    <p>{{ total_tracks }} tracks</p>
     <table class="data-table">
-      <thead><tr><th>Tier</th><th>Groups</th><th>Non-singleton</th></tr></thead>
+      <thead><tr><th>Tier</th><th>Groups</th><th>Grouped</th></tr></thead>
       <tbody>
-        {% for tier in ('release', 'recording', 'version', 'song') %}
+        {% for tier in ('song', 'version', 'recording', 'release') %}
         <tr>
-          <td>{{ tier }}</td>
+          <td>{{ tier|capitalize }}</td>
           <td>{{ tier_counts[tier].total }}</td>
           <td>{{ tier_counts[tier].non_singleton }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    <p>
+      Unreviewed: <a href="{{ url_for('canonical_review') }}">{{ unreviewed_main }} in the main queue</a>
+      &middot; <a href="{{ url_for('canonical_review', queue='cross-artist') }}">{{ unreviewed_cross }} in the cross-artist queue</a>
+    </p>
+    <p class="meta">
+      Reviewed: {{ reviewed_count }} pair{{ "s" if reviewed_count != 1 }}
+      {% if reviewed_latest %} &middot; most recent {{ datetime_span(reviewed_latest) }}{% endif %}
+    </p>
   </section>
 
   <section class="panel">
-    <h2>Candidate groups ({{ main_groups|length }})</h2>
-    {% for g in main_groups %}
-      {{ render_group(g) }}
+    <h2>Groups ({{ groups|length }})</h2>
+    <form method="get" class="inline-form">
+      <input type="text" name="q" value="{{ q }}" placeholder="Filter by title or artist">
+      <button type="submit">Filter</button>
+      <label class="checkbox-label">
+        <input type="checkbox" name="singletons" value="1" {{ "checked" if show_singletons }}
+               onchange="this.form.submit()">
+        Include singletons
+      </label>
+    </form>
+
+    {% for g in groups %}
+    {% set tree = trees[g.song_id] %}
+    <details class="song-group" id="song-{{ g.song_id }}" {{ "open" if g.song_id == expand_song_id }}>
+      <summary>
+        {% if g.representative and g.representative.album_image_url %}
+        <img class="cover" src="{{ g.representative.album_image_url }}" alt="">
+        {% endif %}
+        <span class="song-title">
+          {{ g.representative.name if g.representative else "?" }}
+          {% if g.pinned %}<span class="rep-marker pinned" title="Pinned representative">★</span>{% endif %}
+          — {{ g.representative.artists if g.representative else "" }}
+        </span>
+        <span class="leaf-meta">{{ g.track_count }} tracks &middot; impact {{ g.impact }} &middot; song {{ g.song_id }}</span>
+        {{ edit_link(tree.track_ids) }}
+      </summary>
+
+      <div class="tree" id="group-{{ g.song_id }}">
+        {% for v in tree.versions %}
+        <div class="tree-node tier-version" id="group-{{ v.version_id }}">
+          <div class="tree-node-head">
+            <span class="tier-chip version">Version {{ v.version_id }}</span>
+          </div>
+
+          {% for r in v.recordings %}
+          <div class="tree-node tier-recording" id="group-{{ r.recording_id }}">
+            <div class="tree-node-head">
+              <span class="tier-chip recording">Recording {{ r.recording_id }}</span>
+            </div>
+
+            {% for rel in r.releases %}
+            <div class="tree-node tier-release" id="group-{{ rel.release_id }}">
+              <div class="tree-node-head">
+                <span class="tier-chip release">Release {{ rel.release_id }}</span>
+              </div>
+              {% for t in rel.tracks %}
+                {{ track_row(t, t.track_id == tree.representative_track_id, tree.pinned) }}
+              {% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </details>
     {% else %}
-      <p class="empty">No candidate groups.</p>
+    <p class="empty">No groups match.</p>
     {% endfor %}
   </section>
 
   <section class="panel">
-    <h2>Cross-artist candidates ({{ cross_groups|length }})</h2>
-    {% for g in cross_groups %}
-      {{ render_group(g) }}
+    <h2>Cross-artist ({{ cross_artist_groups|length }})</h2>
+    <p><a href="{{ url_for('canonical_review', queue='cross-artist') }}">Review in queue &rarr;</a></p>
+    {% for g in cross_artist_groups %}
+    <div class="panel cross-artist-entry">
+      <h3>{{ g.base }} <span class="leaf-meta">impact {{ g.impact }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>
+      {% for tid in g.track_ids %}
+      {% set t = g.tracks[tid] %}
+      <div class="tree-leaf">
+        {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
+        <span class="leaf-title"><strong>{{ t.artists }}</strong> — {{ t.title }}</span>
+        <span class="leaf-meta">{{ t.album or "" }} &middot; {{ t.live_count }} playlist{{ "s" if t.live_count != 1 }}</span>
+      </div>
+      {% endfor %}
+      {{ edit_link(g.track_ids) }}
+    </div>
     {% else %}
-      <p class="empty">No cross-artist candidates.</p>
+    <p class="empty">No cross-artist candidates.</p>
     {% endfor %}
+  </section>
+
+  <section class="panel">
+    <h2>Search &amp; group</h2>
+    <form method="get" class="inline-form">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="singletons" value="{{ '1' if show_singletons }}">
+      <input type="text" name="search" value="{{ search_q }}" placeholder="Track or artist name">
+      <button type="submit">Search</button>
+    </form>
+
+    <p class="meta">
+      Selected: <span id="selected-count">0</span> track(s)
+      <button id="group-selected-btn" type="button" disabled>Group selected</button>
+      <button id="clear-selection-btn" type="button">Clear selection</button>
+    </p>
+
+    {% if search_q %}
+      {% if search_results %}
+      <table class="data-table">
+        <thead>
+          <tr><th></th><th></th><th>Track</th><th>Artists</th><th>Album</th><th>ISRC</th>
+              <th>Playlists</th><th>Song</th><th>Version</th><th>Recording</th><th>Release</th></tr>
+        </thead>
+        <tbody>
+          {% for t in search_results %}
+          <tr>
+            <td><input type="checkbox" class="search-checkbox" data-track-id="{{ t.track_id }}"></td>
+            <td>{% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}</td>
+            <td><a href="{{ url_for('dev_snapshot_track', track_id=t.track_id) }}">{{ t.name }}</a></td>
+            <td>{{ t.artists }}</td>
+            <td>{{ t.album_name or "" }}</td>
+            <td>{{ t.isrc or "—" }}</td>
+            <td>{{ t.live_count }}</td>
+            <td>{{ t.groups.song if t.groups else "" }}</td>
+            <td>{{ t.groups.version if t.groups else "" }}</td>
+            <td>{{ t.groups.recording if t.groups else "" }}</td>
+            <td>{{ t.groups.release if t.groups else "" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No tracks match "{{ search_q }}".</p>
+      {% endif %}
+    {% endif %}
   </section>
 </main>
+<script src="{{ url_for('static', filename='js/canonical_viewer.js') }}"></script>
 {% endblock %}

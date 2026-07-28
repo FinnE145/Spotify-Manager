@@ -109,13 +109,69 @@ def create_app():
         canonical.ensure_track_groups(conn)
         conn.commit()
 
+        q = request.args.get("q", "").strip()
+        show_singletons = request.args.get("singletons") == "1"
+        search_q = request.args.get("search", "").strip()
+        expand_song_id = request.args.get("expand", type=int)
+
+        reviewed_row = conn.execute(
+            "SELECT COUNT(*) AS c, MAX(decided_at) AS latest FROM reviewed_pair"
+        ).fetchone()
+
+        groups = canonical.song_groups(conn, query=q, include_singletons=show_singletons)
+        trees = {g["song_id"]: canonical.song_tree(conn, g["song_id"]) for g in groups}
+
+        cross_artist_groups = [
+            g for g in canonical_detect.all_candidate_groups(conn) if g["cross_artist"]
+        ]
+
+        search_results = []
+        if search_q:
+            like = f"%{search_q}%"
+            rows = conn.execute(
+                "SELECT track_id FROM track WHERE name LIKE ? OR artists LIKE ? "
+                "ORDER BY name COLLATE NOCASE LIMIT 100",
+                (like, like),
+            ).fetchall()
+            for row in rows:
+                info = canonical.track_display(conn, row["track_id"])
+                info["groups"] = canonical.groups_for_track(conn, row["track_id"])
+                search_results.append(info)
+
         return render_template(
             "canonical.html",
             active="dev_canonical",
-            main_groups=canonical_detect.candidate_groups(conn),
-            cross_groups=canonical_detect.cross_artist_groups(conn),
+            total_tracks=conn.execute("SELECT COUNT(*) FROM track").fetchone()[0],
             tier_counts=canonical.tier_counts(conn),
+            unreviewed_main=len(canonical_detect.candidate_groups(conn)),
+            unreviewed_cross=len(canonical_detect.cross_artist_groups(conn)),
+            reviewed_count=reviewed_row["c"],
+            reviewed_latest=reviewed_row["latest"],
+            groups=groups,
+            trees=trees,
+            show_singletons=show_singletons,
+            q=q,
+            cross_artist_groups=cross_artist_groups,
+            search_q=search_q,
+            search_results=search_results,
+            expand_song_id=expand_song_id,
         )
+
+    @app.route("/dev/canonical/group/<int:group_id>")
+    def canonical_group_deep_link(group_id):
+        conn = db.get_db()
+        row = conn.execute(
+            "SELECT tier FROM canonical_group WHERE id = ?", (group_id,)
+        ).fetchone()
+        if row is None:
+            abort(404, description="No such canonical group.")
+
+        members = canonical.group_members(conn, group_id)
+        if not members:
+            abort(404, description="Group has no members.")
+        song_id = canonical.groups_for_track(conn, members[0])["song"]
+
+        return redirect(url_for("dev_canonical", expand=song_id) + f"#group-{group_id}")
 
     @app.route("/dev/canonical/review")
     def canonical_review():
@@ -178,6 +234,21 @@ def create_app():
             canonical.pin_representative(conn, pin)
         conn.commit()
         return jsonify(result)
+
+    @app.route("/api/canonical/pin", methods=["POST"])
+    def api_canonical_pin():
+        body = request.get_json()
+        track_id = body.get("track_id")
+        if not track_id:
+            abort(400, description="track_id required")
+
+        conn = db.get_db()
+        try:
+            canonical.pin_representative(conn, track_id)
+        except ValueError as e:
+            abort(400, description=str(e))
+        conn.commit()
+        return jsonify({"ok": True})
 
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
@@ -270,7 +341,34 @@ def create_app():
             (track_id,),
         ).fetchall()
 
-        return render_template("snapshot_track.html", active="dev_snapshot", track=track, rows=rows)
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+        canonical_groups = canonical.groups_for_track(conn, track_id)
+        canonical_siblings = {}
+        for tier, group_id in canonical_groups.items():
+            sibling_ids = [
+                tid for tid in canonical.group_members(conn, group_id) if tid != track_id
+            ]
+            if not sibling_ids:
+                canonical_siblings[tier] = []
+                continue
+            placeholders = ",".join("?" for _ in sibling_ids)
+            canonical_siblings[tier] = [
+                dict(row)
+                for row in conn.execute(
+                    f"SELECT track_id, name, artists FROM track WHERE track_id IN ({placeholders})",
+                    sibling_ids,
+                )
+            ]
+
+        return render_template(
+            "snapshot_track.html",
+            active="dev_snapshot",
+            track=track,
+            rows=rows,
+            canonical_groups=canonical_groups,
+            canonical_siblings=canonical_siblings,
+        )
 
     # -- OAuth ----------------------------------------------------------
 
