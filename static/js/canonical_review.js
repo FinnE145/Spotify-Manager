@@ -516,6 +516,17 @@
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea") return;
 
+    // Modifier combos are handled here and nowhere else, so the bare-key
+    // branches below can never swallow a browser shortcut (Cmd+R was
+    // reloading into a "pin representative" instead of reloading the page).
+    if (e.metaKey || e.ctrlKey) {
+      if (e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        undo();
+      }
+      return;
+    }
+
     if (e.key === "ArrowDown" || e.key === "j") {
       e.preventDefault();
       moveFocus(1);
@@ -537,9 +548,6 @@
     } else if (e.key === "Escape") {
       e.preventDefault();
       clearAll();
-    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
-      e.preventDefault();
-      undo();
     } else if (e.key === "Enter") {
       e.preventDefault();
       commit();

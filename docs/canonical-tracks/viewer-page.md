@@ -33,9 +33,9 @@ Song 4182 — "All Too Well"  (7 tracks)
    └─ Recording 4201 → Release 4202
 ```
 
-Leaves are tracks, each with its cover thumbnail, full title, album, duration, ISRC, live-membership count, and a link to `/dev/snapshot/track/<id>`. The representative at each level is marked (★), pinned ones distinguished from computed ones.
+Leaves are tracks, each with its cover thumbnail, full title, album, duration, ISRC, live-membership count, and a link to `/dev/snapshot/track/<id>`. The **song** group's representative is marked (★), pinned ones distinguished from computed ones. Song is the only tier that carries a representative — see the *Representatives* section of `grouping-engine.md` for why.
 
-Every level has an **"Edit in queue"** action that opens `/dev/canonical/review?tracks=…` with that subtree's tracks as a single ad-hoc item — that's how unmerging works, using the same detach/ungroup semantics as everywhere else.
+The **song group** has an **"Edit in queue"** action that opens `/dev/canonical/review?tracks=…` with all of its tracks as a single ad-hoc item — that's how unmerging works, using the same semantics as everywhere else. The finer levels deliberately have no action of their own: the queue page edits all four tiers of the whole song group at once, so a per-subtree link would only offer a strictly weaker view of the same decision.
 
 Default view is non-singleton groups only; a toggle includes singletons for completeness. Plus a filter box matching title or artist.
 

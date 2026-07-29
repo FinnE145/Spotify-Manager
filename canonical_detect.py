@@ -237,6 +237,23 @@ def _prefill_labels(track_ids, tracks):
             return True
         return _eligible(tracks, a) and _eligible(tracks, b) and bool(tracks[a]["artist_set"] & tracks[b]["artist_set"])
 
+    def shares_base_version(tid):
+        # base- and recording-classified tracks all sound like the original
+        # (a remaster sounds the same), so they share one version.
+        # version-classified ones (acoustic, live, remix) each stand alone --
+        # two different live cuts are two different-sounding things -- and
+        # undecided/unknown ones never merge by heuristic at all.
+        return _eligible(tracks, tid) and tracks[tid]["suffix_class"] != "version"
+
+    def same_version_group(a, b):
+        # An existing real match always wins, including across the
+        # base/version-classified boundary: if these two were once decided to
+        # be the same version, that decision is never silently proposed as
+        # undone just because one of them carries a "(Live)"-style suffix.
+        if _same_real(tracks, a, b, "version"):
+            return True
+        return shares_base_version(a) and shares_base_version(b)
+
     def same_recording_group(a, b):
         # A release-tier match (same ISRC + same album) must also merge at
         # recording tier, since release <= recording nesting requires it --
@@ -268,23 +285,7 @@ def _prefill_labels(track_ids, tracks):
         for tid in song_component:
             labels[tid]["song"] = song_label
 
-        # base/recording-classified tracks share one version -- a remaster
-        # sounds the same as the original. Everything else (version-
-        # classified, or undecided/unknown) only merges via a real match:
-        # two different live cuts are two different-sounding things, and an
-        # unrecognized suffix could mean anything.
-        shared_version = [
-            tid for tid in song_component if _eligible(tracks, tid) and tracks[tid]["suffix_class"] != "version"
-        ]
-        rest = [tid for tid in song_component if tid not in shared_version]
-
-        if shared_version:
-            version_label = counter.label("version")
-            for tid in shared_version:
-                labels[tid]["version"] = version_label
-            assign_recording_release(shared_version)
-
-        for comp in _group_by_rule(rest, lambda a, b: _same_real(tracks, a, b, "version")):
+        for comp in _group_by_rule(song_component, same_version_group):
             version_label = counter.label("version")
             for tid in comp:
                 labels[tid]["version"] = version_label
@@ -392,8 +393,15 @@ def ad_hoc_group(conn, track_ids):
     ids_sorted = sorted(track_ids)
     labels = {}
     for tid in ids_sorted:
-        current = canonical.groups_for_track(conn, tid) or {}
-        labels[tid] = {tier: str(current.get(tier)) for tier in canonical.TIER_ORDER}
+        current = canonical.groups_for_track(conn, tid)
+        if current is None:
+            # No track_group row yet. ensure_track_groups() runs ahead of every
+            # /dev/canonical* request so this shouldn't happen -- but fall back
+            # to labels unique to this track rather than one shared sentinel,
+            # which would silently merge every ungrouped track in the item.
+            labels[tid] = {tier: f"ungrouped:{tid}:{tier}" for tier in canonical.TIER_ORDER}
+        else:
+            labels[tid] = {tier: str(current[tier]) for tier in canonical.TIER_ORDER}
     base = tracks[ids_sorted[0]]["base"] if ids_sorted else ""
     return {
         "key": f"{base}:{','.join(ids_sorted)}",

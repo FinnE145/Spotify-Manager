@@ -70,7 +70,7 @@ That means: select A B C D, press `3` (same recording) → all four share one re
 | `a` | select all rows in the item |
 | `1` `2` `3` `4` | set the selection's relationship: same song / same version / same recording / same release |
 | `0` | not even the same song |
-| `r` | pin the focused track as representative for its groups (all four tiers) |
+| `r` | pin the focused track as representative for its **song** group (the only tier that carries one) |
 | `Esc` / **Clear** button | clear every grouping on this item — all four tiers back to singletons |
 | `Cmd`+`Z` | undo the last action on this item (in-session only) |
 | `Enter` / **Save →** button | **commit** and advance to the next item |
