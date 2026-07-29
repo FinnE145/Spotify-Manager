@@ -108,34 +108,58 @@ def apply_partition(conn, labels):
 
     ensure_track_groups(conn)
 
-    dragged_in = set()
+    # Ids of everything outside the item that any closure touches, snapshotted
+    # up front so the return value can report only what genuinely moved.
+    before = {}
 
     for i, tier in enumerate(TIER_ORDER):
         column = TIER_COLUMN[tier]
         finer_column = TIER_COLUMN[TIER_ORDER[i - 1]] if i > 0 else None
 
-        # 1. Build parts: group the item's tracks by their tier label.
+        # 1. Build parts: group the item's tracks by their tier label. This is
+        # the only hard partition -- two item tracks with different labels can
+        # never end up in the same part.
         parts = defaultdict(set)
+        claimed = {}
         for track_id, tier_labels in labels.items():
-            parts[tier_labels[tier]].add(track_id)
+            label = tier_labels[tier]
+            parts[label].add(track_id)
+            claimed[track_id] = label
 
-        # 2. Downward closure: pull in every track sharing a member's
-        # just-assigned finer-tier group (empty for the finest tier).
+        def claim(label, track_id):
+            if track_id in claimed:
+                return
+            parts[label].add(track_id)
+            claimed[track_id] = label
+            if track_id not in labels and track_id not in before:
+                before[track_id] = groups_for_track(conn, track_id)
+
+        # 2. Downward closure (nesting-mandatory): pull in every track sharing
+        # a member's just-assigned finer-tier group. Empty for the finest tier.
         if finer_column:
-            for members in parts.values():
-                finer_ids = {_get_column(conn, tid, finer_column) for tid in members}
+            for label, members in list(parts.items()):
+                finer_ids = {_get_column(conn, tid, finer_column) for tid in list(members)}
                 for finer_id in finer_ids:
-                    extra = conn.execute(
+                    for row in conn.execute(
                         f"SELECT track_id FROM track_group WHERE {finer_column} = ?", (finer_id,)
-                    ).fetchall()
-                    for row in extra:
-                        tid = row["track_id"]
-                        if tid not in members:
-                            members.add(tid)
-                            if tid not in labels:
-                                dragged_in.add(tid)
+                    ).fetchall():
+                        claim(label, row["track_id"])
 
-        # 3. Choose the group id for each part.
+        # 3. Upward closure (preservation): pull in the existing tier-t
+        # group-mates of each member, so a group the item only partly covers
+        # is preserved rather than silently cut loose. Anything already
+        # claimed above is left alone -- that's the item genuinely splitting.
+        for label, members in list(parts.items()):
+            group_ids = {_get_column(conn, tid, column) for tid in list(members)}
+            for group_id in group_ids:
+                if group_id is None:
+                    continue
+                for row in conn.execute(
+                    f"SELECT track_id FROM track_group WHERE {column} = ?", (group_id,)
+                ).fetchall():
+                    claim(label, row["track_id"])
+
+        # 4. Choose the group id for each part.
         assignments = {}
         for label, members in parts.items():
             candidates = set()
@@ -157,7 +181,7 @@ def apply_partition(conn, labels):
                 cur = conn.execute("INSERT INTO canonical_group (tier) VALUES (?)", (tier,))
                 assignments[label] = cur.lastrowid
 
-        # 4. Write.
+        # 5. Write.
         for label, members in parts.items():
             group_id = assignments[label]
             for tid in members:
@@ -165,14 +189,17 @@ def apply_partition(conn, labels):
                     f"UPDATE track_group SET {column} = ? WHERE track_id = ?", (group_id, tid)
                 )
 
-        # 5. Clean up orphaned groups and stale pinned representatives.
+        # 6. Clean up orphaned groups and stale pinned representatives.
         _cleanup_tier(conn, tier, column)
 
-    all_touched = set(labels) | dragged_in
+    all_touched = set(labels) | set(before)
     tracks = {
         tid: {tier: _get_column(conn, tid, TIER_COLUMN[tier]) for tier in TIER_ORDER}
         for tid in all_touched
     }
+    # Only outside tracks whose ids actually moved are worth a note -- ones the
+    # upward closure merely preserved kept every id they had.
+    dragged_in = [tid for tid, old in before.items() if old != tracks[tid]]
     return {"tracks": tracks, "dragged_in": sorted(dragged_in)}
 
 
@@ -356,42 +383,28 @@ def song_groups(conn, query="", include_singletons=False):
 
 def song_tree(conn, song_id):
     """Full version -> recording -> release -> track nesting for one song
-    group, enriched with track display fields and each node's full
-    descendant track-id list (for "Edit in queue" links). Representative is
-    a song-level-only concept -- only the song node carries it."""
+    group, enriched with track display fields. Only the song node carries a
+    track-id list (for its "Edit in queue" link) and a representative -- the
+    finer nodes have neither: the queue edits all four tiers of the whole
+    song group at once, and representative is a song-level-only concept."""
     tree = nested_tree(conn, song_id)
 
+    song_track_ids = []
     versions = []
     for v in tree:
         recordings = []
         for r in v["recordings"]:
             releases = []
             for rel in r["releases"]:
-                tracks = [track_display(conn, tid) for tid in rel["track_ids"]]
+                song_track_ids.extend(rel["track_ids"])
                 releases.append(
                     {
                         "release_id": rel["release_id"],
-                        "track_ids": rel["track_ids"],
-                        "tracks": tracks,
+                        "tracks": [track_display(conn, tid) for tid in rel["track_ids"]],
                     }
                 )
-            recording_track_ids = [tid for rel in releases for tid in rel["track_ids"]]
-            recordings.append(
-                {
-                    "recording_id": r["recording_id"],
-                    "track_ids": recording_track_ids,
-                    "releases": releases,
-                }
-            )
-        version_track_ids = [tid for r in recordings for tid in r["track_ids"]]
-        versions.append(
-            {
-                "version_id": v["version_id"],
-                "track_ids": version_track_ids,
-                "recordings": recordings,
-            }
-        )
-    song_track_ids = [tid for v in versions for tid in v["track_ids"]]
+            recordings.append({"recording_id": r["recording_id"], "releases": releases})
+        versions.append({"version_id": v["version_id"], "recordings": recordings})
 
     return {
         "song_id": song_id,

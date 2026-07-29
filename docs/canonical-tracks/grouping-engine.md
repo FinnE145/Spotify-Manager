@@ -47,20 +47,25 @@ This contract keeps all grouping logic server-side. The client only assigns labe
 
 Process tiers **finest → coarsest**: release, recording, version, song. For tier *t*:
 
-1. **Build parts.** Group the item's tracks by their tier-*t* label.
-2. **Downward closure.** Expand each part with every track (in the item or not) that shares a member's *just-assigned* finer-tier group. For release (the finest tier) the closure is empty; for recording it's the release groups assigned in step 1 of this run; and so on. This is what nesting forces: a release group can never straddle two recording groups.
-3. **Choose the group id for each part.** Let *candidates* be the existing tier-*t* ids held by the part's members **whose full current membership is a subset of the part**. If any, reuse `min(candidates)`; otherwise allocate a fresh `canonical_group` row. So a group that only *gains* members keeps its id; a group that gets **split** yields new ids for both halves and the old row is deleted.
-4. **Write** `track_group.<tier>_id` for every track in every part.
-5. **Clean up.** Delete any `canonical_group` row at this tier that now has zero members. For a surviving group whose membership changed, clear `representative_track_id` to NULL if the pinned track is no longer a member.
+1. **Build parts.** Group the item's tracks by their tier-*t* label. This is the only *hard* partition: two item tracks with different labels can never share a part.
+2. **Downward closure** (nesting-mandatory). Expand each part with every track — in the item or not — that shares a member's *just-assigned* finer-tier group, unless the item already claims that track for a different part. For release (the finest tier) this is empty; for recording it's the release groups assigned earlier in this same run; and so on. This is what nesting forces: a release group can never straddle two recording groups.
+3. **Upward closure** (preservation). Expand each part with the existing tier-*t* group-mates of its members — every track already sharing that group, whether or not it's in the item — **except** any track already claimed by another part in step 1 or 2. An item can therefore only split a group it *actively disagrees* about; tracks it never mentions come along unchanged.
 
-Tracks *outside* the item that aren't dragged in by step 2 are never touched.
+   This is the rule that makes a no-op commit a genuine no-op. Without it, an item holding only part of a group (an ad-hoc selection, or a candidate group narrower than a hand-built song group) reads as "everyone else is excluded" and silently cuts the rest loose.
+4. **Choose the group id for each part.** Let *candidates* be the existing tier-*t* ids held by the part's members **whose full current membership is a subset of the part**. If any, reuse `min(candidates)`; otherwise allocate a fresh `canonical_group` row. So a group that only *gains* members keeps its id; a group the item genuinely **splits** yields new ids for both halves and the old row is deleted.
+5. **Write** `track_group.<tier>_id` for every track in every part.
+6. **Clean up.** Delete any `canonical_group` row at this tier that now has zero members. For a surviving group whose membership changed, clear `representative_track_id` to NULL if the pinned track is no longer a member.
+
+Tracks *outside* the item are pulled into a part only by steps 2 and 3, and step 3 preserves their ids rather than changing them. The one way an outside track genuinely moves is when the item merges two existing groups: `A~B` already, and the item says `A~C`, so `B` joins `C`'s group by transitivity. That is reported in `dragged_in`.
+
+**The trade-off this rule buys:** an item can no longer split apart tracks it doesn't show you. Selecting one track and pressing `0` detaches it from everything *in the item*, but not from a group-mate that isn't on screen. That's deliberate — a decision shouldn't reach tracks the reviewer can't see — and it rarely bites, since a group-mate almost always shares the title that built the candidate bucket in the first place.
 
 ### What the primitives look like in this model
 
 The three actions the UI describes all fall out of the same reconciliation — the client just sends different labels:
 
-- **Merge** *S* at tier *t*: give every track in *S* the same tier-*t* label (and unify their labels at all coarser tiers, since nesting requires it). Tracks outside *S* that share a finer group with a member come along via closure.
-- **Detach** *S* (a strict subset of one group) at tier *t*: give *S* a fresh label; leave the rest of the group on its old label. Coarser tiers untouched.
+- **Merge** *S* at tier *t*: give every track in *S* the same tier-*t* label (and unify their labels at all coarser tiers, since nesting requires it). Tracks outside *S* sharing a finer group, or an existing tier-*t* group, with a member come along via closure.
+- **Detach** *S* (a strict subset of one group) at tier *t*: give *S* a fresh label, and keep the rest of the group **in the item** on its old label. The rest of the group has to be present — a track the item omits is preserved, not detached (step 3), so detaching from it is impossible without showing it.
 - **Ungroup** an entire tier-*t* group: give each of its constituent **finer** groups its own label — so a song group splits into its version groups rather than shattering into singletons. Coarser tiers untouched.
 
 ### Return value
@@ -70,7 +75,7 @@ The three actions the UI describes all fall out of the same reconciliation — t
  "dragged_in": [track_id, ...]}
 ```
 
-`tracks` covers the item's tracks **plus** anything pulled in by closure. `dragged_in` lists the closure additions so the UI can surface a note — normally empty.
+`tracks` covers the item's tracks **plus** anything pulled in by either closure. `dragged_in` lists only those outside tracks whose ids **actually changed** — i.e. the item merged two existing groups and the absent members of one followed. Tracks merely *preserved* by step 3 keep their ids and are not reported, so the note stays quiet unless something genuinely moved.
 
 ## Marking review
 
