@@ -104,6 +104,16 @@ def _fetch_tracks(conn):
         )
     }
 
+    # Tracks pinned as their song group's representative, so an item can show
+    # the ★ that's already saved rather than looking unpinned.
+    pinned_ids = {
+        row["representative_track_id"]
+        for row in conn.execute(
+            "SELECT representative_track_id FROM canonical_group "
+            "WHERE tier = 'song' AND representative_track_id IS NOT NULL"
+        )
+    }
+
     tracks = {}
     for row in rows:
         base, suffix = normalize_title(row["name"])
@@ -122,8 +132,13 @@ def _fetch_tracks(conn):
             "artist_set": normalize_artists(row["artists"]),
             "album_norm": _normalize_base_string(row["album_name"] or ""),
             "real_groups": real_groups.get(row["track_id"]),
+            "pinned": row["track_id"] in pinned_ids,
         }
     return tracks
+
+
+def _pinned_track_id(track_ids, tracks):
+    return next((tid for tid in track_ids if tracks[tid]["pinned"]), None)
 
 
 def _display_fields(rec):
@@ -339,6 +354,7 @@ def _make_candidate_group(base, track_ids, tracks, reviewed, cross_artist):
         "tracks": {tid: _display_fields(tracks[tid]) for tid in ids_sorted},
         "labels": _prefill_labels(ids_sorted, tracks),
         "impact": sum(tracks[tid]["live_count"] for tid in ids_sorted),
+        "pinned_track_id": _pinned_track_id(ids_sorted, tracks),
         "reviewed": reviewed,
         "cross_artist": cross_artist,
     }
@@ -410,6 +426,7 @@ def ad_hoc_group(conn, track_ids):
         "tracks": {tid: _display_fields(tracks[tid]) for tid in ids_sorted},
         "labels": labels,
         "impact": sum(tracks[tid]["live_count"] for tid in ids_sorted),
+        "pinned_track_id": _pinned_track_id(ids_sorted, tracks),
         "reviewed": None,
         "cross_artist": False,
     }

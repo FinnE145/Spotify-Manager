@@ -87,7 +87,10 @@ CREATE TABLE IF NOT EXISTS canonical_group (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tier TEXT NOT NULL CHECK (tier IN ('song', 'version', 'recording', 'release')),
     representative_track_id TEXT REFERENCES track(track_id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    -- ISO-8601 with an explicit Z, matching snapshot._now_iso() and what
+    -- static/js/format.js parses. Plain datetime('now') is naive UTC and
+    -- renders as a local time, i.e. hours off.
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE TABLE IF NOT EXISTS track_group (
@@ -106,7 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_track_group_release ON track_group(release_id);
 CREATE TABLE IF NOT EXISTS reviewed_pair (
     track_id_a TEXT NOT NULL REFERENCES track(track_id),
     track_id_b TEXT NOT NULL REFERENCES track(track_id),
-    decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+    decided_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (track_id_a, track_id_b)
 );
 """
@@ -177,3 +180,13 @@ def _migrate(conn):
     ):
         if column not in track_columns:
             conn.execute(ddl)
+
+    # These two were briefly written as naive UTC ("2026-07-30 13:34:51"),
+    # which the front-end parsed as local time and rendered hours off. Rewrite
+    # them in the ISO-8601-with-Z form everything else uses. Idempotent: rows
+    # already carrying a Z are skipped.
+    for table, column in (("reviewed_pair", "decided_at"), ("canonical_group", "created_at")):
+        conn.execute(
+            f"UPDATE {table} SET {column} = replace({column}, ' ', 'T') || 'Z' "
+            f"WHERE {column} IS NOT NULL AND {column} NOT LIKE '%Z'"
+        )

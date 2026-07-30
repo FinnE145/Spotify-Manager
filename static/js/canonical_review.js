@@ -84,7 +84,10 @@
     const item = items[index];
     selection = new Set(item.track_ids);
     focus = item.track_ids[0];
-    pinnedTrackId = null;
+    // Start from whatever is already pinned in the DB, so an existing
+    // representative stays visible (and survives a commit) instead of looking
+    // as though the group has none.
+    pinnedTrackId = item.pinned_track_id || null;
     draggedInNote = [];
     undoStack = [];
     awaitingAck = false;
@@ -284,6 +287,7 @@
     itemSection.hidden = true;
     doneEl.hidden = false;
     doneCountEl.textContent = String(committedCount);
+    updateProgress(); // the last commit advanced the count but never redrew it
   }
 
   function goBack() {

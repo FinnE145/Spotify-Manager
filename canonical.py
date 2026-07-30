@@ -10,6 +10,14 @@ from collections import defaultdict
 TIER_ORDER = ("release", "recording", "version", "song")
 TIER_COLUMN = {tier: f"{tier}_id" for tier in TIER_ORDER}
 
+# created_at is written explicitly rather than left to the column default: a
+# DB created before the default was corrected still carries the old naive-UTC
+# one, and CREATE TABLE IF NOT EXISTS never updates it.
+_INSERT_GROUP_SQL = (
+    "INSERT INTO canonical_group (tier, created_at) "
+    "VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"
+)
+
 
 def ensure_track_groups(conn):
     """For every track lacking a track_group row, allocate four fresh
@@ -24,7 +32,7 @@ def ensure_track_groups(conn):
     for row in rows:
         ids = {}
         for tier in TIER_ORDER:
-            cur = conn.execute("INSERT INTO canonical_group (tier) VALUES (?)", (tier,))
+            cur = conn.execute(_INSERT_GROUP_SQL, (tier,))
             ids[tier] = cur.lastrowid
         conn.execute(
             "INSERT INTO track_group (track_id, song_id, version_id, recording_id, release_id) "
@@ -178,7 +186,7 @@ def apply_partition(conn, labels):
             if candidates:
                 assignments[label] = min(candidates)
             else:
-                cur = conn.execute("INSERT INTO canonical_group (tier) VALUES (?)", (tier,))
+                cur = conn.execute(_INSERT_GROUP_SQL, (tier,))
                 assignments[label] = cur.lastrowid
 
         # 5. Write.
@@ -212,7 +220,7 @@ def mark_reviewed(conn, track_ids):
             conn.execute(
                 """
                 INSERT INTO reviewed_pair (track_id_a, track_id_b, decided_at)
-                VALUES (?, ?, datetime('now'))
+                VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
                 ON CONFLICT(track_id_a, track_id_b) DO UPDATE SET decided_at = excluded.decided_at
                 """,
                 (a, b),
