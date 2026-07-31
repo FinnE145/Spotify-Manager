@@ -1,14 +1,14 @@
 ---
-name: verify
-description: Symr Verify phase — review a feature's diff against its spec, run the app, report, and do the finish-up merge. Invoke with `/verify`, or when Finn is clearly reviewing/validating a completed feature against its spec.
+name: symr-verify
+description: Symr Verify phase — review a feature's diff against its spec, run the app, report, and do the finish-up merge. Invoke with `/symr-verify`, or when Finn is clearly reviewing/validating a completed feature against its spec.
 ---
 
-# Verify phase
+# Symr Verify phase
 
 Fresh chat that checks a completed feature against its spec, then does the finish-up. You review and report; you make fixes **only with Finn's explicit confirmation**, otherwise hand back to a new implement chat.
 
 ## Resolve what you're verifying
-`/verify` takes no argument — infer from the current checkout.
+`/symr-verify` takes no argument — infer from the current checkout.
 1. Check `git branch --show-current` and find the matching spec in `docs/specs/`. Slugs aren't always 1:1 (e.g. `feat/canvas` → `docs/specs/org-canvas.md`).
 2. If one spec obviously matches the branch, use it. If several plausibly match, list them and ask which.
 3. Echo what you're verifying — "verifying `docs/specs/X.md` on branch `feat/Y` vs `main`" — before starting.

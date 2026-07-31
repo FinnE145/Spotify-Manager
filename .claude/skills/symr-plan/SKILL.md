@@ -1,13 +1,13 @@
 ---
-name: plan
-description: Symr Plan phase — question-driven authoring of a feature spec. Invoke with `/plan <brain-dump>`, or when Finn is clearly brain-dumping a new feature/idea to be turned into a `docs/specs/<feature>.md` spec.
+name: symr-plan
+description: Symr Plan phase — question-driven authoring of a feature spec. Invoke with `/symr-plan <brain-dump>`, or when Finn is clearly brain-dumping a new feature/idea to be turned into a `docs/specs/<feature>.md` spec.
 ---
 
-# Plan phase
+# Symr Plan phase
 
 Finn is brain-dumping a feature; you turn it into a committed, fully-decided spec at `docs/specs/<feature>.md`. That spec is the sole implementation prompt later — complete enough that an implement session can start from just "go look at `docs/specs/<feature>.md`". You build it *with* Finn; you do not decide it for him.
 
-The `/plan` argument is the brain-dump / feature idea. Treat it as the opening of the planning conversation, not a full spec.
+The `/symr-plan` argument is the brain-dump / feature idea. Treat it as the opening of the planning conversation, not a full spec.
 
 ## First action: settle the branch
 Before reading any code, confirm where this work lives — a fresh session inherits whatever branch was last checked out, likely the wrong one.

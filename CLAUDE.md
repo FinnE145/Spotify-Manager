@@ -16,7 +16,7 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 - `app.py` — Flask app factory. Page routes (`/` home, `/canvas`, `/dev` dev-tools landing, `/dev/snapshot*`, and stubs `/audit`, `/covers`, `/folders`, `/analytics`), OAuth (`/login`, `/callback`), `/api/*` endpoints, an app-wide `before_request` login guard (exempts `login`/`callback`/`static`), and centralized error handlers (`HTTPException` + `Exception`) that render `error.html` for pages and JSON for `/api/*`.
 - `templates/` — Jinja templates. `base.html` (shared shell: navbar + content block; `body_class` block for the immersive full-viewport pages); `home.html`; `canvas.html` (org canvas, extends base); `dev.html` (dev-tools landing page); `snapshot.html`, `snapshot_playlist.html`, `snapshot_track.html`; `coming_soon.html` (shared stub placeholder); `error.html` (generic HTTP error page, extends base).
 - `static/css/style.css` — the single stylesheet (navbar, shared page styles, canvas).
-- `.claude/skills/` — the phase skills (`plan`, `implement`, `verify`); committed.
+- `.claude/skills/` — the phase skills (`symr-plan`, `symr-implement`, `symr-verify`); committed.
 - (Rest TBD — update this map as directories are created.)
 
 ## Keep It Simple
@@ -29,9 +29,9 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 
 ## The Workflow: Plan → Implement → Verify
 Work moves through three phases, each in its own chat, each **question-driven**. Every phase's specific rules live in its own skill — invoke it at the start of the chat:
-- **Plan** → `/plan <brain-dump>` — question-driven spec authoring; output is a committed `docs/specs/<feature>.md`.
-- **Implement** → `/implement [spec]` — build from that spec, asking live.
-- **Verify** → `/verify` — review the diff against the spec, run the app, finish up.
+- **Plan** → `/symr-plan <brain-dump>` — question-driven spec authoring; output is a committed `docs/specs/<feature>.md`.
+- **Implement** → `/symr-implement [spec]` — build from that spec, asking live.
+- **Verify** → `/symr-verify` — review the diff against the spec, run the app, finish up.
 
 If I'm clearly in one phase but didn't invoke its skill, infer and load that **one** skill (never load all three; if the phase is ambiguous, ask which one). The skills are self-contained — this file holds only what's true across all three.
 

@@ -1,14 +1,14 @@
 ---
-name: implement
-description: Symr Implement phase — build a feature from its committed spec, asking Finn live for any unforeseen decision. Invoke with `/implement [spec name]`, or when Finn is clearly coding a feature from an existing `docs/specs/<feature>.md`.
+name: symr-implement
+description: Symr Implement phase — build a feature from its committed spec, asking Finn live for any unforeseen decision. Invoke with `/symr-implement [spec name]`, or when Finn is clearly coding a feature from an existing `docs/specs/<feature>.md`.
 ---
 
-# Implement phase
+# Symr Implement phase
 
 You build the feature from its spec at `docs/specs/<feature>.md`. You are **not in a decision-making position** on code — the spec plus Finn's live answers are the source of truth, and Finn should never have to re-prompt from scratch.
 
 ## Resolve the spec + branch first
-The `/implement` argument, if given, names the spec (e.g. `/implement snapshot` → `docs/specs/snapshot.md`).
+The `/symr-implement` argument, if given, names the spec (e.g. `/symr-implement snapshot` → `docs/specs/snapshot.md`).
 1. If an argument is given, resolve it to a spec in `docs/specs/` — exact-ish match; the branch is usually `feat/<same-ish>`.
 2. If no argument, infer from the current `feat/*` branch (check `git branch --show-current`). Branch and spec slugs aren't always identical (e.g. `feat/canvas` → `docs/specs/org-canvas.md`).
 3. **If exactly one spec obviously matches, use it** (even if the slug isn't 1:1). If a branch has **multiple** plausible specs (features get added to a branch over time), list the candidates and ask which — or use the argument to disambiguate.
