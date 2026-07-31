@@ -42,6 +42,30 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 - Consequence: there is **no 50-per-request batch path** for topping up track metadata. Backfilling *N* tracks costs *N* requests, which for a full library (~3,600) is far past the burst that triggers app-level quota exhaustion. Get bulk track metadata from **playlist item reads instead** — `GET /playlists/{id}/items` returns full track objects carrying `external_ids` and `album.images` (verified Jul 2026), so a normal snapshot pull populates them ~10x cheaper. Reserve single-track reads for small mop-up passes.
 - **`popularity` is NULL everywhere**, from both the playlist-items and single-track endpoints — Spotify no longer populates it for this app. Don't design anything that depends on it (`docs/specs/canonical-tracks.md` drops it from its representative tie-break for this reason).
 
+## Enrichment endpoints — all 403 (verified Jul 2026)
+
+Probed directly against Symr's dev-mode app with a valid, unexpired token carrying the app's normal scopes:
+
+| Endpoint | Spotipy | Result |
+|---|---|---|
+| `GET /v1/tracks/{id}` | `sp.track()` | **works** |
+| `GET /v1/playlists/{id}/items` | `sp.playlist_items()` | **works** |
+| `GET /v1/tracks?ids=` | `sp.tracks()` | **403** |
+| `GET /v1/artists?ids=` | `sp.artists()` | **403** |
+| `GET /v1/albums?ids=` | `sp.albums()` | **403** |
+| `GET /v1/audio-features` | `sp.audio_features()` | **403** |
+| `GET /v1/artists/{id}/related-artists` | `sp.artist_related_artists()` | **403** |
+
+- Consequence: Symr can obtain **no artist metadata** (genres, popularity, followers, artist images), **no album metadata** (label, genres, copyrights), and **no audio features** (tempo, key, energy, valence, danceability, loudness). Genre- or audio-feature-based analytics must come from a non-Spotify source (MusicBrainz / Last.fm tags) or not be built.
+- The `audio-features` and `related-artists` 403s are the **2024-11-27 deprecation** (withdrawn for apps without a pre-existing extended-quota grant). The `/artists` and `/albums` 403s are the same app-level restriction that blocks `/v1/tracks?ids=`.
+- **The track object is therefore the complete and final universe of Spotify metadata Symr can ever hold.** There is no follow-up pull to plan for, because there is nothing else to fetch — capture the track object whole (raw JSON) rather than parsing a fixed field list and re-pulling later for a field nobody thought of.
+
+## Dead track-object fields (verified Jul 2026)
+- **`popularity`** — NULL for all 3,589 library tracks, from both working endpoints (see above).
+- **`preview_url`** — **absent from the response entirely**, not merely null: it is not among the track object's keys. 0 of 3,589 rows populated. There is no 30-second sample access, so **nothing on Symr's side can analyze the audio itself** — this rules out locally-computed audio features or any audio-trained classifier.
+- **`available_markets`** — also absent; the market is inferred from the user token.
+- Track-object keys actually returned: `album`, `artists`, `disc_number`, `duration_ms`, `explicit`, `external_ids`, `external_urls`, `href`, `id`, `is_local`, `is_playable`, `name`, `track_number`, `type`, `uri`. The nested `album` carries `album_type`, `artists` (with ids), `id`, `images`, `is_playable`, `name`, `release_date`, `release_date_precision`, `total_tracks`. Measured size ~1,756 bytes per track.
+
 ## Playlist item track/episode key — schema quirk (verified Jul 2026)
 - `GET /playlists/{id}/items` items key the track/episode object as **`"item"`**, not `"track"` (Spotipy's raw dict). This differs from `GET /me/tracks` (Saved Tracks / Liked Songs), whose items still use `"track"`. Likely because playlist items can hold either a track or an episode (`additional_types=track,episode`) while saved tracks are track-only. Easy to miss since most docs/examples assume `"track"` everywhere — verify against a live response before trusting either key name.
 

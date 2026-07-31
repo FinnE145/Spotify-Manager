@@ -93,9 +93,10 @@ CREATE TABLE canonical_group (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tier TEXT NOT NULL CHECK (tier IN ('song', 'version', 'recording', 'release')),
     representative_track_id TEXT REFERENCES track(track_id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 ```
+`created_at` is ISO-8601 with an explicit `Z`. Plain `datetime('now')` is naive UTC, which the front-end parses as local time and renders hours off — `db.py` carries a migration that rewrites any rows written in the old form.
 `AUTOINCREMENT` guarantees ids are **never reused**, so a future listening-history table can reference a song id permanently. Ids are globally unique across tiers (no ambiguity about what a bare id means).
 
 `representative_track_id` is **NULL by default**, meaning "compute it" (see below). It's only set when Finn explicitly pins one, so the default keeps tracking reality as playlist memberships change.
@@ -121,7 +122,7 @@ Every track in `track` gets a row with four freshly-allocated singleton groups t
 CREATE TABLE reviewed_pair (
     track_id_a TEXT NOT NULL REFERENCES track(track_id),
     track_id_b TEXT NOT NULL REFERENCES track(track_id),
-    decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+    decided_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (track_id_a, track_id_b)
 );
 ```
@@ -170,7 +171,7 @@ The snapshot pages are developer/inspection tools, and more will follow. Give th
 - `_parse_track_item` also reads `external_ids.isrc` and the album cover URL (300px rule above).
 - `_upsert_track` writes both new columns, including in its `ON CONFLICT DO UPDATE` clause, so re-seen tracks get topped up.
 
-**How the existing 3,589 rows get filled.** `GET /v1/tracks?ids=` — the 50-at-a-time batch endpoint — **403s for this app** (verified Jul 2026; see `docs/spotify_constraints.md`), so there is no cheap bulk top-up. A **full snapshot pull** is the primary mechanism instead: playlist items are full track objects carrying `external_ids` and `album.images`, so ~350 requests populate both columns for every track in a live playlist.
+**How the existing 3,589 rows get filled.** `GET /v1/tracks?ids=` — the 50-at-a-time batch endpoint — **403s for this app** (verified Jul 2026; see `docs/spotify_constraints.md`), so there is no cheap bulk top-up. A **full snapshot pull** is the primary mechanism instead: playlist items are full track objects carrying `external_ids` and `album.images`, so one pull populates both columns for every track in a live playlist.
 
 **Mop-up** — `scripts/backfill_track_details.py`, committed, for what a pull can't reach (tracks in the 7 playlists that 403 on item reads, and tracks surviving only in removed memberships):
 - Selects `track_id` where `isrc IS NULL OR album_image_url IS NULL`, one request each via `sp.track(id)` (the single-track endpoint works).

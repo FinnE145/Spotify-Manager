@@ -25,7 +25,8 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 - The other hard requirement: never corrupt or wrongly modify my real Spotify library. Beyond security and that, favor simplicity over robustness — the rest just needs to be done right.
 
 ## Commands
-- TBD (run / test / lint). Record the exact commands here as they're established, and use them verbatim.
+- **Run:** `venv/bin/python app.py` — serves on port 45660 (`SYMR_PORT` to override, `SYMR_DEBUG=1` for the reloader). Registered in `.claude/launch.json` as `symr`, so Claude Code can start it via the preview tooling instead of a raw shell command.
+- Test / lint: none yet. Record them here verbatim once they exist.
 
 ## The Workflow: Plan → Implement → Verify
 Work moves through three phases, each in its own chat, each **question-driven**. Every phase's specific rules live in its own skill — invoke it at the start of the chat:

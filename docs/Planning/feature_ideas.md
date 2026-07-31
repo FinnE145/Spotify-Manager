@@ -7,7 +7,7 @@ Living list of features surfaced during planning. Not yet specced unless linked 
 - **Library snapshot (read-only)** — folded into the org-canvas spec as its snapshot layer (playlists → SQLite). Will grow (added_at, track lists, counts) as later features need it. Folder placement is NOT readable via the API — tracked separately (see Organization).
 
 ## Verification / problems dashboard (read-only first)
-- **Finn All dedup** — flag exact-duplicate tracks, and fuzzy dups (same song as single vs album version, wrong-version/album-cover cases). These + moral removals are the only sanctioned deletions from append-only playlists.
+- **Finn All dedup** — the *report*, built on the canonical-tracks grouping layer (`docs/specs/canonical-tracks.md`, built). Runs at **version** level and grades what it finds using the finer tiers: same release = literal duplicate; same recording, different release = single-vs-album-version; different recording = same-sounding, pick one. Different versions aren't duplicates at all. These + moral removals are the only sanctioned deletions from append-only playlists.
 - **Current-favs ⊆ Finn All** — flag tracks in the active `vXX.Y.Z` playlist that aren't in Finn All (failure mode: added to the version, forgot Finn All).
 - **ATG ⊆ Finn All** — ATG should be fully contained in Finn All.
 - **One-time report: Finn All songs not in ANY current-favs playlist** — historical curiosity; can't fix the frozen old playlists, but interesting.
