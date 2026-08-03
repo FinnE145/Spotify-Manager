@@ -83,10 +83,11 @@ def classify_suffix(suffix):
 def _fetch_tracks(conn):
     rows = conn.execute(
         """
-        SELECT t.track_id, t.name, t.artists, t.album_name, t.album_image_url,
+        SELECT t.track_id, t.name, t.artists, a.name AS album_name, a.image_url AS album_image_url,
                t.duration_ms, t.explicit, t.isrc,
                COUNT(CASE WHEN m.removed_at IS NULL THEN 1 END) AS live_count
         FROM track t
+        LEFT JOIN album a ON a.album_id = t.album_id
         LEFT JOIN membership m ON m.track_id = t.track_id
         GROUP BY t.track_id
         """

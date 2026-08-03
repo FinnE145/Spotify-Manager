@@ -36,6 +36,21 @@
     });
   });
 
+  // ---------- exclude toggles (index playlist table + playlist detail header) ----------
+
+  document.querySelectorAll("[data-exclude-toggle]").forEach((el) => {
+    el.addEventListener("change", () => {
+      const excluded = el.checked;
+      api("/api/snapshot/exclude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playlist_ids: [el.dataset.playlistId], excluded }),
+      }).catch(() => {
+        el.checked = !excluded;
+      });
+    });
+  });
+
   // ---------- pull / refresh controls (index page) ----------
 
   const pullBtn = document.getElementById("pull-btn");
@@ -46,25 +61,15 @@
   const progressEl = document.getElementById("snapshot-progress");
   const progressFill = document.getElementById("snapshot-progress-fill");
   const progressLabel = document.getElementById("snapshot-progress-label");
-  const statusSection = document.getElementById("snapshot-status");
   const hideUncapturableToggle = document.getElementById("hide-uncapturable-toggle");
 
   // ---------- uncapturable-playlist toggle ----------
-
-  let playlistsTotal = Number(statusSection?.dataset.playlistsTotal || 0);
-  let playlistsUncapturable = Number(statusSection?.dataset.playlistsUncapturable || 0);
-
-  function renderCaptureDenominator() {
-    const hide = hideUncapturableToggle && hideUncapturableToggle.checked;
-    setField("playlists_denominator", hide ? playlistsTotal - playlistsUncapturable : playlistsTotal);
-  }
 
   function applyUncapturableFilter() {
     const hide = hideUncapturableToggle && hideUncapturableToggle.checked;
     document.querySelectorAll("#playlist-table tbody tr[data-uncapturable]").forEach((row) => {
       row.hidden = hide;
     });
-    renderCaptureDenominator();
   }
 
   if (hideUncapturableToggle) {
@@ -75,6 +80,12 @@
     document.querySelectorAll(`[data-field="${name}"]`).forEach((el) => {
       el.textContent = value;
     });
+  }
+
+  function setFailingField(count) {
+    setField("playlists_failing", count);
+    const wrap = document.getElementById("playlists-failing-wrap");
+    if (wrap) wrap.hidden = !count;
   }
 
   function setDateField(name, isoValue) {
@@ -147,6 +158,24 @@
         list.appendChild(li);
       });
       progressLabel.appendChild(list);
+
+      const excludeBtn = document.createElement("button");
+      excludeBtn.type = "button";
+      excludeBtn.textContent = `Exclude the ${failed.length} playlist${failed.length === 1 ? "" : "s"} that failed`;
+      excludeBtn.addEventListener("click", () => {
+        if (!window.confirm(`Exclude ${failed.length} playlist${failed.length === 1 ? "" : "s"} from future pulls?`)) {
+          return;
+        }
+        api("/api/snapshot/exclude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playlist_ids: failed.map((f) => f.playlist_id),
+            excluded: true,
+          }),
+        }).then(() => window.location.reload());
+      });
+      progressLabel.appendChild(excludeBtn);
     }
 
     const reloadLink = document.createElement("a");
@@ -161,11 +190,11 @@
 
   function poll() {
     api("/api/snapshot/status").then((status) => {
-      setField("playlists_captured", status.playlists_captured);
+      setField("playlists_pulled", status.playlists_pulled);
+      setField("playlists_total", status.playlists_total);
+      setField("playlists_excluded", status.playlists_excluded);
+      setFailingField(status.playlists_failing);
       setField("live_memberships", status.live_memberships);
-      playlistsTotal = status.playlists_total;
-      playlistsUncapturable = status.playlists_uncapturable;
-      renderCaptureDenominator();
       setDateField("last_full_pull_at", status.last_full_pull_at);
       setDateField("last_refresh_at", status.last_refresh_at);
 

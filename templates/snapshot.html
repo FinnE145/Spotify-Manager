@@ -7,14 +7,18 @@
 <main class="page">
   <h1>Snapshot</h1>
 
-  <section class="panel" id="snapshot-status"
-            data-playlists-total="{{ summary.playlists_total }}"
-            data-playlists-uncapturable="{{ summary.playlists_uncapturable }}">
+  <section class="panel" id="snapshot-status">
     <h2>Status</h2>
     <p>
-      <span data-field="playlists_captured">{{ summary.playlists_captured }}</span> /
-      <span data-field="playlists_denominator">{{ summary.playlists_total }}</span> playlists captured
-      &middot; <span data-field="live_memberships">{{ summary.live_memberships }}</span> live memberships
+      <span data-field="playlists_pulled">{{ summary.playlists_pulled }}</span> /
+      <span data-field="playlists_total">{{ summary.playlists_total }}</span> pulled
+      &middot; <span data-field="playlists_excluded">{{ summary.playlists_excluded }}</span> excluded
+      <span id="playlists-failing-wrap" class="error" {% if not summary.playlists_failing %}hidden{% endif %}>
+        &middot; <span data-field="playlists_failing">{{ summary.playlists_failing }}</span> failing
+      </span>
+    </p>
+    <p class="meta">
+      <span data-field="live_memberships">{{ summary.live_memberships }}</span> live memberships
     </p>
     <p class="meta">
       Last full pull:
@@ -51,6 +55,7 @@
           <th>Tracks</th>
           <th>Last changed</th>
           <th>Captured</th>
+          <th>Excluded</th>
         </tr>
       </thead>
       <tbody>
@@ -62,6 +67,7 @@
           <td>{{ p.track_count if p.track_count is not none else "" }}</td>
           <td>{{ datetime_span(p.last_changed_at) }}</td>
           <td>{% if p.tracks_pulled_at %}yes{% elif p.last_pull_error %}<span title="{{ p.last_pull_error }}">blocked</span>{% else %}no{% endif %}</td>
+          <td><input type="checkbox" data-exclude-toggle data-playlist-id="{{ p.playlist_id }}" {{ 'checked' if p.excluded }}></td>
         </tr>
         {% endfor %}
       </tbody>

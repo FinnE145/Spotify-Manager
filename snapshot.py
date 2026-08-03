@@ -2,6 +2,7 @@
 an append-only membership log (see docs/specs/snapshot.md). Read-only w.r.t.
 Spotify; nothing here ever writes to the user's library."""
 
+import json
 import threading
 import time
 from collections import defaultdict
@@ -74,7 +75,9 @@ def _set_status(**kwargs):
 
 def _record_failure(conn, playlist_id, name, error):
     with _status_lock:
-        _status["failed_playlists"].append({"name": name, "error": str(error)})
+        _status["failed_playlists"].append(
+            {"playlist_id": playlist_id, "name": name, "error": str(error)}
+        )
     conn.execute(
         "UPDATE snapshot SET last_pull_error = ? WHERE playlist_id = ?", (str(error), playlist_id)
     )
@@ -89,11 +92,14 @@ def get_status():
 def summary_counts(conn):
     return {
         "playlists_total": conn.execute("SELECT COUNT(*) FROM snapshot").fetchone()[0],
-        "playlists_captured": conn.execute(
-            "SELECT COUNT(*) FROM snapshot WHERE tracks_pulled_at IS NOT NULL"
+        "playlists_pulled": conn.execute(
+            "SELECT COUNT(*) FROM snapshot WHERE tracks_pulled_at IS NOT NULL AND excluded = 0"
         ).fetchone()[0],
-        "playlists_uncapturable": conn.execute(
-            "SELECT COUNT(*) FROM snapshot WHERE last_pull_error IS NOT NULL"
+        "playlists_excluded": conn.execute(
+            "SELECT COUNT(*) FROM snapshot WHERE excluded = 1"
+        ).fetchone()[0],
+        "playlists_failing": conn.execute(
+            "SELECT COUNT(*) FROM snapshot WHERE last_pull_error IS NOT NULL AND excluded = 0"
         ).fetchone()[0],
         "live_memberships": conn.execute(
             "SELECT COUNT(*) FROM membership WHERE removed_at IS NULL"
@@ -101,6 +107,15 @@ def summary_counts(conn):
         "last_full_pull_at": _get_meta(conn, "last_full_pull_at"),
         "last_refresh_at": _get_meta(conn, "last_refresh_at"),
     }
+
+
+def set_excluded(conn, playlist_ids, excluded):
+    placeholders = ",".join("?" for _ in playlist_ids)
+    conn.execute(
+        f"UPDATE snapshot SET excluded = ? WHERE playlist_id IN ({placeholders})",
+        [1 if excluded else 0, *playlist_ids],
+    )
+    conn.commit()
 
 
 # -- Triggering -------------------------------------------------------
@@ -163,15 +178,19 @@ def _run_pull(force_all):
         _set_status(run_done=len(targets), current_playlist=None)
 
         _set_status(phase="liked_songs")
-        try:
-            _pull_liked_songs(conn, sp)
-            conn.commit()
-        except RateLimited:
-            conn.rollback()
-            raise
-        except Exception as e:
-            conn.rollback()
-            _record_failure(conn, LIKED_PLAYLIST_ID, "Liked Songs", e)
+        liked_row = conn.execute(
+            "SELECT excluded FROM snapshot WHERE playlist_id = ?", (LIKED_PLAYLIST_ID,)
+        ).fetchone()
+        if not (liked_row and liked_row["excluded"]):
+            try:
+                _pull_liked_songs(conn, sp)
+                conn.commit()
+            except RateLimited:
+                conn.rollback()
+                raise
+            except Exception as e:
+                conn.rollback()
+                _record_failure(conn, LIKED_PLAYLIST_ID, "Liked Songs", e)
 
         _set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", _now_iso())
         canonical.ensure_track_groups(conn)
@@ -192,6 +211,10 @@ def _run_pull(force_all):
 
 def _sync_playlists_and_get_targets(conn, sp, force_all):
     playlists = _fetch_all_playlists(sp)
+    excluded_ids = {
+        row["playlist_id"]
+        for row in conn.execute("SELECT playlist_id FROM snapshot WHERE excluded = 1")
+    }
     seen_ids = set()
     targets = []
     for p in playlists:
@@ -200,9 +223,12 @@ def _sync_playlists_and_get_targets(conn, sp, force_all):
             "SELECT snapshot_id FROM snapshot WHERE playlist_id = ?", (p["id"],)
         ).fetchone()
         is_new_or_changed = stored is None or stored["snapshot_id"] != p["snapshot_id"]
+        # Playlist-level metadata (name, snapshot_id, image, description,
+        # track_count) is refreshed for every playlist regardless of
+        # exclusion -- only the item-read pass below is skipped.
         _upsert_snapshot_playlist(conn, p)
         _upsert_card(conn, p)
-        if force_all or is_new_or_changed:
+        if p["id"] not in excluded_ids and (force_all or is_new_or_changed):
             targets.append(p)
     conn.commit()
 
@@ -308,26 +334,68 @@ def _album_image_url(album):
     return images[len(images) // 2].get("url")
 
 
+def _sortable_release_date(release_date, precision):
+    """Pads a release_date to a full date so it sorts correctly regardless
+    of precision: year -> YYYY-01-01, month -> YYYY-MM-01, day unchanged."""
+    if not release_date:
+        return None
+    if precision == "year":
+        return f"{release_date}-01-01"
+    if precision == "month":
+        return f"{release_date}-01"
+    return release_date
+
+
+def _parse_album(album):
+    if not album.get("id"):
+        return None
+    release_date = album.get("release_date")
+    precision = album.get("release_date_precision")
+    external_urls = album.get("external_urls") or {}
+    return {
+        "album_id": album["id"],
+        "name": album.get("name"),
+        "album_type": album.get("album_type"),
+        "release_date": release_date,
+        "release_date_precision": precision,
+        "release_year": int(release_date[:4]) if release_date else None,
+        "release_date_sortable": _sortable_release_date(release_date, precision),
+        "total_tracks": album.get("total_tracks"),
+        "image_url": _album_image_url(album),
+        "external_url": external_urls.get("spotify"),
+        "raw_json": json.dumps(album, separators=(",", ":")),
+    }
+
+
 def _parse_track_item(track, added_at, position):
-    artists = ", ".join(a["name"] for a in track.get("artists") or [])
     album = track.get("album") or {}
+    track_artists = track.get("artists") or []
+    album_artists = album.get("artists") or []
     external_urls = track.get("external_urls") or {}
     external_ids = track.get("external_ids") or {}
+    linked_from = track.get("linked_from")
+    is_playable = track.get("is_playable")
     return {
         "track_id": track["id"],
         "name": track.get("name"),
-        "artists": artists,
+        "artists": ", ".join(a["name"] for a in track_artists),
         "album_id": album.get("id"),
-        "album_name": album.get("name"),
         "duration_ms": track.get("duration_ms"),
         "explicit": 1 if track.get("explicit") else 0,
-        "popularity": track.get("popularity"),
-        "preview_url": track.get("preview_url"),
         "external_url": external_urls.get("spotify"),
+        "uri": track.get("uri"),
         "isrc": external_ids.get("isrc"),
-        "album_image_url": _album_image_url(album),
+        "track_number": track.get("track_number"),
+        "disc_number": track.get("disc_number"),
+        "is_playable": None if is_playable is None else (1 if is_playable else 0),
+        "linked_from": json.dumps(linked_from, separators=(",", ":")) if linked_from else None,
+        "linked_from_id": (linked_from or {}).get("id"),
+        "raw_json": json.dumps(track, separators=(",", ":")),
         "added_at": added_at,
         "position": position,
+        "album": _parse_album(album),
+        "track_artists": track_artists,
+        "album_artists": album_artists,
     }
 
 
@@ -380,44 +448,149 @@ def _fetch_liked_items(sp):
     return parsed
 
 
+def _upsert_artist(conn, artist):
+    if not artist.get("id"):
+        return
+    external_urls = artist.get("external_urls") or {}
+    conn.execute(
+        """
+        INSERT INTO artist (artist_id, name, external_url, raw_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(artist_id) DO UPDATE SET
+            name=excluded.name,
+            external_url=excluded.external_url,
+            raw_json=excluded.raw_json
+        """,
+        (
+            artist["id"],
+            artist.get("name"),
+            external_urls.get("spotify"),
+            json.dumps(artist, separators=(",", ":")),
+        ),
+    )
+
+
+def _upsert_album(conn, album):
+    conn.execute(
+        """
+        INSERT INTO album (album_id, name, album_type, release_date, release_date_precision,
+                            release_year, release_date_sortable, total_tracks, image_url,
+                            external_url, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(album_id) DO UPDATE SET
+            name=excluded.name,
+            album_type=excluded.album_type,
+            release_date=excluded.release_date,
+            release_date_precision=excluded.release_date_precision,
+            release_year=excluded.release_year,
+            release_date_sortable=excluded.release_date_sortable,
+            total_tracks=excluded.total_tracks,
+            -- COALESCE, not plain overwrite: Spotify sometimes omits images
+            -- on an album object, and a NULL from one pull must not wipe a
+            -- value we already have.
+            image_url=COALESCE(excluded.image_url, image_url),
+            external_url=excluded.external_url,
+            raw_json=excluded.raw_json
+        """,
+        (
+            album["album_id"],
+            album["name"],
+            album["album_type"],
+            album["release_date"],
+            album["release_date_precision"],
+            album["release_year"],
+            album["release_date_sortable"],
+            album["total_tracks"],
+            album["image_url"],
+            album["external_url"],
+            album["raw_json"],
+        ),
+    )
+
+
+def _replace_track_artists(conn, track_id, artists):
+    conn.execute("DELETE FROM track_artist WHERE track_id = ?", (track_id,))
+    for position, artist in enumerate(artists):
+        if not artist.get("id"):
+            continue
+        conn.execute(
+            "INSERT INTO track_artist (track_id, artist_id, position) VALUES (?, ?, ?)",
+            (track_id, artist["id"], position),
+        )
+
+
+def _replace_album_artists(conn, album_id, artists):
+    conn.execute("DELETE FROM album_artist WHERE album_id = ?", (album_id,))
+    for position, artist in enumerate(artists):
+        if not artist.get("id"):
+            continue
+        conn.execute(
+            "INSERT INTO album_artist (album_id, artist_id, position) VALUES (?, ?, ?)",
+            (album_id, artist["id"], position),
+        )
+
+
 def _upsert_track(conn, it):
     conn.execute(
         """
-        INSERT INTO track (track_id, name, artists, album_id, album_name, duration_ms,
-                            explicit, popularity, preview_url, external_url,
-                            isrc, album_image_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO track (track_id, name, artists, album_id, duration_ms, explicit,
+                            external_url, uri, isrc, track_number, disc_number, is_playable,
+                            linked_from, linked_from_id, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(track_id) DO UPDATE SET
             name=excluded.name,
             artists=excluded.artists,
             album_id=excluded.album_id,
-            album_name=excluded.album_name,
             duration_ms=excluded.duration_ms,
             explicit=excluded.explicit,
-            popularity=excluded.popularity,
-            preview_url=excluded.preview_url,
             external_url=excluded.external_url,
+            uri=excluded.uri,
             -- COALESCE, not plain overwrite: Spotify sometimes omits
-            -- external_ids/images on a track object, and a NULL from one pull
-            -- must not wipe a value we already have.
+            -- external_ids on a track object, and a NULL from one pull must
+            -- not wipe a value we already have.
             isrc=COALESCE(excluded.isrc, isrc),
-            album_image_url=COALESCE(excluded.album_image_url, album_image_url)
+            track_number=excluded.track_number,
+            disc_number=excluded.disc_number,
+            is_playable=excluded.is_playable,
+            linked_from=excluded.linked_from,
+            linked_from_id=excluded.linked_from_id,
+            raw_json=excluded.raw_json
         """,
         (
             it["track_id"],
             it["name"],
             it["artists"],
             it["album_id"],
-            it["album_name"],
             it["duration_ms"],
             it["explicit"],
-            it["popularity"],
-            it["preview_url"],
             it["external_url"],
+            it["uri"],
             it["isrc"],
-            it["album_image_url"],
+            it["track_number"],
+            it["disc_number"],
+            it["is_playable"],
+            it["linked_from"],
+            it["linked_from_id"],
+            it["raw_json"],
         ),
     )
+
+
+def _upsert_track_full(conn, it):
+    """Upsert order: artists (from both the track and its album), then the
+    album, then the track, then replace the credit tables -- artist/album
+    rows must exist before track_artist/album_artist can reference them
+    under PRAGMA foreign_keys=ON."""
+    for artist in it["track_artists"]:
+        _upsert_artist(conn, artist)
+    for artist in it["album_artists"]:
+        _upsert_artist(conn, artist)
+    if it["album"]:
+        _upsert_album(conn, it["album"])
+    _upsert_track(conn, it)
+    _replace_track_artists(conn, it["track_id"], it["track_artists"])
+    if it["album"]:
+        _replace_album_artists(conn, it["album"]["album_id"], it["album_artists"])
 
 
 def _diff_playlist_tracks(conn, playlist_id, current_items):
@@ -518,7 +691,7 @@ def _apply_playlist_items(conn, playlist_id, items):
     seen_track_ids = set()
     for it in items:
         if it["track_id"] not in seen_track_ids:
-            _upsert_track(conn, it)
+            _upsert_track_full(conn, it)
             seen_track_ids.add(it["track_id"])
 
     _diff_playlist_tracks(conn, playlist_id, items)

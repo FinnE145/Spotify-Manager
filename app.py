@@ -303,10 +303,11 @@ def create_app():
 
         rows = conn.execute(
             """
-            SELECT m.id, m.track_id, t.name, t.artists, t.album_name, m.added_at, m.removed_at,
-                   m.position
+            SELECT m.id, m.track_id, t.name, t.artists, a.name AS album_name, m.added_at,
+                   m.removed_at, m.position
             FROM membership m
             JOIN track t ON t.track_id = m.track_id
+            LEFT JOIN album a ON a.album_id = t.album_id
             WHERE m.playlist_id = ?
             ORDER BY m.position
             """,
@@ -320,7 +321,18 @@ def create_app():
     @app.route("/dev/snapshot/track/<track_id>", endpoint="dev_snapshot_track")
     def snapshot_track(track_id):
         conn = db.get_db()
-        track = conn.execute("SELECT * FROM track WHERE track_id = ?", (track_id,)).fetchone()
+        track = conn.execute(
+            """
+            SELECT t.track_id, t.name, t.artists, t.album_id, t.duration_ms, t.explicit,
+                   t.external_url, t.uri, t.isrc, t.track_number, t.disc_number, t.is_playable,
+                   t.linked_from, t.linked_from_id,
+                   a.name AS album_name, a.image_url AS album_image_url
+            FROM track t
+            LEFT JOIN album a ON a.album_id = t.album_id
+            WHERE t.track_id = ?
+            """,
+            (track_id,),
+        ).fetchone()
         if track is None:
             abort(404, description="Track not found.")
 
@@ -416,6 +428,16 @@ def create_app():
         status = snapshot.get_status()
         status.update(snapshot.summary_counts(conn))
         return jsonify(status)
+
+    @app.route("/api/snapshot/exclude", methods=["POST"])
+    def exclude_snapshot_playlists():
+        body = request.get_json()
+        playlist_ids = body.get("playlist_ids") or []
+        if not playlist_ids:
+            abort(400, description="playlist_ids required")
+        conn = db.get_db()
+        snapshot.set_excluded(conn, playlist_ids, bool(body.get("excluded")))
+        return jsonify({"ok": True})
 
     # -- Board state -------------------------------------------------
 

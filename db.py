@@ -26,23 +26,68 @@ CREATE TABLE IF NOT EXISTS snapshot (
     tracks_pulled_at TEXT,
     unfollowed_at TEXT,
     description TEXT,
-    last_pull_error TEXT
+    last_pull_error TEXT,
+    excluded INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS artist (
+    artist_id    TEXT PRIMARY KEY,
+    name         TEXT,
+    external_url TEXT,
+    raw_json     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS album (
+    album_id               TEXT PRIMARY KEY,
+    name                   TEXT,
+    album_type             TEXT,
+    release_date           TEXT,
+    release_date_precision TEXT,
+    release_year           INTEGER,
+    release_date_sortable  TEXT,
+    total_tracks           INTEGER,
+    image_url              TEXT,
+    external_url           TEXT,
+    raw_json               TEXT
 );
 
 CREATE TABLE IF NOT EXISTS track (
-    track_id TEXT PRIMARY KEY,
-    name TEXT,
-    artists TEXT,
-    album_id TEXT,
-    album_name TEXT,
-    duration_ms INTEGER,
-    explicit INTEGER,
-    popularity INTEGER,
-    preview_url TEXT,
-    external_url TEXT,
-    isrc TEXT,
-    album_image_url TEXT
+    track_id       TEXT PRIMARY KEY,
+    name           TEXT,
+    artists        TEXT,
+    album_id       TEXT REFERENCES album(album_id),
+    duration_ms    INTEGER,
+    explicit       INTEGER,
+    external_url   TEXT,
+    uri            TEXT,
+    isrc           TEXT,
+    track_number   INTEGER,
+    disc_number    INTEGER,
+    is_playable    INTEGER,
+    linked_from    TEXT,
+    linked_from_id TEXT,
+    raw_json       TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_track_album ON track(album_id);
+CREATE INDEX IF NOT EXISTS idx_track_linked_from ON track(linked_from_id);
+
+CREATE TABLE IF NOT EXISTS track_artist (
+    track_id  TEXT NOT NULL REFERENCES track(track_id),
+    artist_id TEXT NOT NULL REFERENCES artist(artist_id),
+    position  INTEGER NOT NULL,
+    PRIMARY KEY (track_id, artist_id)
+);
+
+CREATE TABLE IF NOT EXISTS album_artist (
+    album_id  TEXT NOT NULL REFERENCES album(album_id),
+    artist_id TEXT NOT NULL REFERENCES artist(artist_id),
+    position  INTEGER NOT NULL,
+    PRIMARY KEY (album_id, artist_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_track_artist_artist ON track_artist(artist_id);
+CREATE INDEX IF NOT EXISTS idx_album_artist_artist ON album_artist(artist_id);
 
 CREATE TABLE IF NOT EXISTS membership (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +221,6 @@ def _migrate(conn):
     track_columns = {row[1] for row in conn.execute("PRAGMA table_info(track)")}
     for column, ddl in (
         ("isrc", "ALTER TABLE track ADD COLUMN isrc TEXT"),
-        ("album_image_url", "ALTER TABLE track ADD COLUMN album_image_url TEXT"),
     ):
         if column not in track_columns:
             conn.execute(ddl)

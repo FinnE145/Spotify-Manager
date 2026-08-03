@@ -331,7 +331,18 @@ def _is_pinned(conn, group_id):
 
 
 def track_display(conn, track_id):
-    row = conn.execute("SELECT * FROM track WHERE track_id = ?", (track_id,)).fetchone()
+    row = conn.execute(
+        """
+        SELECT t.track_id, t.name, t.artists, t.album_id, t.duration_ms, t.explicit,
+               t.external_url, t.uri, t.isrc, t.track_number, t.disc_number, t.is_playable,
+               t.linked_from, t.linked_from_id,
+               a.name AS album_name, a.image_url AS album_image_url
+        FROM track t
+        LEFT JOIN album a ON a.album_id = t.album_id
+        WHERE t.track_id = ?
+        """,
+        (track_id,),
+    ).fetchone()
     live_count = conn.execute(
         "SELECT COUNT(*) FROM membership WHERE track_id = ? AND removed_at IS NULL", (track_id,)
     ).fetchone()[0]

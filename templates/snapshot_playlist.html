@@ -13,6 +13,10 @@
     &middot; last changed {% if playlist.last_changed_at %}{{ datetime_span(playlist.last_changed_at) }}{% else %}unknown{% endif %}
     {% if playlist.unfollowed_at %}&middot; <strong>unfollowed {{ datetime_span(playlist.unfollowed_at) }}</strong>{% endif %}
   </p>
+  <label class="checkbox-label">
+    <input type="checkbox" data-exclude-toggle data-playlist-id="{{ playlist.playlist_id }}" {{ 'checked' if playlist.excluded }}>
+    Exclude from pulls
+  </label>
 
   {% if rows %}
   <table class="data-table sortable" id="track-table">
