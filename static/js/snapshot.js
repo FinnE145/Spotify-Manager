@@ -150,6 +150,14 @@
       : "Pull finished.";
     progressLabel.appendChild(summary);
 
+    const reloadLink = document.createElement("a");
+    reloadLink.href = "#";
+    reloadLink.textContent = "Reload to see results";
+    reloadLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      window.location.reload();
+    });
+
     if (failed.length) {
       const list = document.createElement("ul");
       failed.forEach((f) => {
@@ -161,11 +169,17 @@
 
       const excludeBtn = document.createElement("button");
       excludeBtn.type = "button";
-      excludeBtn.textContent = `Exclude the ${failed.length} playlist${failed.length === 1 ? "" : "s"} that failed`;
+      const excludeLabel = `Exclude the ${failed.length} playlist${failed.length === 1 ? "" : "s"} that failed`;
+      excludeBtn.textContent = excludeLabel;
       excludeBtn.addEventListener("click", () => {
         if (!window.confirm(`Exclude ${failed.length} playlist${failed.length === 1 ? "" : "s"} from future pulls?`)) {
           return;
         }
+        // Visual feedback while the request is in flight, and hide the reload
+        // link so it can't race the request and abort it via navigation.
+        excludeBtn.disabled = true;
+        excludeBtn.textContent = "Excluding…";
+        reloadLink.hidden = true;
         api("/api/snapshot/exclude", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -173,18 +187,17 @@
             playlist_ids: failed.map((f) => f.playlist_id),
             excluded: true,
           }),
-        }).then(() => window.location.reload());
+        })
+          .then(() => window.location.reload())
+          .catch(() => {
+            excludeBtn.disabled = false;
+            excludeBtn.textContent = excludeLabel;
+            reloadLink.hidden = false;
+          });
       });
       progressLabel.appendChild(excludeBtn);
     }
 
-    const reloadLink = document.createElement("a");
-    reloadLink.href = "#";
-    reloadLink.textContent = "Reload to see results";
-    reloadLink.addEventListener("click", (e) => {
-      e.preventDefault();
-      window.location.reload();
-    });
     progressLabel.appendChild(reloadLink);
   }
 

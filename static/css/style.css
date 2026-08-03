@@ -166,6 +166,12 @@ body.immersive {
   transition: width 0.3s ease;
 }
 
+#snapshot-progress-label button,
+#snapshot-progress-label a {
+  display: block;
+  margin-top: 8px;
+}
+
 #toolbar {
   display: flex;
   align-items: center;
