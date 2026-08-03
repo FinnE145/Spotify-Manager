@@ -95,26 +95,44 @@ Track object is ~1,756 bytes and carries, beyond what `track` stores today: **ar
 ## Order
 
 ```
-A (capture + re-pull) ──► C (ingest) ──► D (round-trip) ──► E (grouping catch-up) ──► B (generations) ──► scoring ──► F/G
+A (capture) ──► I (detection on the artist model) ──► C (ingest) ──► D (round-trip)
+  ──► E (grouping catch-up) ──► B (generations) ──► H (scoring) ──► F/G
 ```
 
-B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent.
+B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
 ---
 
 ## A — Track metadata capture + re-pull
 
+**Specced → `docs/specs/track-metadata-A.md`.** That spec is authoritative; the summary below is the shape, not the detail.
+
 Read-only. Prerequisite for everything. The one pass that has to be right, because there is no second source.
 
 - **Store the raw track JSON** alongside parsed columns (~17 MB at full scale). This permanently retires "we'll need another pull for a field we didn't think of."
-- Parse out: **artist ids** into a proper `artist` table + `track_artist` join carrying a **track-credit vs album-credit flag** — that structurally solves the feature-credit problem the source inventory could only string-match; plus `release_date` + precision, `album_type`, `track_number`, `disc_number`, `total_tracks`, `linked_from`, `is_playable`.
-- **Playlist exclude flag** + snapshot-UI toggle, auto-suggesting the 7 that 403'd. Exclusion means "don't re-read", never "forget existing rows". The same flag later covers the round-trip's temp playlist.
-- Mark `popularity` / `preview_url` dead.
+- Parse artist ids into a proper `artist` table, plus **`track_artist` and `album_artist` join tables**. Planning settled on a real `album` table rather than a credit flag on one join: album credits then live once per album, and a featured artist is "in `track_artist`, not in `album_artist`" — structural, not string-matched.
+- Album-level fields (`release_date` + precision, `album_type`, `total_tracks`) land on `album`; `track_number`, `disc_number`, `linked_from`, `is_playable`, `uri` stay on `track`.
+- **Playlist exclude flag** + snapshot-UI toggle, with a bulk "exclude what just failed" button in the post-pull error list. Exclusion means "don't re-read", never "forget existing rows". The same flag later covers the round-trip's temp playlist.
+- Drop `popularity` / `preview_url` outright, and `album_name` / `album_image_url` in favour of an `album` join.
 - Then **one full re-pull, ~225 requests.**
 
-**Size:** contained. `_parse_track_item` and `_upsert_track` in `snapshot.py` gain fields; `db.py` gains columns, two tables, and additive migrations; the exclude flag is one column plus a toggle endpoint and a bit of UI. Roughly one implement session, and the pull itself runs in minutes.
+**Size:** contained. `_parse_track_item` and `_upsert_track` in `snapshot.py` gain fields; `db.py` gains four tables and a one-time `track` rebuild; the exclude flag is one column plus an endpoint and a bit of UI. Roughly one implement session, and the pull itself runs in minutes.
+
+**Measured:** only **1** track in the library is unreachable by a full pull, so no mop-up pass is needed after it.
 
 **Trap:** never edit a `.py` file while a pull is running — the Flask reloader truncates it silently.
+
+## I — Detection on the artist model
+
+Rework `canonical_detect.py` to match on the **artist ids** A captures (`track_artist` / `album_artist`) instead of the comma-joined `track.artists` string. Needs **no play history and no Spotify requests** — like B, it's work for a day the API budget is already spent.
+
+**Why it sits here and not later.** Right now there is a fully-reviewed grouping baseline: 288 candidate groups all decided, yielding 106 version groups over 221 tracks and 461 reviewed pairs, across 3,589 tracks. That baseline is what makes the rework *checkable* — the new detection output can be diffed against known-good and the difference attributed. After D the library roughly triples with a foreign set skewed toward alternate editions, and there is no baseline left to diff against.
+
+Also unlocks the featured-artist question structurally: an artist credited on the track but not on its album is a feature, readable as `track_artist` minus `album_artist` rather than string-matching "feat." out of a title.
+
+**Scope:** the artist-model rework only. Deciding what to do with the resulting diff over the existing 288 groups is a separate call, made once the diff is visible.
+
+> Not to be confused with the mechanical album-column swap inside A: A drops `track.album_name` / `track.album_image_url` in favour of an `album` join, which changes no detection logic. I is the part that changes what detection matches on.
 
 ## C — Play history ingestion
 
@@ -157,7 +175,7 @@ Needs **no play history and no Spotify requests**.
 - Active spans from earliest `added_at`. Verified: this ordering produces a clean chronological chain with no ties or inversions, from `Songs I Wanna Listen To Rn` (2021-02-09) through `v36.4.1` (2026-07-20).
 - Yields: track tenure, right-censoring flag, **intent score**, adoption stagger.
 
-## Scoring
+## H — Scoring
 
 A general song ranking that feeds album and artist rankings by aggregation. Motivation: play count over-rewards pleasant background music, tenure under-rewards recent arrivals, and neither handles recency.
 
