@@ -157,12 +157,137 @@ CREATE TABLE IF NOT EXISTS reviewed_pair (
     decided_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (track_id_a, track_id_b)
 );
+
+-- Spotify issues more than one artist id for the same artist. Sparse: only
+-- merged artists get a row, pointing at the canonical id. Resolution is
+-- always COALESCE(artist_alias.canonical_artist_id, <raw id>).
+CREATE TABLE IF NOT EXISTS artist_alias (
+    artist_id           TEXT PRIMARY KEY REFERENCES artist(artist_id),
+    canonical_artist_id TEXT NOT NULL REFERENCES artist(artist_id),
+    decided_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_artist_alias_canonical ON artist_alias(canonical_artist_id);
+
+-- Mirrors reviewed_pair: records that a pair was judged, whatever the
+-- verdict, so a decided pair stops resurfacing in the /dev/artists queue.
+CREATE TABLE IF NOT EXISTS reviewed_artist_pair (
+    artist_id_a TEXT NOT NULL REFERENCES artist(artist_id),
+    artist_id_b TEXT NOT NULL REFERENCES artist(artist_id),
+    decided_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (artist_id_a, artist_id_b)
+);
 """
+
+# Rebuilt on every init_db rather than CREATE ... IF NOT EXISTS, so a changed
+# definition here always takes effect instead of silently keeping the old one.
+#
+# Wrapped in an explicit transaction: executescript() commits between
+# statements, so an unwrapped DROP ... CREATE leaves a window where a
+# concurrent reader sees no views at all and fails with "no such table".
+# Under SYMR_DEBUG=1 the reloader re-runs init_db on every file save, so
+# that window lands on live page loads and on the background pull thread.
+VIEWS = """
+BEGIN;
+
+DROP VIEW IF EXISTS track_artists;
+DROP VIEW IF EXISTS track_artist_role;
+DROP VIEW IF EXISTS track_artist_credit;
+DROP VIEW IF EXISTS resolved_album_artist;
+DROP VIEW IF EXISTS resolved_track_artist;
+
+-- Alias resolution, applied once per join table. Kept as its own view so
+-- every downstream join is a plain equi-join: expressing the resolution
+-- inline as a correlated subquery instead made a full scan take 17s.
+CREATE VIEW resolved_track_artist AS
+SELECT ta.track_id, ta.position,
+       COALESCE(aa.canonical_artist_id, ta.artist_id) AS artist_id
+FROM track_artist ta
+LEFT JOIN artist_alias aa ON aa.artist_id = ta.artist_id;
+
+CREATE VIEW resolved_album_artist AS
+SELECT ab.album_id,
+       COALESCE(aa.canonical_artist_id, ab.artist_id) AS artist_id
+FROM album_artist ab
+LEFT JOIN artist_alias aa ON aa.artist_id = ab.artist_id;
+
+-- One row per track credit, resolved, with whether that artist also holds
+-- an album credit on the track's own album.
+CREATE VIEW track_artist_credit AS
+SELECT rta.track_id,
+       MIN(rta.position) AS position,
+       rta.artist_id,
+       ar.name AS name,
+       MAX(CASE WHEN raa.artist_id IS NOT NULL THEN 1 ELSE 0 END) AS is_album_artist
+FROM resolved_track_artist rta
+JOIN track t ON t.track_id = rta.track_id
+LEFT JOIN artist ar ON ar.artist_id = rta.artist_id
+LEFT JOIN resolved_album_artist raa
+       ON raa.album_id = t.album_id AND raa.artist_id = rta.artist_id
+-- Grouped so that two credits aliased onto one artist collapse to one row
+-- rather than rendering the canonical name twice.
+GROUP BY rta.track_id, rta.artist_id;
+
+-- primary = also an album artist, falling back to *every* credit when no
+-- credit is one. Without that fallback the 63 tracks on Various Artists
+-- compilations would classify their real artist as a feature.
+-- The fallback is a join against a per-track aggregate, not a correlated
+-- NOT EXISTS: as a subquery it re-materialised the whole credit view once
+-- per credit row, turning a 0.1s scan into 19s.
+CREATE VIEW track_artist_role AS
+SELECT c.track_id, c.position, c.artist_id, c.name,
+       CASE WHEN c.is_album_artist = 1 OR h.any_album_artist = 0
+            THEN 'primary' ELSE 'featured' END AS role
+FROM track_artist_credit c
+JOIN (
+    SELECT track_id, MAX(is_album_artist) AS any_album_artist
+    FROM track_artist_credit
+    GROUP BY track_id
+) h ON h.track_id = c.track_id;
+
+-- The rendered display string: "Primary A, Primary B (feat. Featured C)".
+-- The single read path for artist names -- track.artists is write-only.
+--
+-- Deliberately built on track_artist_credit rather than track_artist_role,
+-- with the primary-artist fallback folded into this one GROUP BY as CASE
+-- expressions. Going through the role view instead costs a *second*,
+-- ungrouped aggregate over the whole credit table, which a WHERE track_id=?
+-- can't filter into -- that made every single-row lookup 44ms and took
+-- /dev/canonical (hundreds of such lookups) past 20s to render.
+CREATE VIEW track_artists AS
+SELECT track_id,
+       COALESCE(primary_names, '')
+       || CASE WHEN featured_names IS NOT NULL
+               THEN ' (feat. ' || featured_names || ')' ELSE '' END AS artists,
+       primary_names,
+       featured_names
+FROM (
+    SELECT track_id,
+           CASE WHEN MAX(is_album_artist) = 1
+                THEN group_concat(CASE WHEN is_album_artist = 1 THEN name END, ', ' ORDER BY position)
+                ELSE group_concat(name, ', ' ORDER BY position)
+           END AS primary_names,
+           CASE WHEN MAX(is_album_artist) = 1
+                THEN group_concat(CASE WHEN is_album_artist = 0 THEN name END, ', ' ORDER BY position)
+                ELSE NULL
+           END AS featured_names
+    FROM track_artist_credit
+    GROUP BY track_id
+);
+
+COMMIT;
+"""
+
+
+class Connection(sqlite3.Connection):
+    """Plain subclass purely so callers can hang per-connection caches on it
+    -- sqlite3.Connection has no __dict__ and rejects attribute assignment.
+    See canonical._artist_display."""
 
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
+        g.db = sqlite3.connect(DB_PATH, factory=Connection)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
     return g.db
@@ -171,7 +296,7 @@ def get_db():
 def connect():
     """A standalone connection for use outside a Flask request context
     (e.g. the snapshot pull's background thread)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=Connection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -192,6 +317,7 @@ def init_db():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    conn.executescript(VIEWS)
     conn.execute(
         "INSERT INTO board (id, name) SELECT 1, 'Default' "
         "WHERE NOT EXISTS (SELECT 1 FROM board WHERE id = 1)"

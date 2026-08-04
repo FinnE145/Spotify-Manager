@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span %}
+
+{% block title %}Symr — Artists{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Artists</h1>
+  <p class="meta">
+    Spotify issues more than one artist id for the same artist. Merging them here
+    is what keeps detection and every artist-level total from splitting one artist in two.
+  </p>
+
+  <section class="panel">
+    <h2>Duplicate candidates</h2>
+    {% if pairs %}
+    <p class="meta">
+      {{ pairs|length }} pair{{ "" if pairs|length == 1 else "s" }} share a name but not an id.
+    </p>
+    {% for pair in pairs %}
+    <div class="artist-pair" data-artist-a="{{ pair.a.artist_id }}" data-artist-b="{{ pair.b.artist_id }}">
+      <table class="data-table">
+        <thead>
+          <tr><th>Artist id</th><th>Name</th><th>Tracks</th><th>Albums</th><th>Sample tracks</th></tr>
+        </thead>
+        <tbody>
+          {% for side in (pair.a, pair.b) %}
+          <tr>
+            <td><code>{{ side.artist_id }}</code></td>
+            <td>
+              {% if side.external_url %}<a href="{{ side.external_url }}" target="_blank" rel="noreferrer">{{ side.name }}</a>
+              {% else %}{{ side.name }}{% endif %}
+            </td>
+            <td>{{ side.track_count }}</td>
+            <td>{{ side.album_count }}</td>
+            <td>{{ side.sample_tracks|join(" · ") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="button" data-artist-same>Same artist</button>
+      <button type="button" data-artist-not-same>Not the same</button>
+      <span class="meta" data-artist-pair-status></span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="meta">Nothing to review.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Merged</h2>
+    {% if merged %}
+    <table class="data-table">
+      <thead>
+        <tr><th>Canonical</th><th>Merged in</th><th>Decided</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for group in merged %}
+        {% for alias in group.aliases %}
+        <tr data-artist-merged="{{ alias.artist_id }}">
+          <td>{{ group.canonical.name }} <code>{{ group.canonical.artist_id }}</code></td>
+          <td>{{ alias.name }} <code>{{ alias.artist_id }}</code></td>
+          <td>{{ datetime_span(alias.decided_at) }}</td>
+          <td><button type="button" data-artist-unmerge>Unmerge</button></td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="meta">No merges yet.</p>
+    {% endif %}
+  </section>
+
+  <p id="artists-error" class="error" hidden></p>
+</main>
+<script src="{{ url_for('static', filename='js/artists.js') }}"></script>
+{% endblock %}
