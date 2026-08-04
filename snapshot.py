@@ -69,6 +69,11 @@ _status = {
     # Spotify requests issued by the current run. Per-run only, reset at the
     # start of each one; nothing is persisted.
     "requests": 0,
+    # Which action started this run ("pull" | "refresh" | "backfill"). Unlike
+    # `phase`, it survives into the terminal state, so a page that reloaded
+    # mid-run still knows a backfill's failures carry track ids, not playlist
+    # ids, and must not be offered the exclude button.
+    "action": None,
 }
 
 
@@ -165,10 +170,11 @@ def _start(target, *args):
     return True
 
 
-def _reset_status(phase):
+def _reset_status(phase, action):
     _set_status(
         running=True,
         phase=phase,
+        action=action,
         run_total=0,
         run_done=0,
         current_playlist=None,
@@ -185,7 +191,7 @@ def _run_pull(force_all):
     conn = db.connect()
     sp = get_spotify_client()
     try:
-        _reset_status("playlists")
+        _reset_status("playlists", "pull" if force_all else "refresh")
         if sp is None:
             raise RuntimeError("not_authenticated")
 
@@ -244,7 +250,7 @@ def _run_backfill():
     conn = db.connect()
     sp = get_spotify_client()
     try:
-        _reset_status("backfill")
+        _reset_status("backfill", "backfill")
         if sp is None:
             raise RuntimeError("not_authenticated")
 

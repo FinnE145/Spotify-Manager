@@ -269,7 +269,7 @@ def create_app():
             like = f"%{q}%"
             track_matches = conn.execute(
                 """
-                SELECT t.track_id, t.name, ta.artists, COUNT(m.id) AS appearances
+                SELECT t.track_id, t.name, COALESCE(ta.artists, '') AS artists, COUNT(m.id) AS appearances
                 FROM track t
                 JOIN membership m ON m.track_id = t.track_id AND m.removed_at IS NULL
                 LEFT JOIN track_artists ta ON ta.track_id = t.track_id
@@ -286,7 +286,7 @@ def create_app():
         changes = conn.execute(
             """
             SELECT m.playlist_id, s.name AS playlist_name, m.track_id, t.name AS track_name,
-                   ta.artists, m.added_at, m.removed_at,
+                   COALESCE(ta.artists, '') AS artists, m.added_at, m.removed_at,
                    COALESCE(m.removed_at, m.added_at) AS event_at,
                    CASE WHEN m.removed_at IS NOT NULL THEN 'removed' ELSE 'added' END AS kind
             FROM membership m
@@ -320,7 +320,7 @@ def create_app():
 
         rows = conn.execute(
             """
-            SELECT m.id, m.track_id, t.name, ta.artists, a.name AS album_name, m.added_at,
+            SELECT m.id, m.track_id, t.name, COALESCE(ta.artists, '') AS artists, a.name AS album_name, m.added_at,
                    m.removed_at, m.position
             FROM membership m
             JOIN track t ON t.track_id = m.track_id
@@ -341,7 +341,7 @@ def create_app():
         conn = db.get_db()
         track = conn.execute(
             """
-            SELECT t.track_id, t.name, ta.artists, t.album_id, t.duration_ms, t.explicit,
+            SELECT t.track_id, t.name, COALESCE(ta.artists, '') AS artists, t.album_id, t.duration_ms, t.explicit,
                    t.external_url, t.uri, t.isrc, t.track_number, t.disc_number, t.is_playable,
                    t.linked_from, t.linked_from_id,
                    a.name AS album_name, a.image_url AS album_image_url

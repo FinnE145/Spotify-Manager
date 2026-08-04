@@ -93,18 +93,27 @@ def _mark_reviewed(conn, artist_id_a, artist_id_b):
 
 
 def unmerge(conn, artist_id):
-    """Drops the alias row and forgets the review, returning the pair to the
-    queue -- nothing here is a one-way door."""
+    """Drops the alias row and forgets every review tying this artist to its
+    former group, returning those pairs to the queue -- nothing here is a
+    one-way door.
+
+    Clearing only the pair against the canonical id would strand the rest: in
+    a 3+-id group the review that merged this artist may have been recorded
+    against a sibling, not the canonical, so that pair would stay suppressed
+    forever despite no longer being merged. The group has to be read before
+    the alias row goes, or it's no longer derivable."""
     row = conn.execute(
         "SELECT canonical_artist_id FROM artist_alias WHERE artist_id = ?", (artist_id,)
     ).fetchone()
     if row is None:
         return
-    a, b = _pair_key(artist_id, row["canonical_artist_id"])
+    group = _alias_group(conn, artist_id)
     conn.execute("DELETE FROM artist_alias WHERE artist_id = ?", (artist_id,))
-    conn.execute(
-        "DELETE FROM reviewed_artist_pair WHERE artist_id_a = ? AND artist_id_b = ?", (a, b)
-    )
+    for other in group - {artist_id}:
+        a, b = _pair_key(artist_id, other)
+        conn.execute(
+            "DELETE FROM reviewed_artist_pair WHERE artist_id_a = ? AND artist_id_b = ?", (a, b)
+        )
     conn.commit()
 
 

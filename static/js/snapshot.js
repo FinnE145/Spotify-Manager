@@ -112,10 +112,12 @@
   // re-enabled at the end of a run that left nothing to backfill.
   let backfillPending = backfillBtn ? !backfillBtn.disabled : false;
 
-  // Which action this page started, so the terminal message can say
-  // "Backfill finished" rather than "Pull finished". A run picked up from
-  // another page (or a mid-run reload) reports as a pull, which is the
-  // common case and never wrong about anything but the noun.
+  // Which action the running job is, so the terminal message can say
+  // "Backfill finished" rather than "Pull finished" -- and, load-bearing,
+  // so a backfill's failures are never offered the exclude button. The
+  // server reports it (status.action), because a page that reloaded mid-run
+  // or picked the run up from the Canvas page never saw it start; the local
+  // value only covers the gap before the first poll returns.
   let lastAction = "pull";
 
   function setRunning(running) {
@@ -247,6 +249,7 @@
       setDateField("last_refresh_at", status.last_refresh_at);
 
       backfillPending = status.backfill_pending > 0;
+      if (status.action) lastAction = status.action;
       setRunning(status.running);
 
       if (status.running) {
@@ -294,6 +297,7 @@
   api("/api/snapshot/status").then((status) => {
     if (status.running) {
       setField("requests", status.requests);
+      if (status.action) lastAction = status.action;
       setRunning(true);
       poll();
     }
