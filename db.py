@@ -1,3 +1,5 @@
+import hashlib
+import re
 import sqlite3
 
 from flask import g
@@ -179,8 +181,9 @@ CREATE TABLE IF NOT EXISTS reviewed_artist_pair (
 );
 """
 
-# Rebuilt on every init_db rather than CREATE ... IF NOT EXISTS, so a changed
-# definition here always takes effect instead of silently keeping the old one.
+# Rebuilt whenever the definition here changes (see _ensure_views) rather than
+# CREATE ... IF NOT EXISTS, so an edit always takes effect instead of silently
+# keeping the old definition.
 #
 # Wrapped in an explicit transaction: executescript() commits between
 # statements, so an unwrapped DROP ... CREATE leaves a window where a
@@ -279,6 +282,36 @@ COMMIT;
 """
 
 
+_VIEW_NAMES = frozenset(re.findall(r"CREATE VIEW (\w+)", VIEWS))
+
+
+def _ensure_views(conn):
+    """Rebuilds the views only when their definition actually changed.
+
+    The rebuild is the one thing at startup that needs a write lock, and it
+    can't take one while the pull thread holds a write transaction: it waits
+    out sqlite3's 5s default and then raises "database is locked", which
+    under SYMR_DEBUG=1 means a .py save mid-pull fails the reload. Hashing
+    VIEWS makes the ordinary restart a pure read, so only a real edit to the
+    definitions needs the lock.
+
+    The presence check covers a DB whose hash is current but whose views were
+    dropped out from under it -- the hash alone would skip the rebuild.
+    """
+    digest = hashlib.sha256(VIEWS.encode()).hexdigest()
+    row = conn.execute("SELECT value FROM meta WHERE key = 'views_hash'").fetchone()
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'view'")}
+    if row and row[0] == digest and _VIEW_NAMES <= have:
+        return
+    conn.executescript(VIEWS)
+    # Only after a successful rebuild -- a failed one must not record its hash.
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('views_hash', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (digest,),
+    )
+
+
 class Connection(sqlite3.Connection):
     """Plain subclass purely so callers can hang per-connection caches on it
     -- sqlite3.Connection has no __dict__ and rejects attribute assignment.
@@ -317,7 +350,7 @@ def init_db():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     _migrate(conn)
-    conn.executescript(VIEWS)
+    _ensure_views(conn)
     conn.execute(
         "INSERT INTO board (id, name) SELECT 1, 'Default' "
         "WHERE NOT EXISTS (SELECT 1 FROM board WHERE id = 1)"
