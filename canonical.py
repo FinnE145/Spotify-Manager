@@ -330,10 +330,29 @@ def _is_pinned(conn, group_id):
     return bool(row and row["representative_track_id"])
 
 
+def _artist_display(conn, track_id):
+    """Rendered artist strings, loaded once per connection.
+
+    track_artists is cheap to scan whole (~36ms) but not to probe one row at
+    a time: SQLite won't push a track_id filter through the view's GROUP BY,
+    so each single lookup rebuilds the entire credit chain. song_tree does
+    hundreds of these, which put /dev/canonical over 20s. Flask hands out a
+    fresh connection per request and the pull thread has its own, so the
+    cache can never outlive the data it was built from."""
+    cache = getattr(conn, "_artist_display_cache", None)
+    if cache is None:
+        cache = {
+            row["track_id"]: row["artists"]
+            for row in conn.execute("SELECT track_id, artists FROM track_artists")
+        }
+        conn._artist_display_cache = cache
+    return cache.get(track_id, "")
+
+
 def track_display(conn, track_id):
     row = conn.execute(
         """
-        SELECT t.track_id, t.name, t.artists, t.album_id, t.duration_ms, t.explicit,
+        SELECT t.track_id, t.name, t.album_id, t.duration_ms, t.explicit,
                t.external_url, t.uri, t.isrc, t.track_number, t.disc_number, t.is_playable,
                t.linked_from, t.linked_from_id,
                a.name AS album_name, a.image_url AS album_image_url
@@ -347,6 +366,7 @@ def track_display(conn, track_id):
         "SELECT COUNT(*) FROM membership WHERE track_id = ? AND removed_at IS NULL", (track_id,)
     ).fetchone()[0]
     info = dict(row)
+    info["artists"] = _artist_display(conn, track_id)
     info["live_count"] = live_count
     return info
 
@@ -377,7 +397,10 @@ def song_groups(conn, query="", include_singletons=False):
                 """
                 SELECT 1 FROM track_group tg
                 JOIN track t ON t.track_id = tg.track_id
-                WHERE tg.song_id = ? AND (t.name LIKE ? OR t.artists LIKE ?)
+                WHERE tg.song_id = ?
+                  AND (t.name LIKE ?
+                       OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id)
+                                  WHERE x.track_id = t.track_id AND ar.name LIKE ?))
                 LIMIT 1
                 """,
                 (song_id, like, like),

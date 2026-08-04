@@ -7,6 +7,7 @@ import re
 import unicodedata
 from collections import defaultdict
 
+import artists
 import canonical
 
 _SUFFIX_DELIMITERS = (" (", " [", " - ", " – ", " — ", " /")
@@ -58,10 +59,10 @@ def _normalize_base_string(s):
     return _strip_punct_collapse(_strip_accents(s or "").lower())
 
 
-def normalize_artists(artists_field):
-    if not artists_field:
-        return set()
-    return {_normalize_base_string(a) for a in artists_field.split(", ") if a.strip()}
+# Artist names normalize through the same pipeline as titles, but only to
+# spot duplicate-id candidates in artists.py -- detection itself never
+# matches on names.
+normalize_name = _normalize_base_string
 
 
 def classify_suffix(suffix):
@@ -83,15 +84,17 @@ def classify_suffix(suffix):
 def _fetch_tracks(conn):
     rows = conn.execute(
         """
-        SELECT t.track_id, t.name, t.artists, a.name AS album_name, a.image_url AS album_image_url,
+        SELECT t.track_id, t.name, ta.artists, a.name AS album_name, a.image_url AS album_image_url,
                t.duration_ms, t.explicit, t.isrc,
                COUNT(CASE WHEN m.removed_at IS NULL THEN 1 END) AS live_count
         FROM track t
         LEFT JOIN album a ON a.album_id = t.album_id
+        LEFT JOIN track_artists ta ON ta.track_id = t.track_id
         LEFT JOIN membership m ON m.track_id = t.track_id
         GROUP BY t.track_id
         """
     ).fetchall()
+    artist_sets = artists.artist_sets(conn)
 
     real_groups = {
         row["track_id"]: {
@@ -115,12 +118,14 @@ def _fetch_tracks(conn):
         )
     }
 
+    empty = {"artist_ids": set(), "primary_ids": set(), "featured_ids": set()}
     tracks = {}
     for row in rows:
         base, suffix = normalize_title(row["name"])
+        credits = artist_sets.get(row["track_id"], empty)
         tracks[row["track_id"]] = {
             "name": row["name"],
-            "artists": row["artists"],
+            "artists": row["artists"] or "",
             "album_name": row["album_name"],
             "album_image_url": row["album_image_url"],
             "duration_ms": row["duration_ms"],
@@ -130,7 +135,13 @@ def _fetch_tracks(conn):
             "base": base,
             "suffix": suffix,
             "suffix_class": classify_suffix(suffix),
-            "artist_set": normalize_artists(row["artists"]),
+            # Alias-resolved artist ids. artist_ids drives candidate
+            # generation (permissive, so nothing is missed); primary_ids
+            # drives the song prefill, so a shared *featured* credit alone
+            # never merges two songs silently.
+            "artist_ids": credits["artist_ids"],
+            "primary_ids": credits["primary_ids"],
+            "featured_ids": credits["featured_ids"],
             "album_norm": _normalize_base_string(row["album_name"] or ""),
             "real_groups": real_groups.get(row["track_id"]),
             "pinned": row["track_id"] in pinned_ids,
@@ -192,7 +203,7 @@ def _same_recording(tracks, a, b):
     if (
         ra["base"] == rb["base"]
         and ra["suffix"] == rb["suffix"]
-        and (ra["artist_set"] & rb["artist_set"])
+        and (ra["artist_ids"] & rb["artist_ids"])
         and ra["duration_ms"] is not None
         and rb["duration_ms"] is not None
         and abs(ra["duration_ms"] - rb["duration_ms"]) <= _DURATION_TOLERANCE_MS
@@ -243,15 +254,17 @@ def _prefill_labels(track_ids, tracks):
     counter = _Counter()
 
     def same_song(a, b):
-        # Same song requires some artist overlap -- a title match alone
-        # (covers, Christmas songs, coincidental titles) is never enough.
+        # Same song requires a shared *primary* artist -- a title match alone
+        # (covers, Christmas songs, coincidental titles) is never enough, and
+        # neither is a shared featured credit: "Song by B" and "Song by A
+        # feat. B" are surfaced together but pre-filled apart.
         # An undecided/unknown-suffixed track (a or b) never merges by
         # heuristic at all -- guessing there is worse than a click -- but
         # an existing real match always wins regardless of eligibility or
         # artist, since it's a fact, not a guess.
         if _same_real(tracks, a, b, "song"):
             return True
-        return _eligible(tracks, a) and _eligible(tracks, b) and bool(tracks[a]["artist_set"] & tracks[b]["artist_set"])
+        return _eligible(tracks, a) and _eligible(tracks, b) and bool(tracks[a]["primary_ids"] & tracks[b]["primary_ids"])
 
     def shares_base_version(tid):
         # base- and recording-classified tracks all sound like the original
@@ -375,7 +388,7 @@ def _build_all_groups(conn):
 
     main_groups, cross_groups = [], []
     for base, ids in buckets.items():
-        components = _group_by_rule(ids, lambda a, b: bool(tracks[a]["artist_set"] & tracks[b]["artist_set"]))
+        components = _group_by_rule(ids, lambda a, b: bool(tracks[a]["artist_ids"] & tracks[b]["artist_ids"]))
         for comp in components:
             if len(comp) >= 2:
                 reviewed = _all_reviewed(reviewed_pairs, comp)
