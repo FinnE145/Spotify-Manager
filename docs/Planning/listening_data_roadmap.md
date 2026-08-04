@@ -124,13 +124,23 @@ Read-only. Prerequisite for everything. The one pass that has to be right, becau
 
 ## I — Detection on the artist model
 
-Rework `canonical_detect.py` to match on the **artist ids** A captures (`track_artist` / `album_artist`) instead of the comma-joined `track.artists` string. Needs **no play history and no Spotify requests** — like B, it's work for a day the API budget is already spent.
+**Specced → `docs/specs/detection-artist-model.md`.** That spec is authoritative; the summary below is the shape, not the detail.
+
+Rework `canonical_detect.py` to match on the **artist ids** A captures (`track_artist` / `album_artist`) instead of the comma-joined `track.artists` string. Needs **no play history and effectively no Spotify requests** — like B, it's work for a day the API budget is already spent.
 
 **Why it sits here and not later.** Right now there is a fully-reviewed grouping baseline: 288 candidate groups all decided, yielding 106 version groups over 221 tracks and 461 reviewed pairs, across 3,589 tracks. That baseline is what makes the rework *checkable* — the new detection output can be diffed against known-good and the difference attributed. After D the library roughly triples with a foreign set skewed toward alternate editions, and there is no baseline left to diff against.
 
 Also unlocks the featured-artist question structurally: an artist credited on the track but not on its album is a feature, readable as `track_artist` minus `album_artist` rather than string-matching "feat." out of a title.
 
-**Scope:** the artist-model rework only. Deciding what to do with the resulting diff over the existing 288 groups is a separate call, made once the diff is visible.
+**Scope.** Bigger than "swap the match key" — matching on ids drags in three things that turn out to be prerequisites, not extras:
+
+- **An artist identity model.** Spotify issues more than one id for the same artist, so an id match splits pairs the name match correctly merged. Needs a sparse `artist_alias` table, a `reviewed_artist_pair` companion, and a small curation page to decide them. Without it the rework is a regression. Everything artist-level downstream — H's rollups above all — must resolve through it rather than grouping on the raw id.
+- **`track.artists` becomes write-only.** Once matching is on ids, the comma-joined string is the only thing still splitting `Tyler, The Creator` into two artists, so display and search have to move onto the join too. That means a rendered-artist read path in SQL (primaries, then a `feat.` clause), which every later page inherits instead of re-deriving.
+- **A metadata backfill.** A track that leaves every playlist between pulls freezes at whatever the last pull captured, because pulls only ever see tracks currently in a playlist — so it never gains its artist credits. One track today, but structural, and D's round-trip will make it routine. Needs a per-track re-fetch action; folding a live request counter into the snapshot UI while there is cheap.
+
+Deciding what to do with the resulting diff over the existing 288 groups stays a separate call, made once the diff is visible.
+
+**Expect the cost to land in the read path, not the rework.** Resolving aliases and deriving primary/featured per track is several joins deep over every credit; done naively it is slow enough to be unusable on the group-heavy pages, and the shape that fixes it is not the obvious one. Budget time for measuring rather than assuming.
 
 > Not to be confused with the mechanical album-column swap inside A: A drops `track.album_name` / `track.album_image_url` in favour of an `album` join, which changes no detection logic. I is the part that changes what detection matches on.
 

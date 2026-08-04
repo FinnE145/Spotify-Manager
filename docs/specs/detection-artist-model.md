@@ -83,7 +83,7 @@ A plain page, linked from the `/dev` landing page. Lists each candidate pair wit
 - **Same** — writes both `artist_alias` (the smaller side pointing at the canonical id) and `reviewed_artist_pair`.
 - **Not same** — writes `reviewed_artist_pair` only.
 
-Below the queue, a section lists already-merged aliases with an **Unmerge** action (deletes the `artist_alias` row and the `reviewed_artist_pair` row, returning the pair to the queue). Consistent with the canonical-tracks convention that nothing is a one-way door.
+Below the queue, a section lists already-merged aliases with an **Unmerge** action (deletes the `artist_alias` row and the `reviewed_artist_pair` rows tying that artist to its former group, returning those pairs to the queue). Clearing only the pair against the canonical id would strand the rest: in a 3+-id group the review that merged an artist may have been recorded against a sibling, which would then stay suppressed despite no longer being merged. Consistent with the canonical-tracks convention that nothing is a one-way door.
 
 Endpoints: `POST /api/artists/alias` `{artist_id_a, artist_id_b, same: bool}` and `POST /api/artists/unmerge` `{artist_id}`.
 
@@ -139,6 +139,10 @@ group_concat(ar.name, ', ' ORDER BY ta.position)
 
 Rendered as **`Primary A, Primary B (feat. Featured C, Featured D)`** — primaries in `position` order, then a parenthesised `feat.` clause only when `featured_ids` is non-empty. Artist names resolve through `artist_alias`, so a track credited to a duplicate id shows the canonical artist's name.
 
+*As built:* this landed as a chain of views in `db.VIEWS` rather than one shared SQL fragment — `resolved_track_artist` / `resolved_album_artist` (alias resolution, applied once per join table) → `track_artist_credit` (one row per resolved credit, flagged `is_album_artist`) → `track_artists` (the rendered string). Each step exists for a measured reason: expressing alias resolution inline as a correlated subquery made a full scan take 17s, and deriving the primary fallback via `NOT EXISTS` instead of a joined per-track aggregate took 19s. `track_artist_role` (primary vs featured, one row per credit) is a sibling of `track_artists`, not its input — routing the display string through it cost a second ungrouped aggregate that no `WHERE track_id = ?` could filter into, at 44ms per single-row lookup. `artists.artist_sets()` reads `track_artist_role`; the two agree on every track.
+
+Single-row reads stay slow for the same reason (SQLite won't push a `track_id` filter through the view's `GROUP BY`), so `canonical._artist_display` caches the whole view once per connection. That cache is never invalidated and is safe only because no request both writes artist data and renders track displays — see the note in its docstring before adding one that does.
+
 One track reads oddly under this rule and is left alone: `boygenius — Not Strong Enough` is credited `boygenius` on an album by `boygenius`, with the three members on the track, so it renders `boygenius (feat. Julien Baker, Phoebe Bridgers, Lucy Dacus)`. It is what Spotify says, it is exactly one track, and any fix needs a band-membership concept that exists nowhere in the data.
 
 **Search.** `t.artists LIKE ?` becomes an `EXISTS` over the join:
@@ -150,7 +154,7 @@ EXISTS (SELECT 1 FROM track_artist ta JOIN artist ar USING(artist_id)
 
 This closes a real gap — today `t.artists LIKE '%Tyler, The Creator%'` matches, but the mangled tokens mean artist-name search is unreliable for any name containing `", "`.
 
-**Call sites.** Four SQL reads (`app.py:259`, `app.py:273`, `app.py:306`, `app.py:326`, `canonical.py:336`), two search predicates (`app.py:262`, `canonical.py:380`), two JS spots (`canonical_review.js:411,459`), six template spots (`snapshot_track.html`, `snapshot_playlist.html`, `snapshot.html` ×2, `canonical.html` ×3). The display string is produced by one shared SQL fragment rather than repeated per query.
+**Call sites.** Four SQL reads in `app.py` (each `COALESCE(ta.artists, '')`, so a track with no credits renders empty rather than `None`) plus `canonical.track_display`, two search predicates (`app.py`, `canonical.py`), two JS spots (`canonical_review.js`), six template spots (`snapshot_track.html`, `snapshot_playlist.html`, `snapshot.html` ×2, `canonical.html` ×3). Every one reads the `track_artists` view rather than repeating the SQL.
 
 ---
 
@@ -167,6 +171,7 @@ A track that leaves every playlist between pulls freezes at whatever the last pu
 - Runs through the same `_start` / status machinery with `phase = "backfill"`, `run_total = n`, `run_done = i`, so the existing progress bar works unchanged.
 - Fetches one track at a time via `GET /v1/tracks/{id}` — the batch `?ids=` endpoint 403s for this app (`docs/spotify_constraints.md`), so requests really do equal tracks and the button's count is honest.
 - Reuses A's existing parse/upsert path, so it fills `raw_json`, the album, and the `track_artist` / `album_artist` rows exactly as a pull would. A 404 or other per-track failure is recorded in `failed_playlists` (reused as the run's generic failure list) and does not abort the run; `RateLimited` aborts, as in a pull.
+- Those failures carry **track** ids, so the post-run "exclude what failed" button — a playlist-level action — must never be offered for a backfill. `_status` therefore records the run's `action` (`pull` | `refresh` | `backfill`), which unlike `phase` survives into the terminal state; the page reads it from the status poll rather than remembering what it started, so a mid-run reload still suppresses the button.
 - `POST /api/snapshot/backfill`, mirroring `/api/snapshot/pull`.
 
 ### Request counter
