@@ -3,6 +3,7 @@ import secrets
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
+import artists
 import canonical
 import canonical_detect
 import db
@@ -103,6 +104,16 @@ def create_app():
     def dev_index():
         return render_template("dev.html", active="dev")
 
+    @app.route("/dev/artists", endpoint="dev_artists")
+    def artists_index():
+        conn = db.get_db()
+        return render_template(
+            "artists.html",
+            active="dev_artists",
+            pairs=artists.candidate_pairs(conn),
+            merged=artists.merged_groups(conn),
+        )
+
     @app.route("/dev/canonical", endpoint="dev_canonical")
     def canonical_index():
         conn = db.get_db()
@@ -129,8 +140,10 @@ def create_app():
         if search_q:
             like = f"%{search_q}%"
             rows = conn.execute(
-                "SELECT track_id FROM track WHERE name LIKE ? OR artists LIKE ? "
-                "ORDER BY name COLLATE NOCASE LIMIT 100",
+                "SELECT t.track_id FROM track t WHERE t.name LIKE ? "
+                "   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id) "
+                "              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "
+                "ORDER BY t.name COLLATE NOCASE LIMIT 100",
                 (like, like),
             ).fetchall()
             for row in rows:
@@ -256,10 +269,13 @@ def create_app():
             like = f"%{q}%"
             track_matches = conn.execute(
                 """
-                SELECT t.track_id, t.name, t.artists, COUNT(m.id) AS appearances
+                SELECT t.track_id, t.name, ta.artists, COUNT(m.id) AS appearances
                 FROM track t
                 JOIN membership m ON m.track_id = t.track_id AND m.removed_at IS NULL
-                WHERE t.name LIKE ? OR t.artists LIKE ?
+                LEFT JOIN track_artists ta ON ta.track_id = t.track_id
+                WHERE t.name LIKE ?
+                   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id)
+                              WHERE x.track_id = t.track_id AND ar.name LIKE ?)
                 GROUP BY t.track_id
                 ORDER BY t.name COLLATE NOCASE
                 LIMIT 50
@@ -270,12 +286,13 @@ def create_app():
         changes = conn.execute(
             """
             SELECT m.playlist_id, s.name AS playlist_name, m.track_id, t.name AS track_name,
-                   t.artists, m.added_at, m.removed_at,
+                   ta.artists, m.added_at, m.removed_at,
                    COALESCE(m.removed_at, m.added_at) AS event_at,
                    CASE WHEN m.removed_at IS NOT NULL THEN 'removed' ELSE 'added' END AS kind
             FROM membership m
             JOIN snapshot s ON s.playlist_id = m.playlist_id
             JOIN track t ON t.track_id = m.track_id
+            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
             ORDER BY event_at DESC
             LIMIT 50
             """
@@ -303,11 +320,12 @@ def create_app():
 
         rows = conn.execute(
             """
-            SELECT m.id, m.track_id, t.name, t.artists, a.name AS album_name, m.added_at,
+            SELECT m.id, m.track_id, t.name, ta.artists, a.name AS album_name, m.added_at,
                    m.removed_at, m.position
             FROM membership m
             JOIN track t ON t.track_id = m.track_id
             LEFT JOIN album a ON a.album_id = t.album_id
+            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
             WHERE m.playlist_id = ?
             ORDER BY m.position
             """,
@@ -323,12 +341,13 @@ def create_app():
         conn = db.get_db()
         track = conn.execute(
             """
-            SELECT t.track_id, t.name, t.artists, t.album_id, t.duration_ms, t.explicit,
+            SELECT t.track_id, t.name, ta.artists, t.album_id, t.duration_ms, t.explicit,
                    t.external_url, t.uri, t.isrc, t.track_number, t.disc_number, t.is_playable,
                    t.linked_from, t.linked_from_id,
                    a.name AS album_name, a.image_url AS album_image_url
             FROM track t
             LEFT JOIN album a ON a.album_id = t.album_id
+            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
             WHERE t.track_id = ?
             """,
             (track_id,),
@@ -422,6 +441,14 @@ def create_app():
             return jsonify({"error": "already_running"}), 409
         return jsonify({"started": True})
 
+    @app.route("/api/snapshot/backfill", methods=["POST"])
+    def backfill_snapshot():
+        if get_spotify_client() is None:
+            return jsonify({"error": "not_authenticated"}), 401
+        if not snapshot.start_backfill():
+            return jsonify({"error": "already_running"}), 409
+        return jsonify({"started": True})
+
     @app.route("/api/snapshot/status")
     def snapshot_status():
         conn = db.get_db()
@@ -437,6 +464,32 @@ def create_app():
             abort(400, description="playlist_ids required")
         conn = db.get_db()
         snapshot.set_excluded(conn, playlist_ids, bool(body.get("excluded")))
+        return jsonify({"ok": True})
+
+    # -- Artists ------------------------------------------------------
+
+    @app.route("/api/artists/alias", methods=["POST"])
+    def alias_artists():
+        body = request.get_json()
+        artist_id_a = body.get("artist_id_a")
+        artist_id_b = body.get("artist_id_b")
+        if not artist_id_a or not artist_id_b:
+            abort(400, description="artist_id_a and artist_id_b required")
+        conn = db.get_db()
+        if body.get("same"):
+            artists.mark_same(conn, artist_id_a, artist_id_b)
+        else:
+            artists.mark_not_same(conn, artist_id_a, artist_id_b)
+        return jsonify({"ok": True})
+
+    @app.route("/api/artists/unmerge", methods=["POST"])
+    def unmerge_artist():
+        body = request.get_json()
+        artist_id = body.get("artist_id")
+        if not artist_id:
+            abort(400, description="artist_id required")
+        conn = db.get_db()
+        artists.unmerge(conn, artist_id)
         return jsonify({"ok": True})
 
     # -- Board state -------------------------------------------------
