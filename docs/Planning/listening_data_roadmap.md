@@ -8,36 +8,47 @@
 
 ## Verified facts
 
-Everything in this section was measured in July 2026. Don't re-derive it; don't trust a number that contradicts it without re-measuring.
+Measured in July 2026, **re-measured 2026-08-03** during C's planning session (after A and I landed, and against the real export rather than the earlier analysis). Don't re-derive it; don't trust a number that contradicts it without re-measuring.
 
 ### DB / library state
 
+Re-measured 2026-08-03.
+
 | | |
 |---|---|
-| Playlists | 150 (143 pullable, 7 permanently 403 on item reads) |
-| Tracks | 3,589 |
-| Memberships | 12,448 (4 with `removed_at`) |
+| Playlists | 151 (143 pullable, 7 excluded — permanently 403 on item reads) |
+| Tracks | 3,611 |
+| Memberships | 12,513 (5 with `removed_at`) |
 | Tracks missing ISRC | **0** |
 | Memberships missing `added_at` | **0** |
-| Last full pull | 2026-07-27 |
+| Last full pull | 2026-08-03 |
 
 **Canonical grouping is complete for the current library.** 288 candidate groups have been produced and *all* reviewed (`candidate_groups()` and `cross_artist_groups()` both return 0). That yielded 106 multi-track version groups covering 221 tracks, and 461 reviewed pairs. The low coverage is not an unworked queue — it's the true answer for the tracks Symr can currently see.
 
-**A full snapshot pull costs 232 requests**: 3 for the playlist list (150/50), 222 for playlist items (`ceil(track_count/100)` summed over 143 playlists), 7 wasted on the playlists that 403. With the exclude flag (feature A) this drops to ~225.
+**A full snapshot pull cost 232 requests** as measured in July: 3 for the playlist list (150/50), 222 for playlist items (`ceil(track_count/100)` summed over 143 playlists), 7 wasted on the playlists that 403. A's exclude flag has since landed and removes the wasted 7. Not re-measured in August — the item-page count drifts with the library.
 
 ### Streaming history export
 
-Nine `Streaming_History_Audio_*.json` files, 69 MB, **2020-02-12 → 2026-06-30**.
+**Thirteen** JSON files, 69 MB, **2020-02-12 → 2026-06-30** — nine `Streaming_History_Audio_*.json` **and four `Streaming_History_Video_*.json`**, the latter missed by the original count. The 23 keys are identical in every file, audio and video alike, across all seven years.
+
+Re-measured 2026-08-03 over all 13 files, against the 3,611-track DB.
 
 | | |
 |---|---|
-| Play rows | 90,161 (303 more are podcast episodes with null track names — filter them) |
-| Distinct track URIs | 8,780 — **all** `spotify:track:`, no local files |
-| In library | 2,814 |
-| Foreign (never in any playlist) | 5,966 |
-| Plays on in-library URIs | 76,263 (**84.9%**) |
-| Library tracks never played | 775 |
+| Rows, all files | 90,662 |
+| Rows with a track URI | 90,351 (89,858 audio + **493 video**) |
+| Rows discarded | 311 — 310 podcast episodes, 1 with neither track nor episode URI |
+| Rows stored after dedup | 90,338 (13 byte-identical duplicates collapsed) |
+| Distinct track URIs | 8,908 — **all** `spotify:track:`, no local files |
+| In library | 2,820 |
+| Foreign (never in any playlist) | 6,088 |
+| Plays on in-library URIs | 76,399 (**84.6%**) |
+| Library tracks never played | 791 |
 | Avg play-row JSON | 715 bytes |
+
+**The video files hold real track plays, not podcasts.** 493 of their 501 rows carry a `spotify_track_uri` (music videos — Spotify autoplays video versions on mobile), 7 are podcast episodes, 1 is neither. **None of the 493 appear in the audio files**, so ignoring those files loses real plays. They contribute 128 URIs the audio files never mention.
+
+**`offline_timestamp` has mixed units in the same column** — 73,656 values seconds-scale, 852 milliseconds-scale. Anything treating it as one unit is wrong by 1000× on part of the data.
 
 **New foreign URIs arrive slowly** — this is what makes the round-trip cheap to keep:
 
@@ -48,7 +59,7 @@ Nine `Streaming_History_Audio_*.json` files, 69 MB, **2020-02-12 → 2026-06-30*
 | 6 months | 566 | 6 |
 | 12 months | 1,243 | 13 |
 
-**Foreign URIs are mostly a genuine long tail, not rare editions of known songs.** Normalized title+artist matching against the library:
+**Foreign URIs are mostly a genuine long tail, not rare editions of known songs.** Normalized title+artist matching against the library. Both this table and the arrival table above are the **July 2026 audio-only** measurements, not re-run in August — they exclude the 127 video-only foreign URIs, which is under 2% and moves no conclusion here.
 
 | Foreign URI plays | URIs | Name-match a library song |
 |---|---:|---:|
@@ -146,13 +157,15 @@ Deciding what to do with the resulting diff over the existing 288 groups stays a
 
 ## C — Play history ingestion
 
-- `play` table, `source` column (`export` | `listenbrainz`), unique `(ts, spotify_track_uri)`, `INSERT OR IGNORE`.
-- **Full re-import every time; no incremental logic.** Offline plays are backdated to when they happened, so a high-water-mark import silently drops rows.
-- **Keep every uploaded export on disk.** The files are the durable store — re-parsing costs zero API calls, so no parse decision is ever irreversible.
-- **Parse generously**: every field the export offers, including `ip_addr` and the connection metadata. Storage is trivial and "we might want it" has already been the right call twice.
-- Filter the 303 podcast-episode rows. Store `platform` raw, normalize at query time.
+**Specced → `docs/specs/play-history-C.md`.** That spec is authoritative; the summary below is the shape, not the detail. Planning measured the real export and **corrected three claims made here**: `(ts, spotify_track_uri)` is not unique (228 duplicated keys, all within a single file — it would drop 255 real plays, so dedup is on a row hash instead); the export also ships `Streaming_History_Video_*.json` holding 493 track plays that appear nowhere in the audio files; and the discarded non-track rows are 311, not 303.
+
+- `play` table, `source` column (`export` | `listenbrainz`), unique `row_hash`, `INSERT OR IGNORE`.
+- **No incremental logic.** Offline plays are backdated to when they happened, so a high-water-mark import silently drops rows. Narrowed in the spec: an import re-reads the newest upload folder whole, which is equivalent given exports are cumulative and `play` rows are never deleted.
+- **Keep every uploaded export on disk**, one folder per upload — the export's file chunking is not stable between exports, so a flat folder can't say which files belonged to which upload. The files are the durable store; re-parsing costs zero API calls, so no parse decision is ever irreversible.
+- **Parse generously**: every field the export offers, including `ip_addr` and the connection metadata. The exception is the seven `audiobook_*` / `episode_*` keys, permanently NULL once the non-track rows are filtered out.
+- Filter the 311 non-track rows. Store `platform` raw, normalize at query time; normalize `offline_timestamp`'s mixed units **at import**.
 - Upload UI from the start (file upload + progress), not a script — the backend is permanent either way and the UI is minutes of work.
-- Flag foreign URIs as unresolved; in-library plays (84.9%) become queryable immediately.
+- **Foreign URIs are not flagged** — "foreign" is the absence of a matching `track` row, resolved by a query-time join on `track.uri`. A stored flag would go stale the moment D lands. In-library plays (84.6%) become queryable immediately.
 
 **ListenBrainz, later.** Not an alternative to the export — the export is the only source of 2020–2026 back history. LB becomes a second writer into the same table. Its listens carry **`spotify_id`** as a first-class field, so Spotify-sourced scrobbles land on the same `track_id` with no MBID resolution needed; the recording MBID is a bonus on top. Precedence rule: on export import, delete `listenbrainz` rows inside the export's covered range, then insert. Export wins where it overlaps.
 
@@ -160,7 +173,7 @@ Deciding what to do with the resulting diff over the existing 288 groups stays a
 
 ## D — Foreign-track round-trip
 
-The project's **first write to the Spotify library**. Turns the 5,966 foreign URIs into real `track` rows with full metadata for ~121 requests instead of 5,966.
+The project's **first write to the Spotify library**. Turns the 6,088 foreign URIs into real `track` rows with full metadata for ~122 requests instead of 6,088.
 
 - Needs `playlist-modify-private`; delete `.spotipy_cache` and re-auth.
 - **Finn creates the temp playlist manually** and sets its exclude flag. Code only looks up its id (stored in `meta`) — no create/delete logic.
@@ -174,7 +187,7 @@ The project's **first write to the Spotify library**. Turns the 5,966 foreign UR
 
 ## E — Grouping catch-up
 
-Detection reruns over ~9,555 tracks instead of 3,589. **Volume is genuinely unknown** — currently 288 groups over the whole library, but the foreign set skews toward alternate editions. Deliberately unplanned until it can be measured after D. If it's a few hundred, the existing Enter-key workflow holds and nothing needs building.
+Detection reruns over ~9,699 tracks instead of 3,611. **Volume is genuinely unknown** — currently 288 groups over the whole library, but the foreign set skews toward alternate editions. Deliberately unplanned until it can be measured after D. If it's a few hundred, the existing Enter-key workflow holds and nothing needs building.
 
 ## B — Generation engine
 
