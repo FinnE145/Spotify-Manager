@@ -33,8 +33,13 @@ class RateLimited(Exception):
 
 def _call(fn, *args, **kwargs):
     """Calls a Spotipy method, retrying once through a short rate-limit
-    wait but raising RateLimited on a long one instead of blocking."""
+    wait but raising RateLimited on a long one instead of blocking.
+
+    Every Spotify request in this module goes through here, which is what
+    makes the run's request counter a single increment. A 429 retry counts
+    too -- it really did hit the API."""
     for attempt in range(2):
+        _count_request()
         try:
             return fn(*args, **kwargs)
         except SpotifyException as e:
@@ -61,6 +66,9 @@ _status = {
     "error": None,
     "retry_at": None,
     "failed_playlists": [],
+    # Spotify requests issued by the current run. Per-run only, reset at the
+    # start of each one; nothing is persisted.
+    "requests": 0,
 }
 
 
@@ -71,6 +79,11 @@ def _now_iso():
 def _set_status(**kwargs):
     with _status_lock:
         _status.update(kwargs)
+
+
+def _count_request():
+    with _status_lock:
+        _status["requests"] += 1
 
 
 def _record_failure(conn, playlist_id, name, error):
@@ -104,9 +117,18 @@ def summary_counts(conn):
         "live_memberships": conn.execute(
             "SELECT COUNT(*) FROM membership WHERE removed_at IS NULL"
         ).fetchone()[0],
+        "backfill_pending": backfill_pending(conn),
         "last_full_pull_at": _get_meta(conn, "last_full_pull_at"),
         "last_refresh_at": _get_meta(conn, "last_refresh_at"),
     }
+
+
+def backfill_pending(conn):
+    """Tracks carrying only pre-metadata-capture fields. A track that leaves
+    every playlist between pulls freezes at whatever the last pull got --
+    pulls only ever see tracks currently in a playlist -- so it never picks
+    up raw_json or its artist credits. Structural, and it recurs."""
+    return conn.execute("SELECT COUNT(*) FROM track WHERE raw_json IS NULL").fetchone()[0]
 
 
 def set_excluded(conn, playlist_ids, excluded):
@@ -122,39 +144,48 @@ def set_excluded(conn, playlist_ids, excluded):
 
 
 def start_full_pull():
-    return _start(force_all=True)
+    return _start(_run_pull, True)
 
 
 def start_refresh():
-    return _start(force_all=False)
+    return _start(_run_pull, False)
 
 
-def _start(force_all):
+def start_backfill():
+    return _start(_run_backfill)
+
+
+def _start(target, *args):
     with _status_lock:
         if _status["running"]:
             return False
         _status["running"] = True
-    thread = threading.Thread(target=_run_pull, args=(force_all,), daemon=True)
+    thread = threading.Thread(target=target, args=args, daemon=True)
     thread.start()
     return True
+
+
+def _reset_status(phase):
+    _set_status(
+        running=True,
+        phase=phase,
+        run_total=0,
+        run_done=0,
+        current_playlist=None,
+        started_at=_now_iso(),
+        finished_at=None,
+        error=None,
+        retry_at=None,
+        failed_playlists=[],
+        requests=0,
+    )
 
 
 def _run_pull(force_all):
     conn = db.connect()
     sp = get_spotify_client()
     try:
-        _set_status(
-            running=True,
-            phase="playlists",
-            run_total=0,
-            run_done=0,
-            current_playlist=None,
-            started_at=_now_iso(),
-            finished_at=None,
-            error=None,
-            retry_at=None,
-            failed_playlists=[],
-        )
+        _reset_status("playlists")
         if sp is None:
             raise RuntimeError("not_authenticated")
 
@@ -196,6 +227,58 @@ def _run_pull(force_all):
         canonical.ensure_track_groups(conn)
         conn.commit()
 
+        _set_status(phase="done", finished_at=_now_iso())
+    except RateLimited as e:
+        _set_status(phase="error", error=str(e), retry_at=e.retry_at, finished_at=_now_iso())
+    except Exception as e:
+        _set_status(phase="error", error=str(e), finished_at=_now_iso())
+    finally:
+        _set_status(running=False)
+        conn.close()
+
+
+def _run_backfill():
+    """Refills tracks stuck without raw_json, one GET /v1/tracks/{id} each --
+    the batch ?ids= endpoint 403s for this app, so requests really do equal
+    tracks. Touches no membership rows: this is metadata only."""
+    conn = db.connect()
+    sp = get_spotify_client()
+    try:
+        _reset_status("backfill")
+        if sp is None:
+            raise RuntimeError("not_authenticated")
+
+        track_ids = [
+            row["track_id"]
+            for row in conn.execute(
+                "SELECT track_id FROM track WHERE raw_json IS NULL ORDER BY track_id"
+            )
+        ]
+        _set_status(run_total=len(track_ids), run_done=0)
+
+        for i, track_id in enumerate(track_ids):
+            _set_status(current_playlist=track_id, run_done=i)
+            try:
+                track = _call(sp.track, track_id)
+                if not _usable_track(track):
+                    raise RuntimeError("track unavailable")
+                _upsert_track_full(conn, _parse_track_item(track, None, None))
+                conn.commit()
+            except RateLimited:
+                # An app-level quota block affects every request, not just
+                # this track -- abort rather than burning the rest.
+                conn.rollback()
+                raise
+            except Exception as e:
+                conn.rollback()
+                with _status_lock:
+                    _status["failed_playlists"].append(
+                        {"playlist_id": track_id, "name": track_id, "error": str(e)}
+                    )
+        _set_status(run_done=len(track_ids), current_playlist=None)
+
+        canonical.ensure_track_groups(conn)
+        conn.commit()
         _set_status(phase="done", finished_at=_now_iso())
     except RateLimited as e:
         _set_status(phase="error", error=str(e), retry_at=e.retry_at, finished_at=_now_iso())

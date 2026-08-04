@@ -19,6 +19,8 @@
     </p>
     <p class="meta">
       <span data-field="live_memberships">{{ summary.live_memberships }}</span> live memberships
+      &middot; <span data-field="backfill_pending">{{ summary.backfill_pending }}</span>
+      track<span data-plural-for="backfill_pending">{{ "" if summary.backfill_pending == 1 else "s" }}</span> awaiting backfill
     </p>
     <p class="meta">
       Last full pull:
@@ -29,13 +31,20 @@
     <div id="snapshot-progress" class="progress-bar" hidden>
       <div id="snapshot-progress-fill" class="progress-bar-fill"></div>
     </div>
-    <p id="snapshot-progress-label" class="meta" hidden></p>
+    <div class="progress-meta">
+      <p id="snapshot-progress-label" class="meta" hidden></p>
+      <p id="snapshot-requests" class="meta" hidden><span data-field="requests">0</span> requests</p>
+    </div>
   </section>
 
   <section class="panel">
     <h2>Controls</h2>
     <button id="pull-btn" type="button">Full pull</button>
     <button id="refresh-btn" type="button">Refresh</button>
+    <button id="backfill-btn" type="button" {{ 'disabled' if not summary.backfill_pending }}>
+      Backfill (<span data-field="backfill_pending">{{ summary.backfill_pending }}</span>
+      request<span data-plural-for="backfill_pending">{{ "" if summary.backfill_pending == 1 else "s" }}</span>)
+    </button>
     <p id="snapshot-error" class="error" hidden></p>
   </section>
 

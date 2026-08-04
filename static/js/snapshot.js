@@ -55,12 +55,14 @@
 
   const pullBtn = document.getElementById("pull-btn");
   const refreshBtn = document.getElementById("refresh-btn");
+  const backfillBtn = document.getElementById("backfill-btn");
   if (!pullBtn && !refreshBtn) return;
 
   const errorEl = document.getElementById("snapshot-error");
   const progressEl = document.getElementById("snapshot-progress");
   const progressFill = document.getElementById("snapshot-progress-fill");
   const progressLabel = document.getElementById("snapshot-progress-label");
+  const requestsEl = document.getElementById("snapshot-requests");
   const hideUncapturableToggle = document.getElementById("hide-uncapturable-toggle");
 
   // ---------- uncapturable-playlist toggle ----------
@@ -79,6 +81,10 @@
   function setField(name, value) {
     document.querySelectorAll(`[data-field="${name}"]`).forEach((el) => {
       el.textContent = value;
+    });
+    // Companion "s" spans, so a live-updated count doesn't leave "1 tracks".
+    document.querySelectorAll(`[data-plural-for="${name}"]`).forEach((el) => {
+      el.textContent = value === 1 ? "" : "s";
     });
   }
 
@@ -102,15 +108,32 @@
     });
   }
 
+  // Tracked separately from `running` so the backfill button doesn't get
+  // re-enabled at the end of a run that left nothing to backfill.
+  let backfillPending = backfillBtn ? !backfillBtn.disabled : false;
+
+  // Which action this page started, so the terminal message can say
+  // "Backfill finished" rather than "Pull finished". A run picked up from
+  // another page (or a mid-run reload) reports as a pull, which is the
+  // common case and never wrong about anything but the noun.
+  let lastAction = "pull";
+
   function setRunning(running) {
     if (pullBtn) pullBtn.disabled = running;
     if (refreshBtn) refreshBtn.disabled = running;
+    if (backfillBtn) backfillBtn.disabled = running || !backfillPending;
     progressEl.hidden = !running;
+    requestsEl.hidden = !running;
   }
 
   function phaseLabel(status) {
     if (status.phase === "tracks") {
       let label = `Pulling tracks: ${status.run_done}/${status.run_total}`;
+      if (status.current_playlist) label += ` (${status.current_playlist})`;
+      return label;
+    }
+    if (status.phase === "backfill") {
+      let label = `Backfilling tracks: ${status.run_done}/${status.run_total}`;
       if (status.current_playlist) label += ` (${status.current_playlist})`;
       return label;
     }
@@ -131,13 +154,19 @@
     progressLabel.textContent = "";
     errorEl.hidden = true; // terminal state is fully described here, not duplicated below
 
+    // A backfill reuses this whole status/progress machinery, so the wording
+    // follows whichever action was started rather than saying "Pull".
+    const backfill = lastAction === "backfill";
+    const noun = backfill ? "Backfill" : "Pull";
+    const unit = backfill ? "track" : "playlist";
+
     if (status.error) {
       if (status.retry_at) {
-        progressLabel.append("Pull failed: Rate limited by Spotify — retry ");
+        progressLabel.append(`${noun} failed: Rate limited by Spotify — retry `);
         progressLabel.appendChild(makeDateSpan(status.retry_at));
       } else {
         const summary = document.createElement("span");
-        summary.textContent = `Pull failed: ${status.error}`;
+        summary.textContent = `${noun} failed: ${status.error}`;
         progressLabel.appendChild(summary);
       }
       return;
@@ -146,8 +175,8 @@
     const failed = status.failed_playlists || [];
     const summary = document.createElement("span");
     summary.textContent = failed.length
-      ? `Pull finished — ${failed.length} playlist(s) failed:`
-      : "Pull finished.";
+      ? `${noun} finished — ${failed.length} ${unit}(s) failed:`
+      : `${noun} finished.`;
     progressLabel.appendChild(summary);
 
     const reloadLink = document.createElement("a");
@@ -166,7 +195,11 @@
         list.appendChild(li);
       });
       progressLabel.appendChild(list);
+    }
 
+    // Exclusion is a playlist-level flag, so it must never be offered for a
+    // backfill's failures -- those entries carry track ids, not playlist ids.
+    if (failed.length && !backfill) {
       const excludeBtn = document.createElement("button");
       excludeBtn.type = "button";
       const excludeLabel = `Exclude the ${failed.length} playlist${failed.length === 1 ? "" : "s"} that failed`;
@@ -208,9 +241,12 @@
       setField("playlists_excluded", status.playlists_excluded);
       setFailingField(status.playlists_failing);
       setField("live_memberships", status.live_memberships);
+      setField("backfill_pending", status.backfill_pending);
+      setField("requests", status.requests);
       setDateField("last_full_pull_at", status.last_full_pull_at);
       setDateField("last_refresh_at", status.last_refresh_at);
 
+      backfillPending = status.backfill_pending > 0;
       setRunning(status.running);
 
       if (status.running) {
@@ -230,7 +266,8 @@
     });
   }
 
-  function start(path) {
+  function start(path, action) {
+    lastAction = action;
     errorEl.hidden = true;
     api(path, { method: "POST" })
       .then((data) => {
@@ -248,12 +285,15 @@
       });
   }
 
-  if (pullBtn) pullBtn.addEventListener("click", () => start("/api/snapshot/pull"));
-  if (refreshBtn) refreshBtn.addEventListener("click", () => start("/api/snapshot/refresh"));
+  if (pullBtn) pullBtn.addEventListener("click", () => start("/api/snapshot/pull", "pull"));
+  if (refreshBtn) refreshBtn.addEventListener("click", () => start("/api/snapshot/refresh", "refresh"));
+  if (backfillBtn) backfillBtn.addEventListener("click", () => start("/api/snapshot/backfill", "backfill"));
 
-  // Pick up a pull already running (e.g. kicked off from the Canvas page).
+  // Pick up a run already going (e.g. kicked off from the Canvas page, or a
+  // page reload mid-pull) -- the counter reconnects to its running total.
   api("/api/snapshot/status").then((status) => {
     if (status.running) {
+      setField("requests", status.requests);
       setRunning(true);
       poll();
     }
