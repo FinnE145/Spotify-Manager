@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span %}
+
+{% block title %}Symr — Play History{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Play History</h1>
+  <p class="meta">
+    Imports a Spotify GDPR &ldquo;Extended Streaming History&rdquo; export. Local file only —
+    no Spotify requests, no writes to the library.
+  </p>
+
+  <section class="panel">
+    <h2>Upload</h2>
+    <form id="upload-form">
+      <input type="file" id="history-file" name="file" accept=".zip,application/zip">
+      <button id="upload-btn" type="submit">Upload &amp; import</button>
+      <button id="reimport-btn" type="button" {{ 'disabled' if not has_upload }}>
+        Re-import newest upload
+      </button>
+    </form>
+    <p id="snapshot-busy-note" class="meta" hidden>A snapshot pull is running — imports wait for it.</p>
+    <div id="import-progress" class="progress-bar" hidden>
+      <div id="import-progress-fill" class="progress-bar-fill"></div>
+    </div>
+    <p id="import-progress-label" class="meta" hidden></p>
+    <p id="import-error" class="error" hidden></p>
+  </section>
+
+  <section class="panel">
+    <h2>Coverage</h2>
+    <table class="data-table">
+      <tbody>
+        <tr>
+          <th>Total plays</th>
+          <td><span data-field="total_plays">{{ "{:,}".format(coverage.total_plays) }}</span></td>
+        </tr>
+        <tr>
+          <th>Distinct played URIs</th>
+          <td><span data-field="distinct_uris">{{ "{:,}".format(coverage.distinct_uris) }}</span></td>
+        </tr>
+        <tr>
+          <th>In library / foreign</th>
+          <td>
+            <span data-field="in_library_uris">{{ "{:,}".format(coverage.in_library_uris) }}</span> /
+            <span data-field="foreign_uris">{{ "{:,}".format(coverage.foreign_uris) }}</span>
+          </td>
+        </tr>
+        <tr>
+          <th>Plays on in-library tracks</th>
+          <td>
+            <span data-field="in_library_plays">{{ "{:,}".format(coverage.in_library_plays) }}</span>
+            (<span data-field="in_library_pct">{{ coverage.in_library_pct }}</span>%)
+          </td>
+        </tr>
+        <tr>
+          <th>Date range</th>
+          <td>
+            <span data-field="play_range_start" {% if coverage.play_range_start %}data-datetime="{{ coverage.play_range_start }}"{% endif %}>{{ coverage.play_range_start or "—" }}</span>
+            →
+            <span data-field="play_range_end" {% if coverage.play_range_end %}data-datetime="{{ coverage.play_range_end }}"{% endif %}>{{ coverage.play_range_end or "—" }}</span>
+          </td>
+        </tr>
+        <tr>
+          <th>Library tracks never played</th>
+          <td>
+            <span data-field="tracks_never_played">{{ "{:,}".format(coverage.tracks_never_played) }}</span>
+            of <span data-field="tracks_total">{{ "{:,}".format(coverage.tracks_total) }}</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Import history</h2>
+    {% if imports %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>When</th>
+          <th>Kind</th>
+          <th>File</th>
+          <th>Files</th>
+          <th>Rows read</th>
+          <th>Rows inserted</th>
+          <th>Covered range</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for imp in imports %}
+        <tr>
+          <td>{{ datetime_span(imp.uploaded_at) }}</td>
+          <td>{{ imp.kind }}</td>
+          <td>{{ imp.original_name or "" }}</td>
+          <td>{{ imp.files_parsed if imp.files_parsed is not none else "" }}</td>
+          <td>{{ "{:,}".format(imp.rows_read) if imp.rows_read is not none else "" }}</td>
+          <td>{{ "{:,}".format(imp.rows_inserted) if imp.rows_inserted is not none else "" }}</td>
+          <td>
+            {%- if imp.range_start -%}
+            {{ datetime_span(imp.range_start) }} → {{ datetime_span(imp.range_end) }}
+            {%- endif -%}
+          </td>
+          <td class="error">{{ imp.error or "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="meta">
+      A re-import reading rows but inserting none is the expected result — it means nothing
+      in the export changed.
+    </p>
+    {% else %}
+    <p class="empty">Nothing imported yet — upload an export zip.</p>
+    {% endif %}
+  </section>
+</main>
+<script src="{{ url_for('static', filename='js/history_import.js') }}"></script>
+{% endblock %}

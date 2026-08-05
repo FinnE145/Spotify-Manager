@@ -7,8 +7,9 @@ import artists
 import canonical
 import canonical_detect
 import db
+import history_import
 import snapshot
-from config import APP_DEBUG, APP_PORT, SECRET_KEY
+from config import APP_DEBUG, APP_PORT, MAX_CONTENT_LENGTH, SECRET_KEY
 from grouping import render_export_text
 from spotify_client import get_auth_manager, get_spotify_client
 
@@ -16,6 +17,7 @@ from spotify_client import get_auth_manager, get_spotify_client
 def create_app():
     app = Flask(__name__)
     app.secret_key = SECRET_KEY
+    app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     db.init_db()
 
     app.teardown_appcontext(db.close_db)
@@ -112,6 +114,17 @@ def create_app():
             active="dev_artists",
             pairs=artists.candidate_pairs(conn),
             merged=artists.merged_groups(conn),
+        )
+
+    @app.route("/dev/import", endpoint="dev_import")
+    def history_import_index():
+        conn = db.get_db()
+        return render_template(
+            "history_import.html",
+            active="dev_import",
+            coverage=history_import.coverage_counts(conn),
+            imports=history_import.import_rows(conn),
+            has_upload=history_import.latest_upload(conn) is not None,
         )
 
     @app.route("/dev/canonical", endpoint="dev_canonical")
@@ -465,6 +478,44 @@ def create_app():
         conn = db.get_db()
         snapshot.set_excluded(conn, playlist_ids, bool(body.get("excluded")))
         return jsonify({"ok": True})
+
+    # -- Play history -------------------------------------------------
+
+    @app.route("/api/history/import", methods=["POST"])
+    def import_history():
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            abort(400, description="A .zip export file is required.")
+        if not upload.filename.lower().endswith(".zip"):
+            abort(400, description="Upload the export .zip itself, not its contents.")
+        # Checked before the file is copied anywhere, so a rejected import
+        # doesn't leave a ~66 MB orphan folder behind.
+        if history_import.busy():
+            return jsonify({"error": "already_running"}), 409
+        folder = history_import.save_upload(upload)
+        if not history_import.start_upload(folder, upload.filename):
+            return jsonify({"error": "already_running"}), 409
+        return jsonify({"started": True})
+
+    @app.route("/api/history/reimport", methods=["POST"])
+    def reimport_history():
+        conn = db.get_db()
+        latest = history_import.latest_upload(conn)
+        if latest is None:
+            abort(400, description="Nothing uploaded yet — there's no folder to re-import.")
+        if not history_import.start_reimport(latest["folder"], latest["original_name"]):
+            return jsonify({"error": "already_running"}), 409
+        return jsonify({"started": True})
+
+    @app.route("/api/history/status")
+    def history_status():
+        conn = db.get_db()
+        status = history_import.get_status()
+        status.update(history_import.coverage_counts(conn))
+        # So the page can grey its buttons out during a pull rather than
+        # taking the whole upload and only then answering 409.
+        status["snapshot_running"] = snapshot.get_status()["running"]
+        return jsonify(status)
 
     # -- Artists ------------------------------------------------------
 

@@ -167,7 +167,8 @@ body.immersive {
 }
 
 #snapshot-progress-label button,
-#snapshot-progress-label a {
+#snapshot-progress-label a,
+#import-progress-label a {
   display: block;
   margin-top: 8px;
 }
