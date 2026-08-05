@@ -7,6 +7,7 @@ __pycache__/
 *.db-shm
 *.db-wal
 instance/
+data/
 .spotipy_cache*
 .claude/*
 !.claude/skills/

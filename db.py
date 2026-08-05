@@ -179,6 +179,61 @@ CREATE TABLE IF NOT EXISTS reviewed_artist_pair (
     decided_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (artist_id_a, artist_id_b)
 );
+
+-- One row per import run of the GDPR extended-streaming-history export
+-- (see docs/specs/play-history-C.md). Kept even when the run failed, so
+-- the failure stays visible on /dev/import.
+CREATE TABLE IF NOT EXISTS play_import (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL CHECK (kind IN ('upload', 'reimport')),
+    source        TEXT NOT NULL DEFAULT 'export',
+    -- ISO-8601 with an explicit Z, for the same reason as
+    -- canonical_group.created_at above: this one is rendered.
+    uploaded_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    original_name TEXT,
+    folder        TEXT NOT NULL,
+    files_parsed  INTEGER,
+    rows_read     INTEGER,
+    rows_inserted INTEGER,
+    range_start   TEXT,
+    range_end     TEXT,
+    error         TEXT
+);
+
+-- One row per play. No FK to track and no denormalized track_id: two thirds
+-- of the played uris have no track row (foreign to the library), so
+-- resolution is a query-time join on play.spotify_track_uri = track.uri,
+-- which self-heals as those tracks get imported.
+CREATE TABLE IF NOT EXISTS play (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_hash          TEXT NOT NULL UNIQUE,
+    source            TEXT NOT NULL DEFAULT 'export',
+    import_id         INTEGER REFERENCES play_import(id),
+    source_file       TEXT,
+    ts                TEXT NOT NULL,
+    ms_played         INTEGER NOT NULL,
+    spotify_track_uri TEXT NOT NULL,
+    -- What the export claimed at play time, not resolved entities: never
+    -- join these against track/artist/album names. reported_artist_name is
+    -- the *album* artist, so it misses featured credits entirely.
+    reported_track_name  TEXT,
+    reported_artist_name TEXT,
+    reported_album_name  TEXT,
+    reason_start      TEXT,
+    reason_end        TEXT,
+    shuffle           INTEGER,
+    skipped           INTEGER,
+    platform          TEXT,
+    conn_country      TEXT,
+    ip_addr           TEXT,
+    offline           INTEGER,
+    offline_ts        TEXT,
+    incognito_mode    INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_play_uri ON play(spotify_track_uri);
+CREATE INDEX IF NOT EXISTS idx_play_ts ON play(ts);
+CREATE INDEX IF NOT EXISTS idx_play_import ON play(import_id);
 """
 
 # Rebuilt whenever the definition here changes (see _ensure_views) rather than
