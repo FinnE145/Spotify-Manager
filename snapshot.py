@@ -161,6 +161,15 @@ def start_backfill():
 
 
 def _start(target, *args):
+    # A pull and a history import must not run at the same time, in either
+    # direction. Imported here rather than at module level because
+    # history_import imports this module; and read *before* taking our own
+    # lock, since holding one module's lock while waiting on the other's is
+    # how the two mirror-image checks would deadlock.
+    import history_import
+
+    if history_import.get_status()["running"]:
+        return False
     with _status_lock:
         if _status["running"]:
             return False
