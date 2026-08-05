@@ -31,7 +31,7 @@ Everything here was measured on 2026-08-03 against Finn's real export (`~/Downlo
 | Date range | 2020-02-12 → 2026-06-30 |
 | Distinct played URIs | 8,908 — all `spotify:track:`, no local files |
 | In library / foreign | 2,820 / 6,088 |
-| Plays on in-library tracks | 76,399 (**84.6%**) |
+| Plays on in-library tracks | 76,387 (**84.6%**) |
 | Library tracks never played | 791 of 3,611 |
 | Parse + hash time, all 13 files | **~1.0 s** |
 
@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_play_import ON play(import_id);
 | `master_metadata_album_album_name` | `reported_album_name` | |
 | `reason_start` / `reason_end` | same | raw strings |
 | `shuffle` / `skipped` / `incognito_mode` | same | INTEGER 0/1 |
-| `offline` | `offline` | INTEGER 0/1, **NULL preserved** (334 rows) |
+| `offline` | `offline` | INTEGER 0/1, **NULL preserved** (332 stored rows) |
 | `offline_timestamp` | `offline_ts` | normalized, see below |
 | `platform` | `platform` | **raw**, normalized at query time |
 | `conn_country` / `ip_addr` | same | |
@@ -138,14 +138,16 @@ CREATE INDEX IF NOT EXISTS idx_play_import ON play(import_id);
 
 - **`ts`** — stored verbatim. It's already `2020-02-12T02:40:02Z`, which is exactly the convention `membership.added_at` uses. All app-generated timestamps (`play_import.uploaded_at`) use `datetime('now')`, matching `snapshot.pulled_at`.
 - **All timestamps stay UTC.** The export carries `conn_country` but no timezone, so there is nothing to convert from. Display-zone choices belong to whatever later feature renders them.
-- **`offline_ts`** — the export's `offline_timestamp` has **mixed units in the same column**: 73,656 values are seconds-scale (range `1624628769`–`1782837994`) and 852 are milliseconds-scale (range `1612808878881`–`1665439189035`). Anything treating it as one unit is wrong by 1000× on part of the data. Normalize at import:
+- **`offline_ts`** — the export's `offline_timestamp` has **mixed units in the same column**: 73,647 values are seconds-scale (range `1624628769`–`1782837994`) and 852 are milliseconds-scale (range `1612808878881`–`1665439189035`). Anything treating it as one unit is wrong by 1000× on part of the data. Normalize at import:
 
   ```
   value < 1e11  → seconds
   value >= 1e11 → milliseconds
   ```
 
-  then format as ISO-8601 Z to match `ts`. The threshold sits three orders of magnitude clear of both ranges. NULL (15,998 rows) stays NULL. The raw value is not stored — it's in the files on disk.
+  then format as ISO-8601 Z to match `ts`. The threshold sits three orders of magnitude clear of both ranges. NULL (15,839 rows) stays NULL. The raw value is not stored — it's in the files on disk.
+
+  Those three counts are of **stored** rows and sum to 90,338. The same measurement over the raw export instead reads 73,789 / 875 / 15,998 — a different denominator, since it counts the 311 discarded rows and the 13 the hash collapses.
 
 ### Dedup
 
