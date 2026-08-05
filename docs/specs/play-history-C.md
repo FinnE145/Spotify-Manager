@@ -198,7 +198,7 @@ Cost is negligible — canonicalize + SHA-1 over all 90,662 rows is 0.55 s, on t
 
 ### Re-import
 
-`POST /api/history/reimport` re-parses **the newest upload folder only**, without a new upload. Cumulative exports make this equivalent to re-reading everything, and nothing is ever deleted, so older uploads' rows are unaffected either way.
+`POST /api/history/reimport` re-parses **the newest usable upload folder only**, without a new upload. "Usable" means `files_parsed > 0`: a failed upload (a corrupt zip, say) still creates its folder and its `play_import` row, and without that filter it would become the newest folder and a re-import would quietly read an empty directory instead of re-checking the last good export. Cumulative exports make this equivalent to re-reading everything, and nothing is ever deleted, so older uploads' rows are unaffected either way.
 
 It writes a **new `play_import` row** with `kind='reimport'`, `folder` copied from the import it re-reads, and `original_name` copied too. Already-present rows keep their original `import_id`, so a clean re-import reads `rows_inserted = 0` — which is the point: a re-import is a verification that nothing changed, and a non-zero count means something did.
 
