@@ -176,7 +176,7 @@ Cost is negligible — canonicalize + SHA-1 over all 90,662 rows is 0.55 s, on t
 
 - Uploads live in **`data/streaming_history/<YYYYMMDD-HHMMSS>/`**, one folder per upload, named for the upload time.
 - **`.gitignore` gains a single `data/` line.** `history_import.py` creates the tree with `os.makedirs(..., exist_ok=True)` on first upload.
-- **Upload accepts the `.zip` only.** It is extracted and then **discarded** — only the JSON is kept.
+- **Upload accepts the `.zip` only.** It is extracted and then **discarded** — only the JSON is kept. Discarded even when extraction fails: nothing ever re-reads the zip (a re-import reads the extracted JSON), so keeping a corrupt one would just leave ~66 MB to delete by hand.
 - Extract **only** entries matching `Streaming_History_*.json`, flattened into the upload folder. Skip `__MACOSX/`, the ReadMe PDF, directory entries, and anything with a path separator or `..` in it after the leading folder is stripped.
 - Nothing prunes old upload folders; that's manual (~69 MB each).
 

@@ -169,8 +169,13 @@ def _run_import(action, folder, original_name):
 
         if action == "upload":
             zip_path = os.path.join(folder, _ZIP_NAME)
-            _extract(folder, zip_path)
-            os.remove(zip_path)
+            # The zip goes even when extraction fails. Nothing ever re-reads it
+            # -- a re-import reads the extracted JSON -- so a corrupt one would
+            # just sit there at ~66 MB waiting to be deleted by hand.
+            try:
+                _extract(folder, zip_path)
+            finally:
+                os.remove(zip_path)
 
         _parse_folder(conn, import_id, folder, counts)
         _finish(conn, import_id, counts, None)

@@ -21,6 +21,7 @@ A Flask app for maintaining and verifying a Spotify library that follows a speci
 - `static/css/style.css` — the single stylesheet (navbar, shared page styles, canvas).
 - `static/js/` — one vanilla-JS file per interactive page, each an IIFE, no bundler: `format.js` (site-wide relative-time rendering of any `data-datetime` span), `snapshot.js` (pull/refresh/backfill controls, status poller, progress bar, request counter), `canonical_review.js` + `canonical_viewer.js` (the canonical-tracks review queue and viewer), `artists.js` (duplicate-artist merge/unmerge), `history_import.js` (export upload, import progress, live coverage), `canvas.js` (the org canvas).
 - `scripts/` — standalone one-off scripts, each with its own DB connection, own argument parsing, commit-as-you-go: `backfill_track_details.py` (isrc/album-image mop-up, superseded), `migrate_track_metadata.py` (the step-A schema migration — already applied against `symr.db`; kept as the record of what happened, not meant to be re-run).
+- `data/` — gitignored runtime data, created on first use: `streaming_history/<YYYYMMDD-HHMMSS>/` is one folder per uploaded export, holding only the extracted `Streaming_History_*.json` (the zip is always discarded, success or failure). A failed upload leaves an empty folder — harmless, and `latest_upload` skips it. Nothing prunes them; that's manual.
 - `.claude/skills/` — the phase skills (`symr-plan`, `symr-implement`, `symr-verify`); committed.
 - (Rest TBD — update this map as directories are created.)
 
