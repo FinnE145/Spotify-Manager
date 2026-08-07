@@ -3,3 +3,10 @@
 <span data-datetime="{{ value }}">{{ value }}</span>
 {%- endif -%}
 {%- endmacro %}
+
+{# A spotify:track:<id> uri as a link to its public page. `text` defaults to
+   the bare id, which is what the round-trip's tables show. #}
+{% macro spotify_track_link(uri, text=None) -%}
+{%- set track_id = uri.rsplit(':', 1)[-1] -%}
+<a href="https://open.spotify.com/track/{{ track_id }}" target="_blank" rel="noreferrer">{{ text or track_id }}</a>
+{%- endmacro %}

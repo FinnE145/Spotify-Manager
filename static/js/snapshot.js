@@ -143,14 +143,6 @@
     return "Pulling playlists…";
   }
 
-  function makeDateSpan(isoValue) {
-    const span = document.createElement("span");
-    span.dataset.datetime = isoValue;
-    span.title = isoValue;
-    span.textContent = formatRelativeTime(isoValue);
-    return span;
-  }
-
   function showDone(status) {
     progressLabel.hidden = false;
     progressLabel.textContent = "";

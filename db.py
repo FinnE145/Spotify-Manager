@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS canonical_group (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tier TEXT NOT NULL CHECK (tier IN ('song', 'version', 'recording', 'release')),
     representative_track_id TEXT REFERENCES track(track_id),
-    -- ISO-8601 with an explicit Z, matching snapshot._now_iso() and what
+    -- ISO-8601 with an explicit Z, matching jobs.now_iso() and what
     -- static/js/format.js parses. Plain datetime('now') is naive UTC and
     -- renders as a local time, i.e. hours off.
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
@@ -234,6 +234,60 @@ CREATE TABLE IF NOT EXISTS play (
 CREATE INDEX IF NOT EXISTS idx_play_uri ON play(spotify_track_uri);
 CREATE INDEX IF NOT EXISTS idx_play_ts ON play(ts);
 CREATE INDEX IF NOT EXISTS idx_play_import ON play(import_id);
+
+-- A played uri that Spotify relinked onto a different track. We ask for X and
+-- get back track Y with linked_from.id = X; Y's object is complete, X's is a
+-- stub carrying only id/uri/type/href/external_urls -- no name, artists, album
+-- or duration -- so X can never become a track row of its own. Many requested
+-- uris can collapse onto one track, which is why this is a table and not a
+-- column on track. track.linked_from / linked_from_id still record what the
+-- returned track itself was linked from.
+CREATE TABLE IF NOT EXISTS track_uri_alias (
+    requested_uri TEXT PRIMARY KEY,
+    track_id      TEXT NOT NULL REFERENCES track(track_id),
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_track_uri_alias_track ON track_uri_alias(track_id);
+
+-- Uris a round-trip run could not resolve, so a later run doesn't retry them
+-- forever and stall on the same batch. Clearable from /dev/roundtrip when a
+-- failure looks transient.
+-- `state` is control flow, not display copy: roundtrip.py equality-matches it
+-- to decide what a later run may re-request. Slugs with a CHECK, mirroring
+-- roundtrip_run.outcome below, so editing the wording shown on the page can
+-- never change behaviour. Free text belongs in `detail`.
+CREATE TABLE IF NOT EXISTS roundtrip_failed_uri (
+    requested_uri TEXT PRIMARY KEY,
+    state         TEXT NOT NULL CHECK (state IN
+                      ('not_returned', 'dead', 'needs_review', 'load_failed')),
+    detail        TEXT,
+    failed_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- track.uri had no index; every play-resolution query probes it now.
+CREATE INDEX IF NOT EXISTS idx_track_uri ON track(uri);
+
+-- One row per round-trip run (see docs/specs/foreign-roundtrip-D.md), kept
+-- even when the run failed: the request count is the only way we learn where
+-- the dev-mode app quota ceiling actually is.
+CREATE TABLE IF NOT EXISTS roundtrip_run (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    finished_at     TEXT,
+    uris_attempted  INTEGER,
+    tracks_stored   INTEGER,
+    aliases_created INTEGER,
+    uris_failed     INTEGER,
+    requests        INTEGER,
+    left_in_playlist INTEGER,
+    -- How the run ended. 'stopped' is a deliberate user stop, not a fault, and
+    -- must not render as an error; 'breaker' is the consecutive-failure trip.
+    outcome         TEXT CHECK (outcome IN
+                        ('running', 'completed', 'stopped', 'rate_limited',
+                         'breaker', 'error')),
+    error           TEXT
+);
 """
 
 # Rebuilt whenever the definition here changes (see _ensure_views) rather than
@@ -253,6 +307,16 @@ DROP VIEW IF EXISTS track_artist_role;
 DROP VIEW IF EXISTS track_artist_credit;
 DROP VIEW IF EXISTS resolved_album_artist;
 DROP VIEW IF EXISTS resolved_track_artist;
+DROP VIEW IF EXISTS played_uri_track;
+
+-- Every play -> track resolution goes through here, so no read path ever
+-- hand-rolls the relink-alias union: a played uri resolves either because it
+-- is a track's own uri or because a round-trip recorded it as relinked onto
+-- one.
+CREATE VIEW played_uri_track AS
+SELECT uri, track_id FROM track WHERE uri IS NOT NULL
+UNION ALL
+SELECT requested_uri, track_id FROM track_uri_alias;
 
 -- Alias resolution, applied once per join table. Kept as its own view so
 -- every downstream join is a plain equi-join: expressing the resolution
@@ -373,9 +437,17 @@ class Connection(sqlite3.Connection):
     See canonical._artist_display."""
 
 
+# WAL means readers never block, but it still serializes *writers*: a
+# background job holding a write transaction plus any request that writes
+# (exclude toggle, canonical merge) races sqlite3's 5s default and raises
+# "database is locked". Waiting is better than failing here, and the number of
+# write paths only grows.
+_BUSY_TIMEOUT_SECONDS = 30
+
+
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH, factory=Connection)
+        g.db = sqlite3.connect(DB_PATH, factory=Connection, timeout=_BUSY_TIMEOUT_SECONDS)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
     return g.db
@@ -384,7 +456,7 @@ def get_db():
 def connect():
     """A standalone connection for use outside a Flask request context
     (e.g. the snapshot pull's background thread)."""
-    conn = sqlite3.connect(DB_PATH, factory=Connection)
+    conn = sqlite3.connect(DB_PATH, factory=Connection, timeout=_BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -431,6 +503,20 @@ def _migrate(conn):
     ):
         if column not in snapshot_columns:
             conn.execute(ddl)
+
+    # roundtrip_failed_uri briefly stored a free-text `reason` that was also
+    # matched on as control flow. Recreate it with the slug enum -- only ever
+    # while empty, which it is in every DB that has the old shape.
+    failed_uri_columns = {row[1] for row in conn.execute("PRAGMA table_info(roundtrip_failed_uri)")}
+    if "reason" in failed_uri_columns:
+        if conn.execute("SELECT COUNT(*) FROM roundtrip_failed_uri").fetchone()[0] == 0:
+            conn.execute("DROP TABLE roundtrip_failed_uri")
+            conn.executescript(SCHEMA)
+        else:
+            raise RuntimeError(
+                "roundtrip_failed_uri still has the old `reason` column and is not empty; "
+                "migrate it by hand rather than losing rows"
+            )
 
     track_columns = {row[1] for row in conn.execute("PRAGMA table_info(track)")}
     for column, ddl in (

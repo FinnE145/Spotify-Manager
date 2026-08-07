@@ -9,6 +9,7 @@
   <p class="meta">
     Imports a Spotify GDPR &ldquo;Extended Streaming History&rdquo; export. Local file only —
     no Spotify requests, no writes to the library.
+    &middot; <a href="{{ url_for('dev_roundtrip') }}">Add new imports to db</a>
   </p>
 
   <section class="panel">
@@ -20,7 +21,7 @@
         Re-import newest upload
       </button>
     </form>
-    <p id="snapshot-busy-note" class="meta" hidden>A snapshot pull is running — imports wait for it.</p>
+    <p id="snapshot-busy-note" class="meta" hidden></p>
     <div id="import-progress" class="progress-bar" hidden>
       <div id="import-progress-fill" class="progress-bar-fill"></div>
     </div>
@@ -41,10 +42,25 @@
           <td><span data-field="distinct_uris">{{ "{:,}".format(coverage.distinct_uris) }}</span></td>
         </tr>
         <tr>
-          <th>In library / foreign</th>
+          <th>Known to Symr / foreign</th>
           <td>
-            <span data-field="in_library_uris">{{ "{:,}".format(coverage.in_library_uris) }}</span> /
+            <span data-field="known_uris">{{ "{:,}".format(coverage.known_uris) }}</span> /
             <span data-field="foreign_uris">{{ "{:,}".format(coverage.foreign_uris) }}</span>
+            <span class="muted">— Symr holds a track row for it, in a playlist or not</span>
+          </td>
+        </tr>
+        <tr>
+          <th>In your library</th>
+          <td>
+            <span data-field="in_library_uris">{{ "{:,}".format(coverage.in_library_uris) }}</span>
+            <span class="muted">— resolves to a track that's in at least one playlist</span>
+          </td>
+        </tr>
+        <tr>
+          <th>Plays on known tracks</th>
+          <td>
+            <span data-field="known_plays">{{ "{:,}".format(coverage.known_plays) }}</span>
+            (<span data-field="known_pct">{{ coverage.known_pct }}</span>%)
           </td>
         </tr>
         <tr>
@@ -66,7 +82,8 @@
           <th>Library tracks never played</th>
           <td>
             <span data-field="tracks_never_played">{{ "{:,}".format(coverage.tracks_never_played) }}</span>
-            of <span data-field="tracks_total">{{ "{:,}".format(coverage.tracks_total) }}</span>
+            of <span data-field="library_tracks_total">{{ "{:,}".format(coverage.library_tracks_total) }}</span>
+            <span class="muted">(<span data-field="tracks_total">{{ "{:,}".format(coverage.tracks_total) }}</span> track rows in total)</span>
           </td>
         </tr>
       </tbody>

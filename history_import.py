@@ -11,12 +11,11 @@ import hashlib
 import json
 import os
 import shutil
-import threading
 import zipfile
 from datetime import datetime, timezone
 
 import db
-import snapshot
+import jobs
 
 # One folder per upload, named for the upload time (UTC, like every other
 # timestamp here). The export's chunking isn't stable between exports, so
@@ -54,40 +53,29 @@ _HASH_KEYS = [
     "incognito_mode",
 ]
 
-_status_lock = threading.Lock()
-_status = {
-    "running": False,
-    "phase": None,  # "extracting" | "parsing" | "done" | "error"
-    "action": None,  # "upload" | "reimport"
-    "current_file": None,
-    "files_total": 0,
-    "files_done": 0,
-    "rows_read": 0,
-    "rows_inserted": 0,
-    "started_at": None,
-    "finished_at": None,
-    "error": None,
-}
-
-
-def _now_iso():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _set_status(**kwargs):
-    with _status_lock:
-        _status.update(kwargs)
+_status = jobs.JobStatus(
+    "history_import",
+    phase=None,  # "extracting" | "parsing" | "done" | "error"
+    action=None,  # "upload" | "reimport"
+    current_file=None,
+    files_total=0,
+    files_done=0,
+    rows_read=0,
+    rows_inserted=0,
+    started_at=None,
+    finished_at=None,
+    error=None,
+)
 
 
 def get_status():
-    with _status_lock:
-        return dict(_status)
+    return _status.get()
 
 
 def busy():
-    """True if an import or a snapshot pull is running. Lets the upload route
-    reject early instead of accepting a ~66 MB body it can't use."""
-    return get_status()["running"] or snapshot.get_status()["running"]
+    """True if any background job is running. Lets the upload route reject
+    early instead of accepting a ~66 MB body it can't use."""
+    return jobs.active() is not None
 
 
 # -- Triggering -------------------------------------------------------
@@ -111,35 +99,17 @@ def start_reimport(folder, original_name):
 
 
 def _start(action, folder, original_name):
-    # The snapshot check happens *before* our own lock is taken:
-    # snapshot._start does the mirror-image check against us, and holding one
-    # module's lock while waiting on the other's is how the two would deadlock.
-    if snapshot.get_status()["running"]:
-        return False
-    with _status_lock:
-        if _status["running"]:
-            return False
-        _status["running"] = True
-    thread = threading.Thread(
-        target=_run_import, args=(action, folder, original_name), daemon=True
-    )
-    thread.start()
-    return True
+    # One job slot for the whole app -- an import, a snapshot pull and a
+    # round-trip are mutually exclusive, and jobs.try_start settles that
+    # with a single atomic check-and-set.
+    return jobs.try_start("history_import", _run_import, action, folder, original_name)
 
 
 def _reset_status(action):
-    _set_status(
-        running=True,
+    _status.reset(
         phase="extracting" if action == "upload" else "parsing",
         action=action,
-        current_file=None,
-        files_total=0,
-        files_done=0,
-        rows_read=0,
-        rows_inserted=0,
-        started_at=_now_iso(),
-        finished_at=None,
-        error=None,
+        started_at=jobs.now_iso(),
     )
 
 
@@ -179,7 +149,7 @@ def _run_import(action, folder, original_name):
 
         _parse_folder(conn, import_id, folder, counts)
         _finish(conn, import_id, counts, None)
-        _set_status(phase="done", current_file=None, finished_at=_now_iso())
+        _status.set(phase="done", current_file=None, finished_at=jobs.now_iso())
     except Exception as e:
         # Partial imports are kept: the committed chunks stay, only the
         # in-flight one is discarded. A re-import fills the rest -- the row
@@ -187,9 +157,8 @@ def _run_import(action, folder, original_name):
         conn.rollback()
         if import_id is not None:
             _finish(conn, import_id, counts, str(e))
-        _set_status(phase="error", error=str(e), finished_at=_now_iso())
+        _status.set(phase="error", error=str(e), finished_at=jobs.now_iso())
     finally:
-        _set_status(running=False)
         conn.close()
 
 
@@ -197,7 +166,7 @@ def _extract(folder, zip_path):
     """Pulls only the history JSON out of the export zip, flattened. Every
     other entry -- the ReadMe PDF, __MACOSX/ junk, directories -- is skipped,
     and so is anything whose path could escape the upload folder."""
-    _set_status(phase="extracting")
+    _status.set(phase="extracting")
     with zipfile.ZipFile(zip_path) as archive:
         for entry in archive.infolist():
             if entry.is_dir():
@@ -217,7 +186,7 @@ def _extract(folder, zip_path):
 
 def _parse_folder(conn, import_id, folder, counts):
     files = sorted(glob.glob(os.path.join(folder, _JSON_GLOB)))
-    _set_status(phase="parsing", files_total=len(files))
+    _status.set(phase="parsing", files_total=len(files))
 
     rows_read = 0
     files_done = 0
@@ -234,7 +203,7 @@ def _parse_folder(conn, import_id, folder, counts):
             range_start=range_start,
             range_end=range_end,
         )
-        _set_status(
+        _status.set(
             files_done=files_done,
             rows_read=counts["rows_read"],
             rows_inserted=counts["rows_inserted"],
@@ -242,7 +211,7 @@ def _parse_folder(conn, import_id, folder, counts):
 
     for path in files:
         source_file = os.path.basename(path)
-        _set_status(current_file=source_file)
+        _status.set(current_file=source_file)
         with open(path, encoding="utf-8") as fh:
             rows = json.load(fh)
 
@@ -373,34 +342,69 @@ def import_rows(conn):
 
 
 def coverage_counts(conn):
-    """Every query here drives from track and probes idx_play_uri, rather
-    than the reverse -- track.uri carries no index of its own."""
+    """Coverage on two different bases, because step D split them apart (see
+    docs/specs/foreign-roundtrip-D.md §8):
+
+    - **known to Symr** -- the played uri resolves through played_uri_track,
+      i.e. Symr holds a track row for it. After a round-trip this approaches
+      100% by construction and stops being an interesting number.
+    - **in your library** -- it resolves to a track that also has a membership
+      row. That is the number that actually means something, and the
+      round-trip does not change it.
+
+    Every resolution goes through played_uri_track, never a bare track.uri
+    join, so relinked uris resolve too."""
     total_plays = conn.execute("SELECT COUNT(*) FROM play").fetchone()[0]
     distinct_uris = conn.execute(
         "SELECT COUNT(DISTINCT spotify_track_uri) FROM play"
     ).fetchone()[0]
+    known_uris = conn.execute(
+        "SELECT COUNT(*) FROM (SELECT DISTINCT p.spotify_track_uri FROM play p "
+        "JOIN played_uri_track x ON x.uri = p.spotify_track_uri)"
+    ).fetchone()[0]
+    known_plays = conn.execute(
+        "SELECT COUNT(*) FROM play p WHERE EXISTS "
+        "(SELECT 1 FROM played_uri_track x WHERE x.uri = p.spotify_track_uri)"
+    ).fetchone()[0]
     in_library_uris = conn.execute(
-        "SELECT COUNT(DISTINCT p.spotify_track_uri) FROM play p "
-        "JOIN track t ON t.uri = p.spotify_track_uri"
+        "SELECT COUNT(*) FROM (SELECT DISTINCT p.spotify_track_uri FROM play p "
+        "JOIN played_uri_track x ON x.uri = p.spotify_track_uri "
+        "WHERE EXISTS (SELECT 1 FROM membership m WHERE m.track_id = x.track_id))"
     ).fetchone()[0]
     in_library_plays = conn.execute(
-        "SELECT COUNT(*) FROM play p JOIN track t ON t.uri = p.spotify_track_uri"
+        "SELECT COUNT(*) FROM play p WHERE EXISTS "
+        "(SELECT 1 FROM played_uri_track x WHERE x.uri = p.spotify_track_uri "
+        " AND EXISTS (SELECT 1 FROM membership m WHERE m.track_id = x.track_id))"
     ).fetchone()[0]
     range_row = conn.execute("SELECT MIN(ts) AS lo, MAX(ts) AS hi FROM play").fetchone()
     return {
         "total_plays": total_plays,
         "distinct_uris": distinct_uris,
+        "known_uris": known_uris,
+        # Still derived, never a stored flag: a uri is foreign exactly as long
+        # as Symr holds no track for it, and the round-trip is what changes
+        # that.
+        "foreign_uris": distinct_uris - known_uris,
+        "known_plays": known_plays,
+        "known_pct": round(known_plays * 100 / total_plays, 1) if total_plays else 0,
         "in_library_uris": in_library_uris,
-        # Foreign is the absence of a track row, never a stored flag -- it
-        # stops being true the moment step D imports those tracks.
-        "foreign_uris": distinct_uris - in_library_uris,
         "in_library_plays": in_library_plays,
         "in_library_pct": round(in_library_plays * 100 / total_plays, 1) if total_plays else 0,
         "play_range_start": range_row["lo"],
         "play_range_end": range_row["hi"],
         "tracks_total": conn.execute("SELECT COUNT(*) FROM track").fetchone()[0],
+        # Both of these count *library* tracks only -- a track with a
+        # membership row. Counting every track row would make this nonsense
+        # the day the round-trip adds ~6,000 tracks that are in no playlist.
+        "library_tracks_total": conn.execute(
+            "SELECT COUNT(*) FROM track t "
+            "WHERE EXISTS (SELECT 1 FROM membership m WHERE m.track_id = t.track_id)"
+        ).fetchone()[0],
         "tracks_never_played": conn.execute(
             "SELECT COUNT(*) FROM track t "
-            "WHERE NOT EXISTS (SELECT 1 FROM play p WHERE p.spotify_track_uri = t.uri)"
+            "WHERE EXISTS (SELECT 1 FROM membership m WHERE m.track_id = t.track_id) "
+            "  AND NOT EXISTS (SELECT 1 FROM played_uri_track x "
+            "                  JOIN play p ON p.spotify_track_uri = x.uri "
+            "                  WHERE x.track_id = t.track_id)"
         ).fetchone()[0],
     }

@@ -14,11 +14,15 @@
   const COUNT_FIELDS = [
     "total_plays",
     "distinct_uris",
-    "in_library_uris",
+    "known_uris",
     "foreign_uris",
+    "known_plays",
+    "known_pct",
+    "in_library_uris",
     "in_library_plays",
     "in_library_pct",
     "tracks_total",
+    "library_tracks_total",
     "tracks_never_played",
   ];
 
@@ -26,7 +30,7 @@
   // before anything has been uploaded, and a snapshot pull greys both
   // buttons out rather than letting a ~66 MB upload end in a 409.
   let hasUpload = !reimportBtn.disabled;
-  let snapshotRunning = false;
+  let blockingJob = null;
   // Whether this page has actually watched a run, so a finished_at left over
   // from an earlier import doesn't announce itself on a fresh page load.
   let sawRunning = false;
@@ -55,12 +59,20 @@
     });
   }
 
+  const JOB_NAMES = {
+    snapshot: "A snapshot pull",
+    roundtrip: "A foreign-track round-trip",
+  };
+
   function setRunning(running) {
-    const blocked = running || snapshotRunning;
+    const blocked = running || Boolean(blockingJob);
     fileInput.disabled = blocked;
     uploadBtn.disabled = blocked;
     reimportBtn.disabled = blocked || !hasUpload;
-    busyNote.hidden = !snapshotRunning;
+    busyNote.hidden = !blockingJob;
+    if (blockingJob) {
+      busyNote.textContent = `${JOB_NAMES[blockingJob] || blockingJob} is running — imports wait for it.`;
+    }
     progressEl.hidden = !running;
   }
 
@@ -102,7 +114,11 @@
         setDateField("play_range_start", status.play_range_start);
         setDateField("play_range_end", status.play_range_end);
 
-        snapshotRunning = Boolean(status.snapshot_running);
+        // Anything other than this job holding the slot blocks an import.
+        blockingJob =
+          status.active_job && status.active_job !== "history_import"
+            ? status.active_job
+            : null;
         if (status.running) sawRunning = true;
         setRunning(status.running);
 
@@ -120,7 +136,7 @@
 
         // Keep polling while a snapshot pull holds the lock, so the buttons
         // come back on their own once it finishes.
-        if (status.running || snapshotRunning) setTimeout(poll, 1000);
+        if (status.running || blockingJob) setTimeout(poll, 1000);
       })
       .catch(() => {
         // Transient failure (e.g. dev server restart mid-import) — keep going.

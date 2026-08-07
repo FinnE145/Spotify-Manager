@@ -166,8 +166,10 @@ body.immersive {
   transition: width 0.3s ease;
 }
 
-#snapshot-progress-label button,
-#snapshot-progress-label a,
+/* Progress-label actions stack under the bar. Keyed off the wrapper class
+   both pages already use, rather than an id list that grows per page. */
+.progress-meta button,
+.progress-meta a,
 #import-progress-label a {
   display: block;
   margin-top: 8px;
@@ -181,8 +183,43 @@ body.immersive {
   gap: 16px;
 }
 
-#snapshot-requests {
+/* The live request counter, right of the phase label. */
+.progress-meta p + p {
   white-space: nowrap;
+}
+
+/* The round-trip's live feed: a monitoring log, newest at the bottom, so a
+   run going wrong is visible within a batch or two. */
+.event-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.event-log li {
+  padding: 2px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.event-log-ts {
+  display: inline-block;
+  min-width: 110px;
+  color: #888;
+}
+
+.muted {
+  color: #888;
+}
+
+/* A select sizes itself to its longest option, and a candidate label carries
+   track + artists + album + year — enough to push the review table past the
+   panel edge and shove the Save button off-screen. */
+[data-review-select] {
+  max-width: 28em;
 }
 
 .artist-pair {
@@ -452,11 +489,6 @@ body.immersive {
 
 .tier-meanings td {
   white-space: normal;
-}
-
-.tier-meanings .muted,
-#item-table .muted {
-  color: #888;
 }
 
 #review-item {

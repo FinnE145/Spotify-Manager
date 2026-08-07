@@ -34,6 +34,17 @@ function formatRelativeTime(isoString) {
   return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+// A ready-made relative-time span, for text built in JS rather than rendered
+// by the datetime_span macro. Lives here rather than in a page's IIFE because
+// three pages build these into their progress labels.
+function makeDateSpan(isoValue) {
+  const span = document.createElement("span");
+  span.dataset.datetime = isoValue;
+  span.title = isoValue;
+  span.textContent = formatRelativeTime(isoValue);
+  return span;
+}
+
 function applyRelativeTimes(root = document) {
   root.querySelectorAll("[data-datetime]").forEach((el) => {
     const iso = el.dataset.datetime;

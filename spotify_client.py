@@ -42,7 +42,14 @@ def get_spotify_client():
         total=3,
         connect=None,
         read=False,
-        allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+        # GET only. urllib3 cannot know whether a write that 5xx'd was applied
+        # before the error, so replaying one can duplicate it -- and a silently
+        # duplicated playlist write is exactly the kind of thing that desyncs
+        # the round-trip from what it thinks it wrote. Nothing outside
+        # roundtrip.py issues a non-GET anyway, so this costs the reads
+        # nothing. (Spotipy's token refresh POSTs through SpotifyOAuth's own
+        # session, not this one, so it is unaffected.)
+        allowed_methods=frozenset(["GET"]),
         status=3,
         backoff_factor=0.3,
         status_forcelist=(500, 502, 503, 504),

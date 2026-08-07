@@ -8,6 +8,8 @@ import canonical
 import canonical_detect
 import db
 import history_import
+import jobs
+import roundtrip
 import snapshot
 from config import APP_DEBUG, APP_PORT, MAX_CONTENT_LENGTH, SECRET_KEY
 from grouping import render_export_text
@@ -125,6 +127,20 @@ def create_app():
             coverage=history_import.coverage_counts(conn),
             imports=history_import.import_rows(conn),
             has_upload=history_import.latest_upload(conn) is not None,
+        )
+
+    @app.route("/dev/roundtrip", endpoint="dev_roundtrip")
+    def roundtrip_index():
+        conn = db.get_db()
+        return render_template(
+            "roundtrip.html",
+            active="dev_roundtrip",
+            counts=roundtrip.counts(conn),
+            runs=roundtrip.run_rows(conn),
+            failures=roundtrip.failed_uri_rows(conn),
+            review_rows=roundtrip.manual_alias_rows(conn),
+            state_labels=roundtrip.STATE_LABELS,
+            loader_name=roundtrip.LOADER_NAME,
         )
 
     @app.route("/dev/canonical", endpoint="dev_canonical")
@@ -512,10 +528,57 @@ def create_app():
         conn = db.get_db()
         status = history_import.get_status()
         status.update(history_import.coverage_counts(conn))
-        # So the page can grey its buttons out during a pull rather than
-        # taking the whole upload and only then answering 409.
-        status["snapshot_running"] = snapshot.get_status()["running"]
+        # So the page can grey its buttons out while another job holds the
+        # slot, rather than taking the whole upload and only then answering 409.
+        status["active_job"] = jobs.active()
         return jsonify(status)
+
+    # -- Foreign-track round-trip -------------------------------------
+
+    @app.route("/api/roundtrip/start", methods=["POST"], defaults={"reconcile_only": False})
+    @app.route("/api/roundtrip/reconcile", methods=["POST"], defaults={"reconcile_only": True})
+    def start_roundtrip(reconcile_only):
+        if get_spotify_client() is None:
+            return jsonify({"error": "not_authenticated"}), 401
+        if not roundtrip.start(reconcile_only=reconcile_only):
+            return jsonify({"error": "already_running", "detail": jobs.active()}), 409
+        return jsonify({"started": True})
+
+    @app.route("/api/roundtrip/stop", methods=["POST"])
+    def stop_roundtrip():
+        # Cooperative: the run finishes its current batch, commits, skips the
+        # clear, and ends in the stopped-early state.
+        return jsonify({"stopping": jobs.request_stop("roundtrip")})
+
+    @app.route("/api/roundtrip/status")
+    def roundtrip_status():
+        conn = db.get_db()
+        status = roundtrip.get_status()
+        status.update(roundtrip.counts(conn))
+        status["active_job"] = jobs.active()
+        return jsonify(status)
+
+    @app.route("/api/roundtrip/alias", methods=["POST"])
+    def alias_roundtrip_uris():
+        body = request.get_json()
+        pairs = [
+            (entry.get("requested_uri"), entry.get("track_id"))
+            for entry in (body.get("aliases") or [])
+        ]
+        if not pairs or not all(uri and track_id for uri, track_id in pairs):
+            abort(400, description="aliases must be a non-empty list of {requested_uri, track_id}")
+        conn = db.get_db()
+        try:
+            saved = roundtrip.set_manual_aliases(conn, pairs)
+        except ValueError as e:
+            abort(400, description=str(e))
+        return jsonify({"ok": True, "saved": saved})
+
+    @app.route("/api/roundtrip/clear-failures", methods=["POST"])
+    def clear_roundtrip_failures():
+        conn = db.get_db()
+        roundtrip.clear_failures(conn)
+        return jsonify({"ok": True})
 
     # -- Artists ------------------------------------------------------
 

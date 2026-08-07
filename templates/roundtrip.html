@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span, spotify_track_link %}
+
+{% block title %}Symr — Round-trip{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Foreign-track round-trip</h1>
+  <p class="meta">
+    Turns played-but-unknown Spotify URIs into real track rows, by pushing them through a
+    scratch playlist 100 at a time and reading the full track objects back.
+    &middot; <a href="{{ url_for('dev_import') }}">Upload new plays</a>
+  </p>
+  <p class="error">
+    Unlike every other page in Symr, this one <strong>writes to Spotify</strong>: it replaces the
+    contents of the private <strong>{{ loader_name }}</strong> playlist, one batch at a time, and
+    nothing else. A run refuses to start unless it first verifies that playlist's name and owner.
+  </p>
+
+  <section class="panel" id="roundtrip-status">
+    <h2>Status</h2>
+    <p>
+      <span data-field="remaining_uris">{{ "{:,}".format(counts.remaining_uris) }}</span>
+      foreign URI<span data-plural-for="remaining_uris">{{ "" if counts.remaining_uris == 1 else "s" }}</span> remaining
+      &middot; <span data-field="batches">{{ counts.batches }}</span>
+      batch<span data-plural-for="batches" data-plural-suffix="es">{{ "" if counts.batches == 1 else "es" }}</span>
+      &middot; ~<span data-field="requests_estimate">{{ counts.requests_estimate }}</span> requests
+    </p>
+    <p class="meta">
+      <span data-field="resolved_tracks">{{ "{:,}".format(counts.resolved_tracks) }}</span>
+      track<span data-plural-for="resolved_tracks">{{ "" if counts.resolved_tracks == 1 else "s" }}</span>
+      known but in no playlist
+      &middot; <span data-field="aliases">{{ "{:,}".format(counts.aliases) }}</span> relink alias<span data-plural-for="aliases" data-plural-suffix="es">{{ "" if counts.aliases == 1 else "es" }}</span>
+      &middot; <span data-field="failed_uris">{{ "{:,}".format(counts.failed_uris) }}</span> known-failed URI<span data-plural-for="failed_uris">{{ "" if counts.failed_uris == 1 else "s" }}</span>
+    </p>
+    <p class="meta">
+      <span data-field="reconcilable">{{ counts.reconcilable }}</span> URI<span data-plural-for="reconcilable">{{ "" if counts.reconcilable == 1 else "s" }}</span>
+      worth reconciling
+      &middot; <span data-field="review_uris">{{ counts.review_uris }}</span> awaiting a manual alias
+    </p>
+    <div id="roundtrip-progress" class="progress-bar" hidden>
+      <div id="roundtrip-progress-fill" class="progress-bar-fill"></div>
+    </div>
+    <div class="progress-meta">
+      <p id="roundtrip-progress-label" class="meta" hidden></p>
+      <p id="roundtrip-requests" class="meta" hidden><span data-field="requests">0</span> requests</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Controls</h2>
+    <button id="roundtrip-start-btn" type="button">Start round-trip</button>
+    <button id="roundtrip-reconcile-btn" type="button" {{ 'disabled' if not counts.reconcilable }}>
+      Reconcile unresolved (<span data-field="reconcilable">{{ counts.reconcilable }}</span>)
+    </button>
+    <button id="roundtrip-stop-btn" type="button" disabled>Stop</button>
+    <p class="meta">
+      Reconciling re-requests URIs that came back as an unlabelled substitute, and aliases one
+      only when the returned track's title <em>and</em> album artist both match what the export
+      recorded. Anything less is left for a manual alias rather than guessed at.
+    </p>
+    <p id="roundtrip-busy-note" class="meta" hidden></p>
+    <p id="roundtrip-error" class="error" hidden></p>
+  </section>
+
+  <section class="panel">
+    <h2>Live feed</h2>
+    <ol id="roundtrip-log" class="event-log"></ol>
+    <p id="roundtrip-log-empty" class="empty">Nothing yet — the feed fills in as a run goes.</p>
+  </section>
+
+  {% if review_rows %}
+  <section class="panel">
+    <h2>Manual aliases</h2>
+    <p class="meta">
+      Spotify served a different track for these URIs without saying what it replaced, and the
+      title and artist didn't match closely enough to decide automatically. Candidates share the
+      normalized title — pick the right one, or leave it alone.
+    </p>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Played as</th>
+          <th>Artist</th>
+          <th>Plays</th>
+          <th>Alias to</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in review_rows %}
+        <tr data-review-uri="{{ row.requested_uri }}">
+          <td>{{ spotify_track_link(row.requested_uri, row.name) }}</td>
+          <td>{{ row.artist or "" }}</td>
+          <td>{{ row.plays }}</td>
+          <td>
+            {% if row.candidates %}
+            <select data-review-select>
+              <option value="">— choose —</option>
+              {% for c in row.candidates %}
+              <option value="{{ c.track_id }}">
+                {{ c.name }} — {{ c.artists }}{% if c.album %} [{{ c.album }}{% if c.release_year %}, {{ c.release_year }}{% endif %}]{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <span class="muted">no candidate with a matching title</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button id="review-save-btn" type="button" disabled>Save aliases</button>
+    <p class="meta">
+      Saves every row you've chosen a track for, in one go. Rows left on
+      &ldquo;&mdash; choose &mdash;&rdquo; stay in the list.
+    </p>
+    <p id="review-error" class="error" hidden></p>
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>Known-failed URIs</h2>
+    {% if failures %}
+    <p class="meta">
+      Skipped by future runs so one dead URI can't stall the same batch forever.
+    </p>
+    <table class="data-table">
+      <thead>
+        <tr><th>URI</th><th>Reason</th><th>When</th></tr>
+      </thead>
+      <tbody>
+        {% for f in failures %}
+        <tr>
+          <td>{{ spotify_track_link(f.requested_uri) }}</td>
+          <td>
+            {{ state_labels.get(f.state, f.state) }}
+            {%- if f.detail %} <span class="muted">({{ f.detail }})</span>{% endif %}
+          </td>
+          <td>{{ datetime_span(f.failed_at) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">None — no run has failed to resolve a URI.</p>
+    {% endif %}
+    <button id="roundtrip-clear-failures-btn" type="button" {{ 'disabled' if not failures }}>
+      Clear failures (retry them next run)
+    </button>
+  </section>
+
+  <section class="panel">
+    <h2>Run history</h2>
+    {% if runs %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Started</th>
+          <th>Finished</th>
+          <th>Outcome</th>
+          <th>URIs</th>
+          <th>Stored</th>
+          <th>Aliased</th>
+          <th>Failed</th>
+          <th>Requests</th>
+          <th>Left in playlist</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+        <tr>
+          <td>{{ datetime_span(r.started_at) }}</td>
+          <td>{{ datetime_span(r.finished_at) }}</td>
+          <td>{{ r.outcome }}</td>
+          <td>{{ "{:,}".format(r.uris_attempted) if r.uris_attempted is not none else "" }}</td>
+          <td>{{ "{:,}".format(r.tracks_stored) if r.tracks_stored is not none else "" }}</td>
+          <td>{{ r.aliases_created if r.aliases_created is not none else "" }}</td>
+          <td>{{ r.uris_failed if r.uris_failed is not none else "" }}</td>
+          <td>{{ r.requests if r.requests is not none else "" }}</td>
+          <td>{{ r.left_in_playlist if r.left_in_playlist is not none else "" }}</td>
+          <td class="error">{{ r.error or "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="meta">
+      Every run's request count is recorded, failed or not — it's the only way we learn where
+      the app's quota ceiling actually is.
+    </p>
+    {% else %}
+    <p class="empty">No runs yet.</p>
+    {% endif %}
+  </section>
+</main>
+<script src="{{ url_for('static', filename='js/roundtrip.js') }}"></script>
+{% endblock %}

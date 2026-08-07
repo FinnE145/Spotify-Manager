@@ -24,6 +24,10 @@
       <a href="{{ url_for('dev_import') }}">Play History</a>
       — import a Spotify streaming-history export and check its coverage.
     </li>
+    <li>
+      <a href="{{ url_for('dev_roundtrip') }}">Round-trip</a>
+      — resolve played-but-unknown URIs into real track rows. The one page that writes to Spotify.
+    </li>
   </ul>
 </main>
 {% endblock %}
