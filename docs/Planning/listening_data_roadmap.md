@@ -107,15 +107,24 @@ Track object is ~1,756 bytes and carries, beyond what `track` stores today: **ar
 
 ```
 A (capture) ──► I (detection on the artist model) ──► C (ingest) ──► D (round-trip)
-   landed            landed                            landed         in progress
-  ──► E (grouping catch-up) ──► B (generations) ──► H (scoring) ──► F/G
+   DONE              DONE                              DONE           DONE
+  ──► E (grouping catch-up) ──► B (generations) ──► H (scoring)
+  ──► J (partial pulls) ──► F/G
 ```
+
+**A, I, C and D have landed.** Their sections below are marked, and each points at
+the spec that is authoritative for what actually shipped — read the spec, not the
+summary here, before touching any of them.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
+J sits after H for the same reason in reverse: **everything from E through H needs
+zero Spotify requests**, so none of it is blocked by the quota problem J solves. J
+becomes urgent when the next full pull is due, not before.
+
 ---
 
-## A — Track metadata capture + re-pull
+## A — Track metadata capture + re-pull ✅ DONE
 
 **Specced → `docs/specs/track-metadata-A.md`.** That spec is authoritative; the summary below is the shape, not the detail.
 
@@ -134,7 +143,7 @@ Read-only. Prerequisite for everything. The one pass that has to be right, becau
 
 **Trap:** never edit a `.py` file while a pull is running — the Flask reloader truncates it silently.
 
-## I — Detection on the artist model
+## I — Detection on the artist model ✅ DONE
 
 **Specced → `docs/specs/detection-artist-model.md`.** That spec is authoritative; the summary below is the shape, not the detail.
 
@@ -156,7 +165,7 @@ Deciding what to do with the resulting diff over the existing 288 groups stays a
 
 > Not to be confused with the mechanical album-column swap inside A: A drops `track.album_name` / `track.album_image_url` in favour of an `album` join, which changes no detection logic. I is the part that changes what detection matches on.
 
-## C — Play history ingestion
+## C — Play history ingestion ✅ DONE
 
 **Specced → `docs/specs/play-history-C.md`.** That spec is authoritative; the summary below is the shape, not the detail. Planning measured the real export and **corrected three claims made here**: `(ts, spotify_track_uri)` is not unique (228 duplicated keys, all within a single file — it would drop 255 real plays, so dedup is on a row hash instead); the export also ships `Streaming_History_Video_*.json` holding 493 track plays that appear nowhere in the audio files; and the discarded non-track rows are 311, not 303.
 
@@ -172,7 +181,7 @@ Deciding what to do with the resulting diff over the existing 288 groups stays a
 
 **Caveat to carry:** LB only submits a listen after half the track or 4 minutes. The export logs every play including 3-second skips. Skip-rate and `ms_played` metrics will discontinue at the boundary — restrict them to export-covered ranges or flag it.
 
-## D — Foreign-track round-trip
+## D — Foreign-track round-trip ✅ DONE
 
 **Specced → `docs/specs/foreign-roundtrip-D.md`.** That spec is authoritative; the summary below is the shape, not the detail, and planning corrected several of its numbers (6,085 foreign URIs at 3,620 tracks, 61 batches, ~125 requests including the guard's two reads) and its playlist-id handling (a hardcoded module constant with a `TODO`, not a `meta` lookup — the playlist can't be picked from a list until the next full pull makes it visible in `snapshot`).
 
@@ -212,6 +221,42 @@ A general song ranking that feeds album and artist rankings by aggregation. Moti
 - **Calibrate against ATG** — it's the only real ground truth in the library.
 
 > ⚠️ **ATG must be corrected before it is used as ground truth.** It currently has missing essentials and a fair amount of over-adding. The convention is right; the contents aren't. Any scoring or validation work waits on that cleanup.
+
+## J — Partial / resumable pulls
+
+**Not specced.** Own `/symr-plan` session.
+
+A full pull is one indivisible run of ~225 requests across 152 playlists. The app
+is dev-mode with no extended-quota grant, and exhausting that quota returns a
+`Retry-After` in the **tens of thousands of seconds** — a real ~24h lockout, hit
+more than once now (see `docs/spotify_constraints.md`). The library only grows, so
+eventually a full pull will not fit inside one day's budget at all, and the day it
+doesn't there is no way to make progress: the run dies partway and the next attempt
+starts over from the beginning.
+
+**What already exists**, and is most of the machinery:
+
+- `snapshot.py`'s **refresh** already skips playlists whose `snapshot_id` is
+  unchanged, so incremental *change* detection is solved. The gap is a *first* or
+  *forced* full pull that can't finish in one budget.
+- `RateLimited` aborts a run immediately rather than sleeping through a multi-hour
+  wait, and records `retry_at`.
+- `jobs.py` gives cooperative stop at a safe point, and every run counts its own
+  requests.
+- The `excluded` flag already takes playlists out of the item-read pass.
+- D established the pattern for a resumable run whose progress is **derived, not
+  stored** — its work list recomputes what is left rather than checkpointing, so
+  nothing can go stale.
+
+**What the spec session has to decide:** how a partial pull records where it got
+to (derived like D's, or an explicit cursor); whether it stops on a request budget
+rather than waiting to be rate-limited; ordering (most-stale first? smallest
+first?); whether resume is manual or automatic; and what the UI shows for "63 of
+152 playlists captured, resume tomorrow".
+
+**Useful data:** `roundtrip_run.requests` is the first per-run request count Symr
+has ever recorded, and it is deliberately kept for failed runs too — it is the only
+evidence of where the ceiling actually sits.
 
 ## F / G — metrics, reports, visualisations
 
