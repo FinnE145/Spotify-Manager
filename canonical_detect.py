@@ -416,6 +416,18 @@ def all_candidate_groups(conn):
     return _order(main + cross)
 
 
+def canonical_page_groups(conn):
+    """The three results `/dev/canonical` needs -- candidate_groups,
+    cross_artist_groups, and all_candidate_groups -- derived from a single
+    _build_all_groups() instead of the three separate rebuilds calling each
+    of those would cost."""
+    main, cross = _build_all_groups(conn)
+    unreviewed_main = _order([g for g in main if not g["reviewed"]])
+    unreviewed_cross = _order([g for g in cross if not g["reviewed"]])
+    all_groups = _order(main + cross)
+    return unreviewed_main, unreviewed_cross, all_groups
+
+
 def ad_hoc_group(conn, track_ids):
     """Skips detection: pre-fills nothing, renders the tracks' current
     saved grouping instead."""

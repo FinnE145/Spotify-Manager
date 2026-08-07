@@ -161,9 +161,10 @@ def create_app():
         groups = canonical.song_groups(conn, query=q, include_singletons=show_singletons)
         trees = {g["song_id"]: canonical.song_tree(conn, g["song_id"]) for g in groups}
 
-        cross_artist_groups = [
-            g for g in canonical_detect.all_candidate_groups(conn) if g["cross_artist"]
-        ]
+        unreviewed_main_groups, unreviewed_cross_groups, all_groups = (
+            canonical_detect.canonical_page_groups(conn)
+        )
+        cross_artist_groups = [g for g in all_groups if g["cross_artist"]]
 
         search_results = []
         if search_q:
@@ -185,8 +186,8 @@ def create_app():
             active="dev_canonical",
             total_tracks=conn.execute("SELECT COUNT(*) FROM track").fetchone()[0],
             tier_counts=canonical.tier_counts(conn),
-            unreviewed_main=len(canonical_detect.candidate_groups(conn)),
-            unreviewed_cross=len(canonical_detect.cross_artist_groups(conn)),
+            unreviewed_main=len(unreviewed_main_groups),
+            unreviewed_cross=len(unreviewed_cross_groups),
             reviewed_count=reviewed_row["c"],
             reviewed_latest=reviewed_row["latest"],
             groups=groups,
