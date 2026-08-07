@@ -11,12 +11,21 @@
         title="{{ 'Pinned representative' if (is_current and pinned) else ('Current representative (computed)' if is_current else 'Set as representative') }}">{{ "★" if (is_current and pinned) else "☆" }}</button>
 {% endmacro %}
 
+{# 6,070 of 9,693 tracks are in no playlist at all. Without this, a group of
+   tracks you recognise gives no hint that none of them are actually yours. #}
+{% macro not_in_library(live_count) %}{% if not live_count %}<span class="badge muted" title="No live playlist membership">not in library</span>{% endif %}{% endmacro %}
+
+{% macro explicit_badge(explicit) %}{% if explicit %}<span class="badge explicit" title="Explicit">E</span>{% endif %}{% endmacro %}
+
+{% macro auto_badge(group_id, auto_grouped) %}{% if group_id in auto_grouped %}<span class="badge auto" title="Created by an auto-group run">auto</span>{% endif %}{% endmacro %}
+
 {% macro track_row(t, is_current_rep, pinned) %}
 <div class="tree-leaf">
   {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
   <span class="leaf-title">
     {{ pin_star(t.track_id, is_current_rep, pinned) }}
     <a href="{{ url_for('dev_snapshot_track', track_id=t.track_id) }}">{{ t.name }}</a>
+    {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}
   </span>
   <span class="leaf-meta">
     {{ t.album_name or "" }} &middot; {{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}
@@ -28,6 +37,7 @@
 {% block content %}
 <main class="page">
   <h1>Canonical Tracks</h1>
+  <p id="viewer-error" class="error" hidden></p>
 
   <section class="panel">
     <h2>Stats</h2>
@@ -46,12 +56,43 @@
     </table>
     <p>
       Unreviewed: <a href="{{ url_for('canonical_review') }}">{{ unreviewed_main }} in the main queue</a>
-      &middot; <a href="{{ url_for('canonical_review', queue='cross-artist') }}">{{ unreviewed_cross }} in the cross-artist queue</a>
+      &middot; <a href="{{ url_for('canonical_cross') }}">{{ unreviewed_cross }} in the cross-artist queue</a>
+      {% if pending_tier_count %}
+      &middot; <a href="{{ url_for('canonical_review', queue='pending') }}">{{ pending_tier_count }} group{{ "s" if pending_tier_count != 1 }} awaiting tier review</a>
+      {% endif %}
     </p>
     <p class="meta">
       Reviewed: {{ reviewed_count }} pair{{ "s" if reviewed_count != 1 }}
       {% if reviewed_latest %} &middot; most recent {{ datetime_span(reviewed_latest) }}{% endif %}
     </p>
+
+    <div id="autogroup">
+      <button id="autogroup-preview-btn" type="button">Auto-group&hellip;</button>
+      <span id="autogroup-status" class="meta"></span>
+      <span id="autogroup-confirm" hidden>
+        <button id="autogroup-run-btn" type="button">Confirm</button>
+        <button id="autogroup-cancel-btn" type="button">Cancel</button>
+      </span>
+      <p class="meta">
+        Closes every queue item whose tracks share an ISRC, a duration, an explicit flag and a title.
+        Items whose tracks disagree on any of those stay in the queue.
+        {% if last_auto_run %}
+        Last run {{ datetime_span(last_auto_run.finished_at or last_auto_run.started_at) }} &middot;
+        {{ last_auto_run.groups_closed or 0 }} group{{ "s" if last_auto_run.groups_closed != 1 }},
+        {{ last_auto_run.tracks_affected or 0 }} track{{ "s" if last_auto_run.tracks_affected != 1 }}
+        {%- if last_auto_run.undone_at %} &middot; undone {{ datetime_span(last_auto_run.undone_at) }}{% endif %}
+        {% if last_auto_run.undoable %}
+        <button id="autogroup-undo-btn" type="button">Undo</button>
+        <span id="autogroup-undo-confirm" hidden>
+          <button id="autogroup-undo-yes" type="button">Yes, restore</button>
+          <button id="autogroup-undo-cancel" type="button">Cancel</button>
+        </span>
+        <span class="warn">Undo restores the whole grouping to how it was before that run — including
+          any review you have decided since. One level deep only.</span>
+        {% endif %}
+        {% endif %}
+      </p>
+    </div>
   </section>
 
   <section class="panel">
@@ -79,6 +120,7 @@
           — {{ g.representative.artists if g.representative else "" }}
         </span>
         <span class="leaf-meta">{{ g.track_count }} tracks &middot; impact {{ g.impact }} &middot; song {{ g.song_id }}</span>
+        {{ auto_badge(g.song_id, auto_grouped) }}
         {{ edit_link(tree.track_ids) }}
       </summary>
 
@@ -87,18 +129,21 @@
         <div class="tree-node tier-version" id="group-{{ v.version_id }}">
           <div class="tree-node-head">
             <span class="tier-chip version">Version {{ v.version_id }}</span>
+            {{ auto_badge(v.version_id, auto_grouped) }}
           </div>
 
           {% for r in v.recordings %}
           <div class="tree-node tier-recording" id="group-{{ r.recording_id }}">
             <div class="tree-node-head">
               <span class="tier-chip recording">Recording {{ r.recording_id }}</span>
+              {{ auto_badge(r.recording_id, auto_grouped) }}
             </div>
 
             {% for rel in r.releases %}
             <div class="tree-node tier-release" id="group-{{ rel.release_id }}">
               <div class="tree-node-head">
                 <span class="tier-chip release">Release {{ rel.release_id }}</span>
+                {{ auto_badge(rel.release_id, auto_grouped) }}
               </div>
               {% for t in rel.tracks %}
                 {{ track_row(t, t.track_id == tree.representative_track_id, tree.pinned) }}
@@ -118,7 +163,7 @@
 
   <section class="panel">
     <h2>Cross-artist ({{ cross_artist_groups|length }})</h2>
-    <p><a href="{{ url_for('canonical_review', queue='cross-artist') }}">Review in queue &rarr;</a></p>
+    <p><a href="{{ url_for('canonical_cross') }}">Review in queue &rarr;</a></p>
     {% for g in cross_artist_groups %}
     <div class="panel cross-artist-entry">
       <h3>{{ g.base }} <span class="leaf-meta">impact {{ g.impact }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>
@@ -126,7 +171,7 @@
       {% set t = g.tracks[tid] %}
       <div class="tree-leaf">
         {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
-        <span class="leaf-title"><strong>{{ t.artists }}</strong> — {{ t.title }}</span>
+        <span class="leaf-title"><strong>{{ t.artists }}</strong> — {{ t.title }} {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}</span>
         <span class="leaf-meta">{{ t.album or "" }} &middot; {{ t.live_count }} playlist{{ "s" if t.live_count != 1 }}</span>
       </div>
       {% endfor %}

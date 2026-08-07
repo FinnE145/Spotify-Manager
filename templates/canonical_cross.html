@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Symr — Cross-artist{% endblock %}
+{% block body_class %}immersive{% endblock %}
+
+{% block content %}
+<div id="cross-app">
+  <header id="review-header">
+    <div class="progress-bar"><div id="progress-fill" class="progress-bar-fill"></div></div>
+    <div id="progress-label"></div>
+    <div id="queue-name">Cross-artist queue</div>
+    <div id="tier-legend">
+      <span class="muted">Same title, no shared artist. Usually the answer is no &mdash; just hit Enter.</span>
+      <span id="help-toggle" tabindex="0">?</span>
+      <div id="help-popover" hidden>
+        <table>
+          <tr><td>&uarr; / &darr;, j / k</td><td>move focus</td></tr>
+          <tr><td>Space, click</td><td>toggle selection</td></tr>
+          <tr><td>1 &hellip; 9</td><td>assign the selection to the <em>n</em>th existing group</td></tr>
+          <tr><td>g</td><td>group the selected new songs together as a new song group</td></tr>
+          <tr><td>u</td><td>unassign the focused row</td></tr>
+          <tr><td>Enter</td><td>save and advance &mdash; with nothing assigned, that's "none of these are related"</td></tr>
+          <tr><td>Backspace</td><td>discard and go back</td></tr>
+        </table>
+      </div>
+      <div id="action-buttons">
+        <button id="reset-btn" type="button" title="Unassign everything on this bucket">Reset</button>
+        <button id="back-btn" type="button" title="Backspace">&lt; Back</button>
+        <button id="save-btn" type="button" title="Enter">Save &gt;</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="cross-item" hidden>
+    <h2 id="item-title"></h2>
+
+    <section class="cross-section">
+      <h3>New songs</h3>
+      <div id="new-rows"></div>
+      <p id="new-empty" class="empty" hidden>Nothing new in this bucket.</p>
+    </section>
+
+    <section class="cross-section">
+      <h3>Existing groups</h3>
+      <div id="group-rows"></div>
+      <p id="groups-empty" class="empty" hidden>No established tracks here yet &mdash; this bucket is new.</p>
+    </section>
+  </main>
+
+  <div id="cross-empty" class="page" hidden>
+    <p>Nothing to review.</p>
+    <p><a href="{{ url_for('dev_canonical') }}">&larr; Canonical Tracks</a></p>
+  </div>
+
+  <div id="cross-done" class="page" hidden>
+    <p>Got through <span id="done-count"></span> bucket(s).</p>
+    <p><a href="{{ url_for('dev_canonical') }}">&larr; Canonical Tracks</a></p>
+  </div>
+
+  <div id="cross-error" class="error page" hidden></div>
+</div>
+
+<script src="{{ url_for('static', filename='js/canonical_cross.js') }}"></script>
+{% endblock %}

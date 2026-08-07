@@ -215,6 +215,44 @@ body.immersive {
   color: #888;
 }
 
+.warn {
+  color: #b45309;
+}
+
+/* Small inline markers: "not in library", "auto", the cross queue's row
+   states. Deliberately quieter than .tier-chip, which carries real colour
+   meaning. */
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  background: #f6f6f6;
+  color: #777;
+  white-space: nowrap;
+}
+
+.badge.explicit {
+  font-weight: 700;
+  border-color: #ccc;
+  background: #666;
+  color: #fff;
+  padding: 1px 4px;
+}
+
+.badge.auto {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+#autogroup {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+
 /* A select sizes itself to its longest option, and a candidate label carries
    track + artists + album + year — enough to push the review table past the
    panel edge and shove the Save button off-screen. */
@@ -371,7 +409,8 @@ body.immersive {
 
 /* -- Canonical review queue ---------------------------------------- */
 
-#review-app {
+#review-app,
+#cross-app {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -491,10 +530,100 @@ body.immersive {
   white-space: normal;
 }
 
-#review-item {
+#review-item,
+#cross-item {
   flex: 1;
   overflow: auto;
   padding: 12px 16px;
+}
+
+/* -- Cross-artist queue -------------------------------------------- */
+
+.cross-section {
+  margin-top: 14px;
+}
+
+.cross-section h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #666;
+}
+
+.cross-row,
+.cross-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
+.cross-row {
+  cursor: pointer;
+}
+
+.cross-row.nested {
+  margin-left: 26px;
+}
+
+.cross-row.selected {
+  background: #eff6ff;
+}
+
+.cross-row.focused {
+  outline: 2px solid #2563eb;
+}
+
+.cross-group {
+  border: 1px solid #e5e5e5;
+  border-radius: 5px;
+  padding: 4px;
+  margin-bottom: 6px;
+}
+
+.cross-group-head {
+  cursor: pointer;
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.cross-group-head:hover {
+  background: #f0f0f0;
+}
+
+.cross-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  background: #fff;
+}
+
+.cross-nest-marker {
+  color: #bbb;
+}
+
+.cross-title {
+  min-width: 16em;
+}
+
+.cross-artists {
+  color: #444;
+  min-width: 12em;
+}
+
+.cross-album {
+  color: #888;
+  min-width: 12em;
 }
 
 #item-title {

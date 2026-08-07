@@ -5,6 +5,7 @@ from werkzeug.exceptions import HTTPException
 
 import artists
 import canonical
+import canonical_autogroup
 import canonical_detect
 import db
 import history_import
@@ -198,6 +199,9 @@ def create_app():
             search_q=search_q,
             search_results=search_results,
             expand_song_id=expand_song_id,
+            last_auto_run=canonical_autogroup.last_run(conn),
+            auto_grouped=canonical.auto_grouped_ids(conn),
+            pending_tier_count=len(canonical_detect.pending_song_ids(conn)),
         )
 
     @app.route("/dev/canonical/group/<int:group_id>")
@@ -223,6 +227,94 @@ def create_app():
             abort(400, description="tracks= needs at least 2 track ids")
         return render_template("canonical_review.html", active="dev_canonical")
 
+    @app.route("/dev/canonical/cross")
+    def canonical_cross():
+        return render_template("canonical_cross.html", active="dev_canonical")
+
+    @app.route("/api/canonical/cross")
+    def api_canonical_cross():
+        conn = db.get_db()
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        tracks_param = request.args.get("tracks")
+        if tracks_param is not None:
+            item = canonical_detect.cross_bucket_for(
+                conn, [t for t in tracks_param.split(",") if t]
+            )
+            if item is None:
+                abort(400, description="tracks= needs at least 2 known track ids")
+            return jsonify({"items": [item], "pending_count": 0})
+
+        return jsonify(
+            {
+                "items": canonical_detect.cross_buckets(conn),
+                # Drives the redirect when the queue empties: assignments made
+                # in an earlier sitting would otherwise be unreachable until
+                # some future session happened to finish the queue.
+                "pending_count": len(canonical_detect.pending_song_ids(conn)),
+            }
+        )
+
+    @app.route("/api/canonical/cross/apply", methods=["POST"])
+    def api_canonical_cross_apply():
+        body = request.get_json()
+        track_ids = body.get("track_ids") or []
+        assignments = body.get("assignments") or []
+        if len(track_ids) < 2:
+            abort(400, description="track_ids needs at least 2 track ids")
+
+        conn = db.get_db()
+        canonical.ensure_track_groups(conn)
+        bucket = set(track_ids)
+
+        for i, assignment in enumerate(assignments):
+            newcomers = [t for t in (assignment.get("track_ids") or [])]
+            # The bucket is the only thing this page is allowed to touch.
+            outside = [t for t in newcomers if t not in bucket]
+            if outside:
+                abort(400, description=f"tracks not in this bucket: {sorted(outside)}")
+
+            song_id = assignment.get("song_id")
+            members = canonical.group_members(conn, song_id) if song_id else []
+            targets = list(dict.fromkeys(members + newcomers))
+            if len(targets) < 2:
+                continue
+
+            # One shared song label; every track keeps its existing version,
+            # recording and release group. Passing the newcomer's current ids
+            # rather than fresh singletons is deliberate: a song-tier decision
+            # must not silently detach it from a finer-tier group it is
+            # already in (see spec E §4.4).
+            labels = {}
+            for track_id in targets:
+                current = canonical.groups_for_track(conn, track_id)
+                if current is None:
+                    abort(400, description=f"no track_group row for {track_id}")
+                labels[track_id] = {
+                    "song": f"cross:{i}",
+                    "version": str(current["version"]),
+                    "recording": str(current["recording"]),
+                    "release": str(current["release"]),
+                }
+            try:
+                canonical.apply_partition(conn, labels)
+            except ValueError as e:
+                abort(400, description=str(e))
+
+            for track_id in newcomers:
+                conn.execute(
+                    "INSERT OR IGNORE INTO pending_tier_review (track_id) VALUES (?)",
+                    (track_id,),
+                )
+
+        # Every pair in the bucket, assigned or not -- "none of these are
+        # related" is a decision, and it's what stops the bucket resurfacing
+        # until another newcomer arrives.
+        canonical.mark_reviewed(conn, track_ids)
+        conn.commit()
+        return jsonify({"ok": True})
+
     @app.route("/api/canonical/queue")
     def api_canonical_queue():
         conn = db.get_db()
@@ -246,9 +338,9 @@ def create_app():
                 abort(400, description=f"unknown track ids: {sorted(missing)}")
             queue_name = "ad-hoc"
             items = [canonical_detect.ad_hoc_group(conn, track_ids)]
-        elif request.args.get("queue") == "cross-artist":
-            queue_name = "cross-artist"
-            items = canonical_detect.cross_artist_groups(conn)
+        elif request.args.get("queue") == "pending":
+            queue_name = "pending"
+            items = canonical_detect.pending_tier_items(conn)
         else:
             queue_name = "main"
             items = canonical_detect.candidate_groups(conn)
@@ -270,8 +362,29 @@ def create_app():
         canonical.mark_reviewed(conn, track_ids)
         if pin:
             canonical.pin_representative(conn, pin)
+        # A pending tier-review item is exactly the song group these tracks are
+        # in, so committing it is what the pending row was waiting for.
+        for track_id in track_ids:
+            conn.execute("DELETE FROM pending_tier_review WHERE track_id = ?", (track_id,))
         conn.commit()
         return jsonify(result)
+
+    @app.route("/api/canonical/autogroup/preview")
+    def api_canonical_autogroup_preview():
+        return jsonify(canonical_autogroup.preview(db.get_db()))
+
+    @app.route("/api/canonical/autogroup", methods=["POST"])
+    def api_canonical_autogroup():
+        # Synchronous: ~1.2s with apply_partition(cleanup=False), so it needs
+        # neither the job slot nor a background thread.
+        return jsonify(canonical_autogroup.run(db.get_db()))
+
+    @app.route("/api/canonical/autogroup/undo", methods=["POST"])
+    def api_canonical_autogroup_undo():
+        try:
+            return jsonify(canonical_autogroup.undo(db.get_db()))
+        except ValueError as e:
+            abort(400, description=str(e))
 
     @app.route("/api/canonical/pin", methods=["POST"])
     def api_canonical_pin():

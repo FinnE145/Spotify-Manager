@@ -48,8 +48,8 @@
     if (params.has("tracks")) {
       return "/api/canonical/queue?tracks=" + encodeURIComponent(params.get("tracks"));
     }
-    if (params.get("queue") === "cross-artist") {
-      return "/api/canonical/queue?queue=cross-artist";
+    if (params.get("queue") === "pending") {
+      return "/api/canonical/queue?queue=pending";
     }
     return "/api/canonical/queue";
   }
@@ -69,7 +69,11 @@
       }
       items = data.items;
       queueNameEl.textContent =
-        data.queue === "cross-artist" ? "Cross-artist queue" : data.queue === "ad-hoc" ? "Ad-hoc item" : "Main queue";
+        data.queue === "pending"
+          ? "Tier review — cross-artist assignments"
+          : data.queue === "ad-hoc"
+            ? "Ad-hoc item"
+            : "Main queue";
       if (!items.length) {
         emptyEl.hidden = false;
         updateProgress();
@@ -80,8 +84,36 @@
     });
   }
 
+  // Order rows so identically-grouped tracks sit together: all of one song,
+  // then within it all of one version, and so on down to release. Ranks come
+  // from each label's first appearance in the item's arrival order, which
+  // makes the chips read ascending down the page -- S1 V1 R1 L1, S1 V1 R2 L2,
+  // S1 V2 R3 L3 -- since render() numbers them by first appearance too.
+  //
+  // Called from loadItem() only, never from render(). Re-sorting live as a
+  // level key lands would slide rows out from under the cursor mid-decision.
+  function sortItemRows(item) {
+    const ranks = {};
+    for (const tier of TIERS) {
+      const seen = new Map();
+      for (const tid of item.track_ids) {
+        const label = item.labels[tid][tier];
+        if (!seen.has(label)) seen.set(label, seen.size);
+      }
+      ranks[tier] = seen;
+    }
+    item.track_ids.sort((a, b) => {
+      for (const tier of TIERS) {
+        const d = ranks[tier].get(item.labels[a][tier]) - ranks[tier].get(item.labels[b][tier]);
+        if (d) return d;
+      }
+      return 0;
+    });
+  }
+
   function loadItem() {
     const item = items[index];
+    sortItemRows(item);
     selection = new Set(item.track_ids);
     focus = item.track_ids[0];
     // Start from whatever is already pinned in the DB, so an existing
@@ -396,6 +428,27 @@
     return `${t.suffix_class}: ${t.suffix}`;
   }
 
+  // 6,070 of 9,693 tracks sit in no playlist at all. Without this a group of
+  // tracks you recognise gives no hint that none of them are actually yours.
+  function notInLibraryBadge() {
+    const badge = document.createElement("span");
+    badge.className = "badge muted";
+    badge.textContent = "not in library";
+    badge.title = "No live playlist membership";
+    return badge;
+  }
+
+  // Clean-vs-explicit is now a real tier decision (same version, different
+  // recording), and it is invisible without this -- the two rows are
+  // otherwise identical down to the millisecond.
+  function explicitBadge() {
+    const badge = document.createElement("span");
+    badge.className = "badge explicit";
+    badge.textContent = "E";
+    badge.title = "Explicit";
+    return badge;
+  }
+
   function textCell(text, cls) {
     const td = document.createElement("td");
     td.textContent = text;
@@ -467,7 +520,16 @@
       }
       tr.appendChild(coverTd);
 
-      tr.appendChild(textCell(t.title + (tid === pinnedTrackId ? " ★" : "")));
+      const titleTd = textCell(t.title + (tid === pinnedTrackId ? " ★" : ""));
+      if (t.explicit) {
+        titleTd.appendChild(document.createTextNode(" "));
+        titleTd.appendChild(explicitBadge());
+      }
+      if (!t.live_count) {
+        titleTd.appendChild(document.createTextNode(" "));
+        titleTd.appendChild(notInLibraryBadge());
+      }
+      tr.appendChild(titleTd);
       tr.appendChild(textCell(t.artists));
       tr.appendChild(textCell(t.album || ""));
       tr.appendChild(textCell(formatDuration(t.duration_ms)));
