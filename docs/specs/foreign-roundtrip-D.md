@@ -185,9 +185,19 @@ CREATE INDEX IF NOT EXISTS idx_track_uri_alias_track ON track_uri_alias(track_id
 -- Uris a run could not resolve, so a later run doesn't retry them forever and
 -- stall on the same batch. Clearable from the page (§6) when a failure looks
 -- transient.
+--
+-- Revised during implementation: this began as a single free-text `reason`,
+-- which §4.5 then started *matching on* to decide what a later run may
+-- re-request. Display copy that is also control flow means rewording the page
+-- changes behaviour, so it was split -- `state` is a slug with a CHECK,
+-- mirroring roundtrip_run.outcome, and free text lives in `detail`.
+-- roundtrip.py holds the labels the page renders (STATE_LABELS). db.py
+-- migrates the old shape, refusing rather than dropping rows if it isn't empty.
 CREATE TABLE IF NOT EXISTS roundtrip_failed_uri (
     requested_uri TEXT PRIMARY KEY,
-    reason        TEXT,
+    state         TEXT NOT NULL CHECK (state IN
+                      ('not_returned', 'dead', 'needs_review', 'load_failed')),
+    detail        TEXT,
     failed_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
@@ -364,10 +374,17 @@ these particular ids. It is worth **showing** to a human in the review queue
 ("you asked for #7; position 7 came back as X") — a hint can't silently corrupt
 anything — but it must never drive an automatic write.
 
-`roundtrip_failed_uri.reason` becomes load-bearing rather than a note: it
+`roundtrip_failed_uri.state` becomes load-bearing rather than a note: it
 decides what this pass is willing to spend requests on. A probe-confirmed
-`404 on open.spotify.com` is dead and never retried; `not returned by the
-read-back` is worth one more look.
+`dead` (404 on open.spotify.com) never is; `not_returned` is worth one more
+look. That is exactly why it is a slug and not the sentence shown on the page
+— see §3.
+
+A uri that this pass re-requests and Spotify simply *serves* this time needs no
+matching at all: it resolves through `played_uri_track` the moment the
+read-back stores it, and its `roundtrip_failed_uri` row is dropped. Leaving the
+row behind would strand it — a resolved uri never returns to this pass, so it
+would sit in the failures table claiming it wasn't returned, permanently.
 
 ### 4.6 Manual aliases — added during implementation
 
@@ -487,7 +504,8 @@ Follows the `snapshot.html` pattern; no new UI vocabulary.
   `<Play History Loader>` scratch playlist and nothing else.
 - **Counts:** foreign uris remaining, tracks already resolved by round-trip,
   aliases recorded, known-failed uris, plus the batch total the next run would do
-  and its request estimate (`2 × batches + 2`).
+  and its request estimate (`2 × batches + 3` — two guard reads and the clear,
+  matching the measurements table above).
 - **Start button** — one action, no options. Disabled while any job is active,
   with the active job named.
 - **Stop button** — enabled only while the round-trip is running. Calls
