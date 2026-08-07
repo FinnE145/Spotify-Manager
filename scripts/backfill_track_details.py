@@ -26,7 +26,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import db
-from snapshot import RateLimited, _album_image_url, _call
+from jobs import RateLimited
+from snapshot import _album_image_url, _call
 from spotify_client import get_spotify_client
 
 PAUSE_SECONDS = 0.2  # gentle on the rolling 30s window

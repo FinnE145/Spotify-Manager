@@ -3,99 +3,50 @@ an append-only membership log (see docs/specs/snapshot.md). Read-only w.r.t.
 Spotify; nothing here ever writes to the user's library."""
 
 import json
-import threading
-import time
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-
-from spotipy.exceptions import SpotifyException
 
 import canonical
 import db
+import jobs
+from jobs import RateLimited
 from spotify_client import get_spotify_client
 
 LIKED_PLAYLIST_ID = "__liked__"
 
-# A rate-limit wait this short is routine (Spotify's rolling 30s window) and
-# safe to sleep through; anything longer means an app-level quota is
-# exhausted, and we fail fast instead of blocking the background thread.
-_SHORT_WAIT_LIMIT_SECONDS = 30
-
-
-class RateLimited(Exception):
-    def __init__(self, retry_after_seconds):
-        self.retry_after_seconds = retry_after_seconds
-        self.retry_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=retry_after_seconds)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        super().__init__(f"Rate limited by Spotify — retry after {self.retry_at}")
-
-
-def _call(fn, *args, **kwargs):
-    """Calls a Spotipy method, retrying once through a short rate-limit
-    wait but raising RateLimited on a long one instead of blocking.
-
-    Every Spotify request in this module goes through here, which is what
-    makes the run's request counter a single increment. A 429 retry counts
-    too -- it really did hit the API."""
-    for attempt in range(2):
-        _count_request()
-        try:
-            return fn(*args, **kwargs)
-        except SpotifyException as e:
-            if e.http_status != 429:
-                raise
-            retry_after = int(e.headers.get("Retry-After", 1))
-            if retry_after > _SHORT_WAIT_LIMIT_SECONDS or attempt == 1:
-                raise RateLimited(retry_after) from e
-            time.sleep(retry_after)
-    raise AssertionError("unreachable")
-
-_status_lock = threading.Lock()
-_status = {
-    "running": False,
-    "phase": None,
+_status = jobs.JobStatus(
+    "snapshot",
+    phase=None,
     # Progress within the current run's track-pull loop, i.e. how many of
     # the playlists targeted by *this* pull/refresh are done — distinct
     # from summary_counts()'s playlists_total (all playlists ever seen).
-    "run_total": 0,
-    "run_done": 0,
-    "current_playlist": None,
-    "started_at": None,
-    "finished_at": None,
-    "error": None,
-    "retry_at": None,
-    "failed_playlists": [],
+    run_total=0,
+    run_done=0,
+    current_playlist=None,
+    started_at=None,
+    finished_at=None,
+    error=None,
+    retry_at=None,
+    failed_playlists=[],
     # Spotify requests issued by the current run. Per-run only, reset at the
     # start of each one; nothing is persisted.
-    "requests": 0,
+    requests=0,
     # Which action started this run ("pull" | "refresh" | "backfill"). Unlike
     # `phase`, it survives into the terminal state, so a page that reloaded
     # mid-run still knows a backfill's failures carry track ids, not playlist
     # ids, and must not be offered the exclude button.
-    "action": None,
-}
+    action=None,
+)
 
 
-def _now_iso():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _set_status(**kwargs):
-    with _status_lock:
-        _status.update(kwargs)
-
-
-def _count_request():
-    with _status_lock:
-        _status["requests"] += 1
+def _call(fn, *args, **kwargs):
+    return jobs.call(_status, fn, *args, **kwargs)
 
 
 def _record_failure(conn, playlist_id, name, error):
-    with _status_lock:
-        _status["failed_playlists"].append(
-            {"playlist_id": playlist_id, "name": name, "error": str(error)}
-        )
+    _status.append(
+        "failed_playlists",
+        {"playlist_id": playlist_id, "name": name, "error": str(error)},
+    )
     conn.execute(
         "UPDATE snapshot SET last_pull_error = ? WHERE playlist_id = ?", (str(error), playlist_id)
     )
@@ -103,8 +54,7 @@ def _record_failure(conn, playlist_id, name, error):
 
 
 def get_status():
-    with _status_lock:
-        return dict(_status)
+    return _status.get()
 
 
 def summary_counts(conn):
@@ -161,39 +111,14 @@ def start_backfill():
 
 
 def _start(target, *args):
-    # A pull and a history import must not run at the same time, in either
-    # direction. Imported here rather than at module level because
-    # history_import imports this module; and read *before* taking our own
-    # lock, since holding one module's lock while waiting on the other's is
-    # how the two mirror-image checks would deadlock.
-    import history_import
-
-    if history_import.get_status()["running"]:
-        return False
-    with _status_lock:
-        if _status["running"]:
-            return False
-        _status["running"] = True
-    thread = threading.Thread(target=target, args=args, daemon=True)
-    thread.start()
-    return True
+    # One job slot for the whole app -- a pull, a history import and a
+    # round-trip are mutually exclusive, and jobs.try_start settles that
+    # with a single atomic check-and-set.
+    return jobs.try_start("snapshot", target, *args)
 
 
 def _reset_status(phase, action):
-    _set_status(
-        running=True,
-        phase=phase,
-        action=action,
-        run_total=0,
-        run_done=0,
-        current_playlist=None,
-        started_at=_now_iso(),
-        finished_at=None,
-        error=None,
-        retry_at=None,
-        failed_playlists=[],
-        requests=0,
-    )
+    _status.reset(phase=phase, action=action, started_at=jobs.now_iso())
 
 
 def _run_pull(force_all):
@@ -206,9 +131,9 @@ def _run_pull(force_all):
 
         targets = _sync_playlists_and_get_targets(conn, sp, force_all)
 
-        _set_status(phase="tracks", run_total=len(targets), run_done=0)
+        _status.set(phase="tracks", run_total=len(targets), run_done=0)
         for i, p in enumerate(targets):
-            _set_status(current_playlist=p["name"], run_done=i)
+            _status.set(current_playlist=p["name"], run_done=i)
             try:
                 _pull_playlist_tracks(conn, sp, p["id"])
                 conn.commit()
@@ -221,9 +146,9 @@ def _run_pull(force_all):
             except Exception as e:
                 conn.rollback()
                 _record_failure(conn, p["id"], p["name"], e)
-        _set_status(run_done=len(targets), current_playlist=None)
+        _status.set(run_done=len(targets), current_playlist=None)
 
-        _set_status(phase="liked_songs")
+        _status.set(phase="liked_songs")
         liked_row = conn.execute(
             "SELECT excluded FROM snapshot WHERE playlist_id = ?", (LIKED_PLAYLIST_ID,)
         ).fetchone()
@@ -238,17 +163,16 @@ def _run_pull(force_all):
                 conn.rollback()
                 _record_failure(conn, LIKED_PLAYLIST_ID, "Liked Songs", e)
 
-        _set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", _now_iso())
+        _set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", jobs.now_iso())
         canonical.ensure_track_groups(conn)
         conn.commit()
 
-        _set_status(phase="done", finished_at=_now_iso())
+        _status.set(phase="done", finished_at=jobs.now_iso())
     except RateLimited as e:
-        _set_status(phase="error", error=str(e), retry_at=e.retry_at, finished_at=_now_iso())
+        _status.set(phase="error", error=str(e), retry_at=e.retry_at, finished_at=jobs.now_iso())
     except Exception as e:
-        _set_status(phase="error", error=str(e), finished_at=_now_iso())
+        _status.set(phase="error", error=str(e), finished_at=jobs.now_iso())
     finally:
-        _set_status(running=False)
         conn.close()
 
 
@@ -269,10 +193,10 @@ def _run_backfill():
                 "SELECT track_id FROM track WHERE raw_json IS NULL ORDER BY track_id"
             )
         ]
-        _set_status(run_total=len(track_ids), run_done=0)
+        _status.set(run_total=len(track_ids), run_done=0)
 
         for i, track_id in enumerate(track_ids):
-            _set_status(current_playlist=track_id, run_done=i)
+            _status.set(current_playlist=track_id, run_done=i)
             try:
                 track = _call(sp.track, track_id)
                 if not _usable_track(track):
@@ -286,21 +210,20 @@ def _run_backfill():
                 raise
             except Exception as e:
                 conn.rollback()
-                with _status_lock:
-                    _status["failed_playlists"].append(
-                        {"playlist_id": track_id, "name": track_id, "error": str(e)}
-                    )
-        _set_status(run_done=len(track_ids), current_playlist=None)
+                _status.append(
+                    "failed_playlists",
+                    {"playlist_id": track_id, "name": track_id, "error": str(e)},
+                )
+        _status.set(run_done=len(track_ids), current_playlist=None)
 
         canonical.ensure_track_groups(conn)
         conn.commit()
-        _set_status(phase="done", finished_at=_now_iso())
+        _status.set(phase="done", finished_at=jobs.now_iso())
     except RateLimited as e:
-        _set_status(phase="error", error=str(e), retry_at=e.retry_at, finished_at=_now_iso())
+        _status.set(phase="error", error=str(e), retry_at=e.retry_at, finished_at=jobs.now_iso())
     except Exception as e:
-        _set_status(phase="error", error=str(e), finished_at=_now_iso())
+        _status.set(phase="error", error=str(e), finished_at=jobs.now_iso())
     finally:
-        _set_status(running=False)
         conn.close()
 
 
@@ -337,7 +260,7 @@ def _sync_playlists_and_get_targets(conn, sp, force_all):
             (LIKED_PLAYLIST_ID,),
         )
     }
-    now = _now_iso()
+    now = jobs.now_iso()
     for pid in existing_ids - seen_ids:
         conn.execute("UPDATE snapshot SET unfollowed_at = ? WHERE playlist_id = ?", (now, pid))
     conn.commit()
@@ -709,7 +632,7 @@ def _diff_playlist_tracks(conn, playlist_id, current_items):
     for item in current_items:
         current_by_track[item["track_id"]].append(item)
 
-    now = _now_iso()
+    now = jobs.now_iso()
 
     for track_id in set(stored_by_track) | set(current_by_track):
         stored = stored_by_track.get(track_id, [])
@@ -802,7 +725,7 @@ def _apply_playlist_items(conn, playlist_id, items):
     conn.execute(
         "UPDATE snapshot SET tracks_pulled_at = ?, track_count = ?, last_changed_at = ?, "
         "last_pull_error = NULL WHERE playlist_id = ?",
-        (_now_iso(), live_count, last_changed, playlist_id),
+        (jobs.now_iso(), live_count, last_changed, playlist_id),
     )
 
 
