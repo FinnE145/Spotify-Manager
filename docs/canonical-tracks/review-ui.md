@@ -11,10 +11,14 @@ The click-through: one candidate group on screen at a time, keyboard-first, deci
 | URL | Queue |
 |---|---|
 | `/dev/canonical/review` | main queue — unreviewed candidate groups, playlist-impact order |
-| `/dev/canonical/review?queue=cross-artist` | same-title/no-shared-artist candidates (covers, Christmas songs) |
+| `/dev/canonical/review?queue=pending` | the tier pass for cross-artist assignments (spec E §4.6) |
 | `/dev/canonical/review?tracks=<id>,<id>,…` | a single ad-hoc item from an arbitrary selection (phase 6's search sends you here) |
 
-All three render the identical UI; only the item list differs — including the cross-artist queue, which uses the same prefill as everywhere else. The song-tier prefill rule requires artist overlap (see `detection.md`), so cross-artist items no longer arrive pre-merged into one song by default; they only start merged where there's already a real existing match or a genuine artist overlap within the bucket.
+All three render the identical UI; only the item list differs.
+
+The `pending` queue is ordinary ad-hoc items: a cross-artist assignment is already applied at song tier, so the prefill simply fills in below it. Committing one deletes its `pending_tier_review` row. It is reached by a redirect when the cross queue empties, and by a link and count on `/dev/canonical` — the link is what stops work stranding, since the queue gets worked in sittings and a redirect that only fires on the last item would leave earlier assignments unreachable.
+
+The same-title/no-shared-artist candidates are **no longer a mode of this page**. `?queue=cross-artist` is gone; that queue lives at `/dev/canonical/cross` with its own template and JS (spec E §4).
 
 ## Layout
 
@@ -26,11 +30,18 @@ All three render the identical UI; only the item list differs — including the 
 - album cover thumbnail (~48px, from `album_image_url`)
 - full **unnormalized** title, artists, album name, duration
 - **ISRC**, with identical ISRCs inside the item sharing a colour swatch — same-ISRC-ness is readable at a glance, and "—" when NULL
-- **live playlist count** — usually the thing that tells you which one is the real one
+- an **E** badge when `track.explicit`. Since step E dropped the clean/explicit recording rule, clean-vs-explicit is a decision you make by hand — and two such rows are otherwise identical down to the millisecond, so without the badge there is nothing on screen to decide from.
+- **live playlist count** — usually the thing that tells you which one is the real one — and a muted **not in library** badge when it's zero. 6,070 of 9,693 tracks are in that state, so without the badge a group of tracks you recognise gives no hint that none of them are actually in a playlist.
 - the track's suffix classification, muted (`base`, `version: acoustic`, `unknown`, …)
 - four **tier chips**: Song · Version · Recording · Release
 
 **Footer** — the clickable legend.
+
+### Row order
+
+Rows are sorted hierarchically by their tier labels — all of one song, then within it all of one version, then recording, then release — so identically-grouped tracks are always adjacent. Because the chips are numbered by first appearance, that also makes them read ascending down the page (`S1 V1 R1 L1`, `S1 V1 R2 L2`, `S1 V2 R3 L3`).
+
+**Sorted on load only.** Regrouping with a level key updates the chips but never moves a row: re-sorting live would slide rows out from under the cursor mid-decision. The order settles again when the next item loads.
 
 ### Tier chips
 
@@ -102,7 +113,7 @@ Progress is `committed items / total in the frozen list`, with the total growing
 
 ```
 GET  /dev/canonical/review        page (params: queue, tracks)
-GET  /api/canonical/queue         ?queue=main|cross-artist  or  ?tracks=<ids>
+GET  /api/canonical/queue         ?queue=main|pending  or  ?tracks=<ids>
                                   → ordered list of items with all display data + pre-fills
 POST /api/canonical/apply         {track_ids: [...], labels: {...}, pin_representative: id|null}
                                   → {tracks: {...}, dragged_in: [...]}

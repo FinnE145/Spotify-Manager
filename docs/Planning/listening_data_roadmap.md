@@ -199,9 +199,11 @@ It is **not**, however, a grouping signal, as this plan previously claimed. Chec
 
 **Dead URIs** — a 20-URI sample resolved **20/20**, no failures, no unplayable. So this should be rare. When a batch does 400: bisect once or twice via the API to narrow, then check candidates against `https://open.spotify.com/track/<id>` — the **public web page, which is not the Web API and costs no quota**. Worst case if bisecting all the way via API is ~400 extra requests; the web-check path makes that moot.
 
-## E — Grouping catch-up
+## E — Grouping catch-up ✅ DONE
 
-Detection reruns over ~9,699 tracks instead of 3,611. **Volume is genuinely unknown** — currently 288 groups over the whole library, but the foreign set skews toward alternate editions. Deliberately unplanned until it can be measured after D. If it's a few hundred, the existing Enter-key workflow holds and nothing needs building.
+**Specced → `docs/specs/grouping-catch-up-E.md`.** That spec is authoritative.
+
+Measured after D, the volume was not "a few hundred": **810 unreviewed main candidates and 541 cross-artist ones**. So E closed 70% of the main queue deterministically (same ISRC + identical normalized full title + duration within 2s, scored 114/114 against the corrected reviewed-pair baseline), stopped the prefill splitting songs it shouldn't, and rebuilt the cross-artist queue — whose historical merge rate is **0 of 292** — around the one-keypress "none of these are related" answer.
 
 ## B — Generation engine
 
@@ -221,6 +223,10 @@ A general song ranking that feeds album and artist rankings by aggregation. Moti
 - **Calibrate against ATG** — it's the only real ground truth in the library.
 
 > ⚠️ **ATG must be corrected before it is used as ground truth.** It currently has missing essentials and a fair amount of over-adding. The convention is right; the contents aren't. Any scoring or validation work waits on that cleanup.
+
+**`impact` is a placeholder for the score.** It is currently the summed live-membership count (and before step E, a broken one — see that spec's §0.1), used as the review queue's ordering. When H lands, replace it there.
+
+The score must be **aggregation-comparable across arbitrary group sizes** — a song, an album, an artist's discography and a playlist all need to be rankable against each other. Naive averaging of per-song scores fails: there are albums that are genuinely top-10 where only half the tracks get played, and averaging drags them to mid. Per-song inputs in play: plays, memberships, tenure, recency.
 
 ## J — Partial / resumable pulls
 

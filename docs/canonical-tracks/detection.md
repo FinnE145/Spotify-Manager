@@ -56,45 +56,102 @@ Candidates are pairs whose names normalize equal (same pipeline as titles) but w
 1. **Bucket** every track in `track` by normalized base title. All tracks are eligible, including ones whose only memberships are removed.
 2. Within a bucket, build components by `artist_ids` overlap (connected components, so `AAA` by X, `AAA` by X & Y, and `AAA` by Y all land together).
 3. A component with **≥2 tracks** is a **candidate group**.
-4. A bucket containing **≥2 distinct components** also produces a **cross-artist candidate** — the whole bucket, artist overlap ignored. These are the Christmas-song and cover cases; they feed a separate list and a separate queue, never the main queue.
+4. A bucket containing **≥2 distinct components** also produces a **cross-artist candidate** — the whole bucket, artist overlap ignored. These are the Christmas-song and cover cases; they feed a separate list and a separate queue (`/dev/canonical/cross`), never the main queue.
 5. Single-track components produce nothing.
 
 A candidate group is **unreviewed** when any pair among its tracks is missing from `reviewed_pair` (same rule for cross-artist candidates, over pairs that span components). Only unreviewed candidates enter the queue.
 
+## Suffix normalization
+
+`normalize_suffix(s)`, used by `classify_suffix`, by `_same_recording`'s suffix equality, and by the auto-group rule's title comparison:
+
+1. `_strip_accents`, then `casefold`
+2. every character that isn't a letter, digit or space becomes a **space**
+3. collapse whitespace runs, strip
+
+**Punctuation becomes a space rather than being deleted.** NFKD doesn't fold `’` (U+2019) to `'`, so `(taylor’s version)` only agrees with `(taylor's version)` once both collapse to `taylor s version` — which is why all 14 of the former used to fall through unclassified. Keywords are therefore written in the same form (`taylor s version`).
+
+**Digits are kept.** `1947 version`, `remastered 1999` and `99 luftballons` all need them.
+
+This barely compresses the suffix set (1,093 distinct → 1,022). Its value is correctness.
+
 ## Suffix classification
 
-Scan the suffix (case-folded) for these keywords:
+Match keywords as **whole token sequences** against the normalized suffix, never as bare substrings: `feat don toliver` contains `live`, and substring matching classified all 16 of those as `version`.
 
 | Class | Keywords |
 |---|---|
-| **undecided** | `instrumental` |
-| **version** — *sounds different* | `acoustic`, `live`, `remix`, `demo`, `sped up`, `slowed`, `nightcore`, `piano`, `orchestral`, `reprise`, `stripped` |
-| **recording** — *sounds the same* | `remaster`, `remastered`, `taylor's version`, `deluxe`, `anniversary`, `mono`, `stereo`, `clean`, `explicit`, `radio edit`, `single version`, `album version`, `extended` |
+| **version** — *sounds different* | `acoustic`, `live`, `remix`, `demo`, `instrumental`, `cover`, `nightcore`, `piano`, `orchestral`, `stripped`, `sped up`, `slowed`, `reprise`; session/venue: `long pond studio sessions`, `recorded at spotify studios`, `unplugged`, `voice memo`, `the voice performance`; plus a generic `… version` catch-all (jazz, guitar, original, 1947) |
+| **recording** — *sounds the same* | `remaster`, `remastered`, `taylor s version`, `mono`, `stereo`, `clean`, `explicit`, `radio edit`, `single version`, `album version`, `deluxe`, `anniversary`, `extended` |
+| **neutral** — *recognised, but says nothing about the audio* | `feat`, `ft`, `featuring`, `with`, `arr`, `interlude`, `skit`, `bonus track`, `edit` |
 
-Precedence when a suffix matches several: **undecided > version > recording**. Safer wins — the more a suffix looks ambiguous, the less the pre-fill assumes.
+`neutral` is not a synonym for "harmless": at version tier it is the *least* trusted class, standing alone unless recording identity or a clean/explicit match earns it a merge. See the version rule below.
 
-An empty suffix classifies as **base**. A non-empty suffix matching no keyword classifies as **unknown**.
+Precedence: **version > recording > neutral > generic `… version`**, then neutral as the fallback. Each step earns its place — `radio edit` stays `recording` despite containing `edit`; `(Bonus Track Version)` and `(Arr. Jazz Version)` stay `neutral` rather than being caught by the generic rule.
+
+An empty suffix classifies as **base**. Anything unrecognised classifies as **neutral** — the same class the explicit neutral list produces, which is listed anyway as the record that those families were each considered.
+
+Two of these were close calls, decided deliberately:
+
+- **`arr …` is `neutral`, not `version`.** An arrangement usually *is* a different performance, but this library's classical entries are inconsistent enough to be worth deciding by hand.
+- **`instrumental` is `version`**, even though an instrumental *cover* is genuinely a different song. A cover is by a different artist, so it shares no primary artist and can never merge at song tier — it goes to the cross-artist queue and gets rejected there. The `version` class only ever affects same-artist tracks, which is exactly the "instrumental version of their own song" case.
 
 ## Pre-fill rules
 
 Within a candidate group, in order. At every tier, a pair that **already shares that tier for real** (its last-saved grouping, not just this pre-fill) always merges too, regardless of whether the rule below would independently agree — an existing decision is never silently proposed as undone. This is what makes the cross-artist queue safe to prefill the same way as everywhere else: a real prior match survives even where the heuristics alone wouldn't have found it.
 
-**Song.** Every track classified `base`, `version`, or `recording` goes into a song group **with tracks it shares a `primary_ids` artist with** — disjoint primary artists are never the same song by title alone, even an exact match. This is what keeps covers, Christmas songs, and coincidental same-title tracks by unrelated artists from merging by default; a bucket can therefore prefill into more than one song group. Tracks classified `undecided` or `unknown` are left entirely alone — all four tiers singleton, not even the same song. (An unrecognized suffix like `(Bonus Track)` or `- 2011 Version` could mean anything; guessing there is worse than a click.)
+**Song — merges by default.** Two tracks in a candidate group go into one song group whenever they share a **`primary_ids`** artist, whatever their suffix class. Disjoint primary artists are never the same song by title alone, even an exact match, and a shared *featured* credit is not enough either — those two rules are what keep covers, Christmas songs and coincidental same-title tracks apart, and a bucket can therefore prefill into more than one song group.
+
+There is no eligibility gate. The prefill now guesses where it used to abstain: an unrecognised suffix lands in the same song group and has its finer tiers decided by ISRC, duration and album, rather than sitting singleton at all four. That is the intended trade — an obviously-related track sitting alone was the more annoying failure. It takes wrong song-tier splits from **132 to 7**.
 
 Note the asymmetry with candidate generation, which overlaps on the wider `artist_ids`. `Song X by B` and `Song X by A feat. B` therefore land in the same candidate group but pre-fill as two songs: the pair is surfaced for a decision, never merged on a featured credit alone.
 
-**Version.** Within a song group, all `base` and `recording` tracks share **one** version group — a remaster sounds the same as the original, so it's the same version. Each `version`-classified track gets **its own** version group, *not* merged with same-keyword siblings: two different live cuts are two different-sounding things.
+**Version.** Within a song group, all `base` and `recording` tracks share **one** version group — a remaster sounds the same as the original.
+
+`version`-classified tracks (acoustic, live, remix, …) each get **their own**, *not* merged with same-keyword siblings: two different live cuts are two different-sounding things.
+
+`neutral` tracks also stand alone, and that is the point — a neutral suffix is the one we understand *least*, so assuming "sounds the same" would be a guess exactly where there is no evidence. `Speechless (Full)` and `Speechless (Part 2)` are 208 s and 144 s. A neutral track still joins a version group when it earns it, through the two rules below.
+
+Beyond the class rule, two tracks share a version group when either holds:
+
+- **Recording identity** (`_same_recording` or `_same_release`), by nesting. So `Lemonade` and `Lemonade (feat. NAV)`, sharing an ISRC and a duration, stay together despite both being neutral. Without this, two rows of the same `(Live)` track — same ISRC, both `version`-classified — would land in different version components, and since recording/release are assigned *scoped inside* a version component, they could then never merge at recording either.
+- **A clean/explicit pair** (`_clean_explicit_pair`): same **base** title, artist overlap, durations within 2 s, `explicit` differing. Same version, *never* same recording — they sound near-identical but are not the same recording, which is the whole distinction between the two tiers. Matched on the base title rather than the full one because the suffixes are usually what differ (`Seven (feat. Latto)` vs `Seven (feat. Latto) (Explicit Ver.)` — the marker announcing the very thing being matched on). A `version`-classified side vetoes it: an instrumental or acoustic cut genuinely sounds different, whatever its explicit flag says.
+
+### Recording identity
+
+Two tracks are the same recording when **all three** hold — `_same_recording_identity`:
+
+**same ISRC · same duration · same `explicit` flag**
+
+Any one of them differing means a different recording. Recording means the tracks *are* the same; version means they *sound* the same. A clean edit has words taken out of it, so it is a different recording that sounds near-identical — "same version, different recording" — and it lands there with no rule of its own, because both sides still share a version group through `shares_base_version`.
+
+The `explicit` guard holds **even when Spotify reports the same ISRC** for the clean and explicit rows, which it does for 15 groups in this library (`Come Hang Out` has five, mixed, across two album editions). The differing flag wins.
+
+Duration is compared with the standard 2,000 ms tolerance. That guard is not cosmetic: of 981 same-ISRC pairs, 194 differ in length and **24 differ by more than 2 s** (up to 76 s), so ISRC equality alone would merge genuinely different cuts.
+
+Step E replaced an earlier rule that did the opposite — it merged differing-`explicit` pairs *into* one recording, on the theory that a clean edition is the same master. Wrong tier.
 
 **Recording.** Within a version group, merge when any holds:
-- **Same ISRC, different normalized album name** → same recording, different releases. This is the AAA-on-four-releases case, and it's the workhorse rule.
-- **Clean/explicit pair**: identical normalized *full* title (base **and** suffix), `artist_ids` overlap, durations within 2s, and differing `track.explicit` → same recording, with the **explicit** track pinned as representative. Clean editions carry no telltale suffix and a *different* ISRC, so nothing else catches them.
-- **A release-tier match** (below) between the pair — release ⊆ recording nesting means same release always implies same recording, even when neither recording rule fires on its own (e.g. a literal duplicate upload: same ISRC *and* same album).
+- **Recording identity + different normalized album name** → same recording, different releases. The AAA-on-four-releases case, and the workhorse rule.
+- **A release-tier match** (below) — release ⊆ recording nesting means same release always implies same recording (e.g. a literal duplicate upload).
 
 Otherwise each track is its own recording.
 
-**Release.** Merge when: **same ISRC, same normalized album name, durations within 2s** — even across different album ids. That's the duplicate-album-upload case. Otherwise each track is its own release.
+**Release.** **Recording identity + same normalized album name** — even across different album ids. That's the duplicate-album-upload case. Otherwise each track is its own release.
 
-Duration comparison is on `duration_ms`, tolerance 2000 ms. A NULL ISRC never matches anything, including another NULL.
+A NULL ISRC never matches anything, including another NULL.
+
+## The deterministic auto-group
+
+A pair **matches** when it has full **recording identity** (same ISRC, same duration, same `explicit`) *and* equal normalized base titles *and* equal normalized suffixes. A candidate group **auto-closes** when the rule matches on **every** pair in it — partial matches close nothing.
+
+The `explicit` guard matters more here than anywhere, because a run writes **one shared recording** per group: a group whose rows disagree on `explicit` must not close at all, and stays in the queue whole rather than having certainty asserted over a visible contradiction. That is 14 groups — the run closes **554 of 812**, leaving 258.
+
+Scored against the reviewed-pair baseline it is **114/114**: zero disagreements at any tier. Loosening it to bare ISRC equality produces 7 recording-tier disagreements, and feature-stripping the title buys 3 groups at the cost of 2 disagreements. Neither was adopted — the rule asserts certainty and stays maximally strict; feature-neutrality belongs in the prefill, which only suggests.
+
+**Re-score after any change to `_auto_group_pair`.** The baseline is the only ground truth in the project.
+
+`canonical_detect` decides the rule; `canonical_autogroup` owns the writing, the run log and the whole-table undo snapshot. See `docs/specs/grouping-catch-up-E.md` §3.
 
 ## Ordering
 
@@ -106,9 +163,14 @@ This puts the songs that appear all over the library first, and — since larger
 
 ```python
 candidate_groups(conn) -> list[CandidateGroup]      # main queue, ordered, unreviewed only
-cross_artist_groups(conn) -> list[CandidateGroup]   # cross-artist queue, same ordering
 all_candidate_groups(conn) -> list[CandidateGroup]  # incl. reviewed, for the viewer page
 ad_hoc_group(conn, track_ids) -> CandidateGroup     # arbitrary selection, for search → queue
+
+cross_buckets(conn) -> list[CrossItem]              # the reworked cross-artist queue
+pending_song_ids(conn) -> list[int]                 # song groups awaiting a tier pass
+pending_tier_items(conn) -> list[CandidateGroup]    # those, as ad-hoc items
+
+auto_group_candidates(conn) -> (list[Closable], int)  # the auto-group rule, decided not written
 ```
 
 A `CandidateGroup` carries: a stable **key** (the normalized base title plus the sorted track ids — used to identify the item across a queue session), the ordered track ids, each track's display fields (title, the rendered artist string, album, `album_image_url`, `duration_ms`, `explicit`, `isrc`, live-membership count), each track's suffix classification, the pre-filled tier labels, and the playlist-impact total.
