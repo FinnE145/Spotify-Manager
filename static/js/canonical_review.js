@@ -102,12 +102,17 @@
   // Sets the exact relationship for the current selection in one shot:
   // level 1 = not even the same song (fully separate at all 4 tiers),
   // level 2 = same song, 3 = same version, 4 = same recording, 5 = same
-  // release. Tiers at or coarser than the chosen level are shared across
-  // the whole selection; every tier finer than that is split back out to
-  // a fresh, individually-unique label per track. This only ever touches
-  // the selected tracks -- it never reaches out to unselected neighbors,
-  // and the server's own closure (on commit) handles any DB-side nesting
-  // consequences beyond this item.
+  // release. The chosen tier gets one shared fresh label across the
+  // selection; every tier finer than that is split back out to a fresh,
+  // individually-unique label per track -- a deliberate split. Every tier
+  // coarser than the chosen level is left alone (each track keeps its
+  // current label), UNLESS the selection disagrees on it already, in which
+  // case that coarser tier falls back to a shared fresh label too -- purely
+  // so a click can never produce a payload the server's nesting check
+  // rejects (see docs/specs/canonical-fixes.md §1.3). This only ever
+  // touches the selected tracks -- it never reaches out to unselected
+  // neighbors, and the server's own closure (on commit) handles any
+  // DB-side nesting consequences beyond this item.
   function applyLevel(level) {
     if (!selection.size) return;
     const item = items[index];
@@ -117,7 +122,14 @@
     const members = [...selection];
 
     TIERS.forEach((tier, i) => {
-      if (i <= sharedThroughIndex) {
+      if (i < sharedThroughIndex) {
+        const firstLabel = item.labels[members[0]][tier];
+        const agree = members.every((tid) => item.labels[tid][tier] === firstLabel);
+        if (!agree) {
+          const label = freshLabel(tier);
+          for (const tid of members) item.labels[tid][tier] = label;
+        }
+      } else if (i === sharedThroughIndex) {
         const label = freshLabel(tier);
         for (const tid of members) item.labels[tid][tier] = label;
       } else {
