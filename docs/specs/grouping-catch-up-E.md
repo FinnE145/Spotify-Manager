@@ -31,6 +31,34 @@ thing to use them.** Every rule below was scored against them before being
 adopted. Re-score after any rule change — it is the only ground truth in the
 project.
 
+> ⚠️ **The baseline stops being independent the moment auto-group runs.** A run
+> calls `mark_reviewed` over every group it closes, so its own decisions become
+> `reviewed_pair` rows and the rule then scores against its own output. After
+> the first real run the table went 491 → 1,195 pairs and the rule "passed"
+> 806/806 — a number that means nothing.
+>
+> **Any future scoring must exclude pairs an auto run wrote.** There is no
+> marker for them today; the run id would have to be recorded per pair, or the
+> score taken against a snapshot of the human-only baseline. Until that exists,
+> the last trustworthy figure is the one below, taken immediately before the
+> first run. This matters beyond E: **H is meant to calibrate against this
+> same data.**
+
+### Amendments after implementation (2026-08-07)
+
+The measurements below are what the spec was written against and are left as
+the record. Two decisions taken during implementation moved them:
+
+- **§0.3 landed**, removing 12 reviewed pairs. The baseline is **491 pairs**,
+  and the auto-group rule scores **114/114** on it — 114 fires, zero
+  disagreements at any tier. (The spec predicted 116/116; the correction
+  removed two pairs the rule fired on.)
+- **Recording identity gained an `explicit` guard** — same ISRC *and* same
+  duration *and* same `explicit`. Clean and explicit are not the same
+  recording, though they sound near-identical, so a clean/explicit pair is now
+  same version / different recording. That drops 14 groups the rule would
+  otherwise have closed: **554 of 812, leaving 258**, not 568 of 810.
+
 ### The auto-group rule, scored against those 503 pairs
 
 Rule: **same ISRC + identical normalized full title + duration within 2,000 ms.**
@@ -338,20 +366,35 @@ it. Undo is one level deep; say so in the UI.
 ### 3.5 Viewer badge
 
 `canonical_group.auto_run_id INTEGER NULL`. After a run completes, tag exactly the
-groups it created:
+groups it decided.
 
-```sql
-UPDATE canonical_group SET auto_run_id = ?
-WHERE id NOT IN (SELECT id FROM <the snapshot of canonical_group>)
-```
+> ⚠️ **Corrected during implementation.** This section originally specified:
+>
+> ```sql
+> UPDATE canonical_group SET auto_run_id = ?
+> WHERE id NOT IN (SELECT id FROM <the snapshot of canonical_group>)
+> ```
+>
+> **That tags nothing.** It assumes a run *creates* groups, and it doesn't:
+> `apply_partition` step 4 reuses an existing group id whenever a part's
+> members fully cover one, and a singleton group always qualifies. So a run
+> overwhelmingly re-points existing ids and deletes the orphans — the real run
+> took `canonical_group` **down** from 38,321 rows to 36,173. An id-diff
+> against the snapshot matched **zero** groups.
 
-which reuses the snapshot already taken. `/dev/canonical` renders a small badge on
-any group with a non-null `auto_run_id`, so a group that looks wrong while browsing
-is identifiable as machine-decided. A later manual edit that reconciles the group
-away takes the flag with it, which is correct.
+Take the ids from what `apply_partition` actually wrote instead — it returns
+the final tier ids for every track it touched, including anything its closure
+pulled in — and tag those. On the real run that is 2,653 groups: 568 song, 568
+version, 568 recording and 949 release, with no singleton song groups among
+them.
+
+`/dev/canonical` renders a small badge on any group with a non-null
+`auto_run_id`, so a group that looks wrong while browsing is identifiable as
+machine-decided. A later manual edit that reconciles the group away takes the
+flag with it, which is correct.
 
 No spot-check flow, no sampling UI, no outlier queue. The audit that matters
-already happened: 116/116 against 503 real decisions is stronger evidence than
+already happened: 114/114 against real decisions is stronger evidence than
 anything a post-hoc skim would produce.
 
 ---
