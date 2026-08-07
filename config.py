@@ -8,7 +8,13 @@ load_dotenv()
 SPOTIFY_CLIENT_ID = os.environ["SPOTIFY_CLIENT_ID"]
 SPOTIFY_CLIENT_SECRET = os.environ["SPOTIFY_CLIENT_SECRET"]
 SPOTIFY_REDIRECT_URI = os.environ["SPOTIFY_REDIRECT_URI"]
-SPOTIFY_SCOPES = "playlist-read-private playlist-read-collaborative user-library-read"
+# playlist-modify-private is the round-trip's write scope: it is used only to add
+# to and clear the private "<Play History Loader>" scratch playlist, never any
+# other playlist. Everything else here is read-only.
+SPOTIFY_SCOPES = (
+    "playlist-read-private playlist-read-collaborative user-library-read "
+    "playlist-modify-private"
+)
 
 DB_PATH = os.environ.get("SYMR_DB_PATH", "symr.db")
 SPOTIPY_CACHE_PATH = os.environ.get("SYMR_SPOTIPY_CACHE", ".spotipy_cache")
