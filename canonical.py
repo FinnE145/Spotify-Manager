@@ -106,10 +106,23 @@ def _cleanup_tier(conn, tier, column):
             )
 
 
-def apply_partition(conn, labels):
+def cleanup_all_tiers(conn):
+    """The four _cleanup_tier passes, for a caller that ran a batch of
+    apply_partition(cleanup=False) calls and now owes the cleanup once."""
+    for tier in TIER_ORDER:
+        _cleanup_tier(conn, tier, TIER_COLUMN[tier])
+
+
+def apply_partition(conn, labels, cleanup=True):
     """The one write operation for merge/detach/ungroup. See
     grouping-engine.md for the full reconciliation algorithm this
-    implements."""
+    implements.
+
+    cleanup=False skips the four _cleanup_tier passes, which are a full
+    canonical_group x track_group LEFT JOIN each and dominate the cost of a
+    batch of calls (11.75s -> 1.15s over the 568-group auto-group run). Only
+    a caller that runs cleanup_all_tiers() itself once its batch is done may
+    pass it."""
     _validate_labels(conn, labels)
     if not labels:
         return {"tracks": {}, "dragged_in": []}
@@ -198,7 +211,8 @@ def apply_partition(conn, labels):
                 )
 
         # 6. Clean up orphaned groups and stale pinned representatives.
-        _cleanup_tier(conn, tier, column)
+        if cleanup:
+            _cleanup_tier(conn, tier, column)
 
     all_touched = set(labels) | set(before)
     tracks = {
@@ -454,6 +468,16 @@ def song_tree(conn, song_id):
         "pinned": _is_pinned(conn, song_id),
         "track_ids": song_track_ids,
         "versions": versions,
+    }
+
+
+def auto_grouped_ids(conn):
+    """Group ids an auto-group run created, for the viewer's badge. A later
+    manual edit that reconciles a group away takes the flag with it, which is
+    correct -- the group is no longer purely machine-decided."""
+    return {
+        row["id"]
+        for row in conn.execute("SELECT id FROM canonical_group WHERE auto_run_id IS NOT NULL")
     }
 
 

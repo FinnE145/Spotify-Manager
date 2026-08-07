@@ -137,7 +137,12 @@ CREATE TABLE IF NOT EXISTS canonical_group (
     -- ISO-8601 with an explicit Z, matching jobs.now_iso() and what
     -- static/js/format.js parses. Plain datetime('now') is naive UTC and
     -- renders as a local time, i.e. hours off.
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    -- The auto-group run that created this group, so a group that looks wrong
+    -- while browsing is identifiable as machine-decided. No FK: a run's row
+    -- outlives nothing, but a later manual edit that reconciles the group away
+    -- correctly takes the flag with it.
+    auto_run_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS track_group (
@@ -158,6 +163,64 @@ CREATE TABLE IF NOT EXISTS reviewed_pair (
     track_id_b TEXT NOT NULL REFERENCES track(track_id),
     decided_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (track_id_a, track_id_b)
+);
+
+-- A cross-artist assignment awaiting its version/recording/release pass
+-- (docs/specs/grouping-catch-up-E.md §4.5).
+--
+-- Keyed on track id, not group id. The assignment isn't derivable from title
+-- or artist overlap, so detection can never regenerate it -- it has to be
+-- stored. But group ids are reconciled by apply_partition and a group can be
+-- absorbed into another, leaving a stored group id pointing at nothing. Track
+-- ids never move. Each row reads as "review whichever song group this track is
+-- in right now", so two newcomers landing in one group dedupe at read time.
+CREATE TABLE IF NOT EXISTS pending_tier_review (
+    track_id TEXT PRIMARY KEY REFERENCES track(track_id)
+);
+
+-- One row per deterministic auto-group run (docs/specs/grouping-catch-up-E.md
+-- §3). Kept after an undo, with undone_at set, as the record that it happened.
+CREATE TABLE IF NOT EXISTS auto_group_run (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    finished_at     TEXT,
+    groups_closed   INTEGER,
+    tracks_affected INTEGER,
+    undone_at       TEXT
+);
+
+-- Undo is a whole-table snapshot restored wholesale, deliberately blunt rather
+-- than clever: recording per-track prior group ids would have to reason about
+-- groups _cleanup_tier deleted and about tracks outside the run that shared a
+-- prior group with one inside it. These three tables are ~48k rows and a few
+-- MB, so copying them is the cheaper correctness.
+--
+-- Only the most recent run's snapshot is kept; a new run replaces it. No
+-- foreign keys anywhere here -- these rows deliberately describe a state the
+-- live tables no longer have.
+CREATE TABLE IF NOT EXISTS auto_group_snapshot_canonical_group (
+    run_id                  INTEGER NOT NULL,
+    id                      INTEGER NOT NULL,
+    tier                    TEXT,
+    representative_track_id TEXT,
+    created_at              TEXT,
+    auto_run_id             INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS auto_group_snapshot_track_group (
+    run_id       INTEGER NOT NULL,
+    track_id     TEXT NOT NULL,
+    song_id      INTEGER,
+    version_id   INTEGER,
+    recording_id INTEGER,
+    release_id   INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS auto_group_snapshot_reviewed_pair (
+    run_id     INTEGER NOT NULL,
+    track_id_a TEXT NOT NULL,
+    track_id_b TEXT NOT NULL,
+    decided_at TEXT
 );
 
 -- Spotify issues more than one artist id for the same artist. Sparse: only
@@ -517,6 +580,10 @@ def _migrate(conn):
                 "roundtrip_failed_uri still has the old `reason` column and is not empty; "
                 "migrate it by hand rather than losing rows"
             )
+
+    canonical_group_columns = {row[1] for row in conn.execute("PRAGMA table_info(canonical_group)")}
+    if "auto_run_id" not in canonical_group_columns:
+        conn.execute("ALTER TABLE canonical_group ADD COLUMN auto_run_id INTEGER")
 
     track_columns = {row[1] for row in conn.execute("PRAGMA table_info(track)")}
     for column, ddl in (
