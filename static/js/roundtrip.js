@@ -51,7 +51,9 @@
 
   function setControls(status) {
     const otherJob = status.active_job && status.active_job !== "roundtrip";
-    startBtn.disabled = Boolean(status.active_job);
+    // Tracked off the live count too: with nothing left to do a run would
+    // spend the guard's two requests and the clear's one for no work.
+    startBtn.disabled = Boolean(status.active_job) || !status.remaining_uris;
     // Tracked off the live count, not just `running`, so it disables itself
     // once a run leaves nothing to reconcile.
     reconcileBtn.disabled = Boolean(status.active_job) || !status.reconcilable;

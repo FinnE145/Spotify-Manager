@@ -610,6 +610,16 @@ def _reconcile_batch(conn, sp, index, total, uris):
 
     loaded_set = set(loaded)
     unresolved = _unresolved(conn, loaded)
+
+    # A uri the read-back resolved on its own this time is no longer failed --
+    # Spotify served it where an earlier run got nothing. Drop its row rather
+    # than leaving it listed as "not returned by the read-back" forever, which
+    # is both wrong and permanent (a resolved uri never comes back here).
+    unresolved_set = set(unresolved)
+    recovered = [uri for uri in loaded if uri not in unresolved_set]
+    for uri in recovered:
+        conn.execute("DELETE FROM roundtrip_failed_uri WHERE requested_uri = ?", (uri,))
+
     # A returned track is a candidate only if nothing already accounts for it:
     # it isn't one of the uris we asked for, and it didn't name one via
     # linked_from.
@@ -635,6 +645,7 @@ def _reconcile_batch(conn, sp, index, total, uris):
     _status.log(
         f"{label} — {len(matched)} matched on title + artist, "
         f"{len(unmatched)} left for manual review"
+        + (f", {len(recovered)} came back on their own" if recovered else "")
     )
 
 

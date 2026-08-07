@@ -49,7 +49,9 @@
 
   <section class="panel">
     <h2>Controls</h2>
-    <button id="roundtrip-start-btn" type="button">Start round-trip</button>
+    <button id="roundtrip-start-btn" type="button" {{ 'disabled' if not counts.remaining_uris }}>
+      Start round-trip
+    </button>
     <button id="roundtrip-reconcile-btn" type="button" {{ 'disabled' if not counts.reconcilable }}>
       Reconcile unresolved (<span data-field="reconcilable">{{ counts.reconcilable }}</span>)
     </button>
