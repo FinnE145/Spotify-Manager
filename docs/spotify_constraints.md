@@ -18,6 +18,29 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 - Modifying playlists: `playlist-modify-private`, `playlist-modify-public` (note: adding tracks to a *public* playlist still needs `playlist-modify-public`).
 - Saved tracks (Liked Songs): `user-library-read`, `user-library-modify`.
 - Cover upload: `ugc-image-upload`.
+- **Symr's token currently carries four scopes** (`config.py`): `playlist-read-private`, `playlist-read-collaborative`, `user-library-read`, and — since 2026-08-06 — **`playlist-modify-private`**, granted for the foreign-track round-trip. It is the only write scope, and `roundtrip.py` is the only module that uses it. Adding a scope means deleting `.spotipy_cache` and re-authing; the cached token does not gain scopes on its own.
+
+## Playlist writes (verified Aug 2026, `docs/specs/foreign-roundtrip-D.md`)
+- **Add: 100 items per request maximum** (`POST /playlists/{id}/tracks`, Spotipy `playlist_add_items()`). Adds **append**.
+- **Replace costs the same one request and also takes 100 URIs**: `PUT /playlists/{id}/tracks` with a `uris` array (Spotipy `playlist_replace_items()`) makes the playlist hold *exactly* those items. With an empty array it clears a playlist of any length.
+- **For batch work, prefer replace over add.** Same price, and it removes the need to track an offset: the playlist holds exactly the current batch, so the read-back is always `offset=0`. Appending forces you to maintain a running offset that must stay in lockstep with the playlist's true length, and if it ever drifts, a read still returns a plausible full page of 100 — the error is invisible. Symr shipped the append version once and it silently mis-mapped 1,250 URIs on its first real run (`docs/specs/foreign-roundtrip-D.md` §4.3).
+- Playlists cap at **10,000 items** — irrelevant if you replace per batch.
+- **One dead URI 400s the whole write** — the request is all-or-nothing, so a single withdrawn track costs the entire batch of 100.
+- **Never let urllib3 auto-retry a playlist write.** Spotipy's session retries on 5xx, and `allowed_methods` includes `POST`/`PUT` by default; a write that 5xx'd may already have been applied, so the replay duplicates it and the playlist silently diverges from what the caller thinks it wrote. `spotify_client.py` restricts retries to `GET` (token refresh POSTs go through `SpotifyOAuth`'s own session and are unaffected).
+- **There is no free way to learn the current user's id**; `GET /v1/me` (`current_user()`) is a request like any other. An owner check therefore costs one request on top of the playlist read.
+
+## Track relinking (verified Aug 2026)
+- Spotify serves market-specific catalogs, so one recording can exist under different ids per market. Request an unavailable id and Spotify substitutes the equivalent, returning the **playable** track with `linked_from` holding what was asked for.
+- **The `linked_from` object is a stub**: `id`, `uri`, `type`, `href`, `external_urls` and nothing else — no `name`, `artists`, `album` or `duration_ms`. So the requested id can never become a `track` row of its own, and a relink is not a pair of rows that could be grouped. Symr records the relationship in `track_uri_alias` (requested URI → resolved `track_id`) instead; **many requested URIs can collapse onto one track**, which is why that is a table and not a column.
+- **`linked_from` is the only trustworthy evidence that a substitution happened**, and it names the requested URI outright — so a batch read-back never needs to infer the pairing from position. A returned track that matches nothing you asked for and carries *no* `linked_from` is not a relink; it means the read is wrong.
+- **Measured frequency: 0 relinks in 1,800 URIs** (Aug 2026, this account/market). Not zero in principle, but rare enough that a design must not depend on relinks to validate itself.
+- Consequence: anything resolving a played URI to a track must go through the `played_uri_track` view, never a bare `track.uri` join, or relinked plays silently fail to resolve.
+
+## `open.spotify.com` — the public web page, not the Web API (verified 2026-08-06)
+- `https://open.spotify.com/track/<id>` returns **200** for a live track and **404** for a non-existent id. `HEAD` returns the same codes as `GET`, so existence can be checked without pulling ~290 KB of HTML.
+- **This is the web frontend, not the Web API: it costs no API quota and needs no token.** That makes it the cheap way to narrow down which URI poisoned a 400'd batch add, instead of bisecting via the API and spending the very quota the batching exists to save.
+- `open.spotify.com/robots.txt` allows `/track/` under `User-agent: *` (only `/local/`, `/download/` and `/embed/` are disallowed). Symr probes at ~10/s with an honest user-agent and a 5s timeout, and only on a failed batch.
+- **Caveat:** verified against *fabricated* ids, not a genuinely withdrawn track. A delisted track may well still render a page and return 200, so treat the probe as best-effort narrowing and always keep a real backstop. Any non-200/404 (timeout, 5xx, 429) is inconclusive and must not be read as "dead".
 
 ## Rate limits (verified)
 - Calculated over a **rolling 30-second window**. On `429`, honor the **`Retry-After`** header (seconds) and back off — don't retry before it elapses.

@@ -1,7 +1,7 @@
 # Foreign-track round-trip (step D)
 
 Step D of `docs/Planning/listening_data_roadmap.md`. Turns the played-but-unknown
-Spotify URIs in `play` into real `track` rows with full metadata, for ~124 requests
+Spotify URIs in `play` into real `track` rows with full metadata, for ~125 requests
 instead of 6,085, by pushing them through a scratch playlist and reading the full
 track objects back out of the playlist-items endpoint.
 
@@ -15,7 +15,7 @@ and never touches anything else.
 
 The app is in Spotify dev mode with no extended-quota grant. Quota exhaustion is
 real and returns a `Retry-After` in the **tens of thousands of seconds** (~24h) —
-see `docs/spotify_constraints.md`. A full run is ~124 requests and we do not know
+see `docs/spotify_constraints.md`. A full run is ~125 requests and we do not know
 how close that is to the ceiling.
 
 Therefore, binding on the implement session:
@@ -43,7 +43,10 @@ Last full pull was 2026-08-03, so D is not sharing a day with a pull.
 | Distinct foreign URIs (no `track` row) | **6,085** |
 | Plays on foreign URIs | 13,947 |
 | Batches of 100 | 61 |
-| Requests: 1 guard + 61 add + 61 read + 1 clear | **124** |
+| Requests: 2 guard + 61 load + 61 read + 1 clear | **125** |
+
+The guard is two reads, not one: the playlist *and* `GET /v1/me`, because there
+is no free way to learn the current user's id (see §4.1).
 
 Re-derive the foreign count at run time; don't hardcode it.
 
@@ -222,9 +225,9 @@ a bug pointing the clear-playlist call at a real playlist. It costs one request 
 run and is not optional.
 
 On success, upsert a `snapshot` row for the playlist with `excluded = 1`, so a
-later full pull never reads it and it never contributes `membership` rows. Record
-the playlist's current item count as the **read offset base** (a resumed run finds
-leftovers from the previous one).
+later full pull never reads it and it never contributes `membership` rows. The
+playlist's current item count is logged (leftovers from an earlier run) but
+nothing depends on it — see §4.3, the first batch replaces whatever is there.
 
 ### 4.2 Work list
 
@@ -250,38 +253,162 @@ finds less to do.
 
 ### 4.3 Per batch of 100
 
-1. **Add** — `sp.playlist_add_items(LOADER_ID, uris)` (1 request). 100 is the API
-   maximum. 6,085 items is far under the 10,000-item playlist cap.
-2. **Read back** — `sp.playlist_items(LOADER_ID, offset=base, limit=100)`
-   (1 request). Adds append, so the batch lands at `base … base+99`.
-3. **Map positionally.** The k-th returned item is the k-th requested uri. This is
-   what "map on the requested uri, not the returned id" means in practice.
-   **If `len(returned) != len(requested)`, do not trust positions** — record the
-   whole batch in `roundtrip_failed_uri` with that reason and move on. Silent
-   misattribution is the one failure mode worth being paranoid about.
-4. **Store.** `_upsert_track` from `snapshot.py`, unchanged, so the round-trip
-   fills `track` / `album` / `artist` / `track_artist` / `album_artist` exactly as
-   a pull does. **Write no `membership` rows** — these tracks are in no playlist of
-   Finn's, and the loader is a scratch buffer, not a library playlist.
-5. **Alias.** For each pair, if `returned.uri != requested_uri`, insert
-   `track_uri_alias(requested_uri → returned.id)`. That covers relinks and any
-   other substitution without special-casing `linked_from`.
-6. **Commit**, then advance `base` and the progress counters. Committing per batch
-   is what makes a quota death cost nothing already earned.
+> **Revised during implementation.** The original version of this section
+> appended each batch and mapped requested uri → returned track **by position**.
+> That shipped, and on its first real run the read window drifted 564 items:
+> every subsequent batch mapped the wrong track to the wrong uri, wrote it into
+> `track_uri_alias` as a "relink", and looked completely normal doing it —
+> 1,250 bogus rows before anything noticed. The count check (`len(returned) ==
+> len(requested)`) cannot catch this, because a shifted window still returns
+> exactly 100 items. Two things were wrong: reading at a running offset, and
+> inferring the pairing instead of reading it. Both are fixed below.
+
+1. **Load** — `sp.playlist_replace_items(LOADER_ID, uris)` (1 request).
+   **Replace, not append.** Same cost, same 100-uri API maximum, and the
+   playlist now holds *exactly* this batch — so it never accumulates, never
+   approaches the 10,000-item cap, and needs no offset to read back. Leftovers
+   from a previous run are wiped by the first batch, which is also why there is
+   no resume bookkeeping.
+2. **Read back** — `sp.playlist_items(LOADER_ID, offset=0, limit=100)`
+   (1 request). Offset 0 is correct *by construction*, not by arithmetic.
+   There is no running offset, so there is nothing to drift.
+3. **Read the page as a bag, never as a sequence.** Nothing may depend on the
+   k-th returned item being the k-th requested uri. The response is already
+   self-describing:
+   - a track that came back unchanged carries its own `id`/`uri` — that uri
+     *is* what was asked for, and nothing needs mapping;
+   - a substituted track carries **`linked_from`**, a stub holding the `id` and
+     `uri` of exactly what was requested.
+
+   Those are the only two cases, which is what makes position unnecessary.
+4. **Store.** `_upsert_track_full` from `snapshot.py`, unchanged, keyed on the
+   track's own id, so the round-trip fills `track` / `album` / `artist` /
+   `track_artist` / `album_artist` exactly as a pull does. **Write no
+   `membership` rows** — these tracks are in no playlist of Finn's, and the
+   loader is a scratch buffer, not a library playlist.
+5. **Alias only from `linked_from`.** If and only if a returned track carries
+   one, insert `track_uri_alias(linked_from.uri → returned.id)`. A returned
+   track that differs from anything requested *without* a `linked_from` is not
+   a relink — it is evidence the read is wrong, and it must never be aliased.
+   (The superseded rule, "alias whenever `returned.uri != requested_uri`, no
+   need to special-case `linked_from`", is precisely what made the corruption
+   silent.)
+6. **Derive what didn't come back** by set difference: any requested uri that
+   still doesn't resolve through `played_uri_track` after the batch commits.
+   No positions, no counting.
+   - **Some missing** → record those in `roundtrip_failed_uri`; the batch
+     succeeded.
+   - **All missing** → systemic (wrong read, wrong playlist, scope revoked),
+     not 100 individually dead tracks. Record **nothing** — poisoning 100 good
+     uris is the worse error — log it loudly and fail the batch so the §5
+     circuit breaker stops the run.
+7. **Commit** per batch, then advance the progress counters. Committing per
+   batch is what makes a quota death cost nothing already earned.
+
+A batch counts as successful when **at least one requested uri now resolves** —
+progress measured against what was asked for, not against how many rows were
+written. A batch that stored 100 unrelated tracks achieved nothing and must
+count as a failure.
 
 ### 4.4 Clear (1 request)
 
 On a run that completes every batch: `sp.playlist_replace_items(LOADER_ID, [])` —
-one request, clears the playlist whatever its size. This is why the design records
-and clears once rather than deleting per batch: per-batch removal is a third
-request per batch (183 total vs 124) and buys nothing, because durability comes
-from committing each batch to SQLite, not from removing it from Spotify.
+one request, clears the playlist whatever its size. **Tidiness only.** Since
+§4.3 replaces per batch, the loader holds at most one batch (≤100 items) at any
+moment, so nothing depends on this happening.
 
-**On a run that stopped early, do not clear.** A quota stop has no requests left to
-spend anyway, and the leftover items are the visible record of how far it got. The
-page reports the count and Finn can clear it by hand in the Spotify client
-(select all → remove) if he wants to. If the clear itself fails, that is a one-click
-manual fix and explicitly not worth code.
+**On a run that stopped early, do not clear.** A quota stop has no requests left
+to spend anyway, and the next run's first batch replaces whatever is sitting
+there regardless. The page reports the count; Finn can clear it by hand if he
+wants to. If the clear itself fails, that is a one-click manual fix and
+explicitly not worth code.
+
+### 4.5 Reconciliation pass — added during implementation
+
+Not in the original spec. The first complete run left **29 of 6,085 uris
+unresolved**, and inspecting them showed a behaviour Spotify doesn't document:
+for some ids it serves a **different track and sets no `linked_from`**. The
+substitution is real but unstated, so §4.3 correctly refuses to record it —
+which left those uris permanently unresolvable.
+
+The pairing can't be *inferred*, but it can be **evidenced**. The export
+already stores what each track was called when it was played
+(`play.reported_track_name` / `reported_artist_name`), which is an independent
+source Spotify isn't involved in. So:
+
+After the last batch of a completed run — and on demand, via a **Reconcile
+unresolved** button, so it can be run without repeating the main pass — take
+every uri recorded as `not returned by the read-back` that still doesn't
+resolve, and put it through the same load-and-read cycle in batches of ≤100
+(+2 requests per batch). Then, for each returned track that nothing else
+accounts for (not one of the requested uris, no `linked_from`):
+
+- **Auto-alias only when the normalized full title *and* the album artist both
+  match** what the export recorded, and the pairing is 1:1 in both directions.
+  The title key must keep its suffix — on `normalize_title`'s base alone,
+  `Opalite`, `Opalite - BUNT. Remix` and `Opalite - Chris Lake Remix` collapse
+  into one key and all three go ambiguous.
+- **Everything else is flagged `needs a manual alias`**, never guessed.
+
+Measured against the real 29: **12 matched, 0 ambiguous**, consuming 12 of the
+14 available candidates. The 2 left over were genuinely retitled
+(`I Knew It, I Knew You` → *…- From "Toy Story 5"*, `One of Them` →
+*…(with Future & Lil Baby)*) — exactly the cases a human should decide.
+
+**Position is deliberately not used, even here.** It is tempting: this pass is
+small, the expected count is known, and a dropped item would show up as a count
+mismatch. But position is the one signal that looks plausible precisely when
+it's wrong, which is the whole of §4.3's failure. It can't catch a reorder, and
+we now have direct evidence that this endpoint does undocumented things to
+these particular ids. It is worth **showing** to a human in the review queue
+("you asked for #7; position 7 came back as X") — a hint can't silently corrupt
+anything — but it must never drive an automatic write.
+
+`roundtrip_failed_uri.reason` becomes load-bearing rather than a note: it
+decides what this pass is willing to spend requests on. A probe-confirmed
+`404 on open.spotify.com` is dead and never retried; `not returned by the
+read-back` is worth one more look.
+
+### 4.6 Manual aliases — added during implementation
+
+Sized after the fact, deliberately: the reconciliation pass ran first and
+resolved **25 of the 29**, leaving **4**. A four-row problem doesn't need a
+review queue like `/dev/artists`, so it doesn't get one.
+
+A plain table on `/dev/roundtrip`, one row per uri awaiting review: what the
+export called it, its artist, its play count, and a dropdown of candidate
+tracks.
+
+**One Save for the whole table, not one per row.** Per-row saving reloads the
+page, which throws away every other selection made on the way down the list —
+so working through five rows meant re-choosing four of them. `POST
+/api/roundtrip/alias` therefore takes a *list* of `{requested_uri, track_id}`,
+validates every pair before writing any of them (one stale row can't leave the
+rest half-applied), writes the aliases and drops those uris from
+`roundtrip_failed_uri`. Rows left on &ldquo;— choose —&rdquo; are simply absent
+from the payload and stay in the list.
+
+Candidates are matched on the normalized title **base only** — looser than
+§4.5's automatic rule, which also requires the suffix to match. That looseness
+is the entire point of the manual step: `Opalite` and `Opalite - BUNT. Remix`
+share a base and are genuinely different tracks, so a person decides rather
+than a rule. On the real 4, base matching offered exactly one candidate each,
+and each was correct:
+
+| played as | candidate offered |
+|---|---|
+| I Knew It, I Knew You | I Knew It, I Knew You - From "Toy Story 5" |
+| One of Them | One of Them (with Future & Lil Baby) |
+| Slap The City | Slap The City (feat. Qendresa) |
+| Ran To Atlanta | Ran To Atlanta (feat. Future & Molly Santana) |
+
+Note that two of those candidates carry plays of their own — Finn played both
+ids — so the candidate pool must be *all* tracks sharing the base title, not
+just the ones the round-trip stored unclaimed.
+
+`set_manual_alias` refuses any uri not currently awaiting review, and any
+track_id that doesn't exist. It resolves a known-unresolved uri; it is never a
+general "rewrite any mapping" lever.
 
 ---
 
@@ -291,7 +418,7 @@ manual fix and explicitly not worth code.
 immediately, never sleep on a multi-hour `Retry-After`. Record `retry_at`, the
 batch reached, and the request count. Everything committed stays.
 
-**A batch rejected with 400** — one dead uri poisons the whole add. Rather than
+**A batch rejected with 400** — one dead uri poisons the whole write. Rather than
 skipping 100 tracks to lose 1, or bisecting via the API (which spends the quota the
 run is trying to protect):
 
@@ -323,13 +450,17 @@ rare.
 
 ### Why the probe stays inline, not backgrounded
 
-Running the probe asynchronously while the main loop continues would break the
-run's central invariant. The read-back maps requested uri → returned track
-**positionally** (§4.3), which only holds because adds append in a known order at a
-known offset. Overlapping a batch's repair with the next batch's add interleaves
-writes to the same playlist, and the offsets stop being predictable — which turns a
-recoverable failure into silent misattribution, the one outcome worth being
-paranoid about. At ~10 seconds the pause isn't worth that risk.
+Each batch **replaces** the loader's contents (§4.3), so the playlist holds
+exactly one batch at a time. Overlapping a batch's repair with the next batch's
+load would have them writing over each other, and the read-back would return
+some mixture of the two — the recovering batch's uris would come back as "not
+returned" and get recorded as failed while they were in fact fine. At ~10
+seconds the pause isn't worth that.
+
+(The original reasoning here was that overlapping writes would desync the
+*positional* map. That map is gone, so the misattribution risk is gone with it —
+but one-batch-at-a-time is still required, now for the simpler reason that the
+loader can only hold one batch.)
 
 ### Circuit breaker
 
@@ -409,7 +540,9 @@ Static JS: `static/js/roundtrip.js`, an IIFE like the others, polling the status
 endpoint.
 
 Endpoints: `POST /api/roundtrip/start`, `POST /api/roundtrip/stop`,
-`GET /api/roundtrip/status`, `POST /api/roundtrip/clear-failures`. `/api/*` error
+`GET /api/roundtrip/status`, `POST /api/roundtrip/clear-failures`, and — added
+during implementation — `POST /api/roundtrip/reconcile` (§4.5) and
+`POST /api/roundtrip/alias` (§4.6). `/api/*` error
 shape as established in `app.py`.
 
 `/api/roundtrip/status` returns the event log alongside the progress fields. It is
@@ -509,9 +642,14 @@ wrong or will become wrong the moment D runs.
 4. **`docs/spotify_constraints.md`** — add what this feature establishes:
    `playlist-modify-private` is now granted; add/replace item limits (100 per
    request, `PUT` with an empty `uris` array clears a playlist of any size in one
-   request); relinking behaviour and the `linked_from` stub's contents; and that
+   request) and why batch work should prefer replace over append; that urllib3
+   must never auto-retry a playlist write; relinking behaviour, the `linked_from`
+   stub's contents, and that it is the only trustworthy pairing signal; and that
    `open.spotify.com/track/<id>` returns 200/404 and is not the Web API, with the
    robots.txt position.
+6. **`spotify_client.py`** — restrict the retry `allowed_methods` to `GET`. A
+   5xx'd write may already have been applied, so replaying it duplicates the
+   write and desyncs the playlist from what the caller believes it wrote.
 5. **`CLAUDE.md`'s Codebase Map** — entries for `jobs.py`, `roundtrip.py`,
    `templates/roundtrip.html`, `static/js/roundtrip.js`, and the note that
    `snapshot.py` / `history_import.py` no longer own their own job locks.

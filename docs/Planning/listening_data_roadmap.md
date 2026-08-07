@@ -107,6 +107,7 @@ Track object is ~1,756 bytes and carries, beyond what `track` stores today: **ar
 
 ```
 A (capture) ──► I (detection on the artist model) ──► C (ingest) ──► D (round-trip)
+   landed            landed                            landed         in progress
   ──► E (grouping catch-up) ──► B (generations) ──► H (scoring) ──► F/G
 ```
 
@@ -173,7 +174,9 @@ Deciding what to do with the resulting diff over the existing 288 groups stays a
 
 ## D — Foreign-track round-trip
 
-The project's **first write to the Spotify library**. Turns the 6,088 foreign URIs into real `track` rows with full metadata for ~122 requests instead of 6,088.
+**Specced → `docs/specs/foreign-roundtrip-D.md`.** That spec is authoritative; the summary below is the shape, not the detail, and planning corrected several of its numbers (6,085 foreign URIs at 3,620 tracks, 61 batches, ~125 requests including the guard's two reads) and its playlist-id handling (a hardcoded module constant with a `TODO`, not a `meta` lookup — the playlist can't be picked from a list until the next full pull makes it visible in `snapshot`).
+
+The project's **first write to the Spotify library**. Turns the foreign URIs into real `track` rows with full metadata for ~125 requests instead of one per URI.
 
 - Needs `playlist-modify-private`; delete `.spotipy_cache` and re-auth.
 - **Finn creates the temp playlist manually** and sets its exclude flag. Code only looks up its id (stored in `meta`) — no create/delete logic.
@@ -181,7 +184,9 @@ The project's **first write to the Spotify library**. Turns the 6,088 foreign UR
 - **Map on the requested URI, not the returned id.** Relinking can return a different id and can collapse two URIs onto one.
 - Run on a **different day** from A's re-pull.
 
-**Relinking** — Spotify serves market-specific catalogs, so one recording can exist under different ids per market. Request an unavailable id and Spotify substitutes the equivalent, returning the playable id with `linked_from` holding what was asked for. Unhandled this corrupts attribution silently. Handled, it's a **gift**: a relink is Spotify authoritatively stating two ids are the same recording — a higher-confidence release-tier grouping signal than any heuristic in `detection.md`, and exactly what that tier exists to absorb.
+**Relinking** — Spotify serves market-specific catalogs, so one recording can exist under different ids per market. Request an unavailable id and Spotify substitutes the equivalent, returning the playable id with `linked_from` holding what was asked for. Unhandled this corrupts attribution silently — that part stands, and it's why the round-trip maps on the requested URI rather than the returned id.
+
+It is **not**, however, a grouping signal, as this plan previously claimed. Checking the mechanics: the requested id comes back only as a stub carrying `id`/`uri`/`type`/`href`/`external_urls` — no name, artists, album or duration — so it can never become a `track` row of its own. There is therefore no *pair* of rows to group and nothing for E to inherit; `track_uri_alias` absorbs the relationship completely. What relinking actually buys is better than a grouping hint: when a foreign URI relinks onto a track already in the library, a "foreign" URI turns out to be an owned track, its plays join straight onto it, and the foreign count shrinks by an amount that can't be predicted in advance.
 
 **Dead URIs** — a 20-URI sample resolved **20/20**, no failures, no unplayable. So this should be rare. When a batch does 400: bisect once or twice via the API to narrow, then check candidates against `https://open.spotify.com/track/<id>` — the **public web page, which is not the Web API and costs no quota**. Worst case if bisecting all the way via API is ~400 extra requests; the web-check path makes that moot.
 

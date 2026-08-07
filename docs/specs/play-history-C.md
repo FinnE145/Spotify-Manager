@@ -128,6 +128,8 @@ CREATE INDEX IF NOT EXISTS idx_play_import ON play(import_id);
 
 - **The `reported_*` prefix is load-bearing.** These are the names the *source claimed at play time*, not resolved entities — they must never be joined against `track.name`, `artist.name` or `album.name`. Note especially that `master_metadata_album_artist_name` is the **album** artist, so it won't match `track.artists` on featured credits. They exist as a fallback label for foreign URIs and as a sanity check, nothing more.
 - **No foreign key from `play` to `track`, and no denormalized `track_id`.** 6,088 of the 8,908 played URIs have no `track` row, so an FK is impossible. Resolution is a query-time join, `play.spotify_track_uri = track.uri`, backed by `idx_play_uri`. This is deliberately self-healing: when step D imports the foreign tracks, the same join resolves them with zero reprocessing and no re-resolve pass.
+
+  > **Superseded by step D** (`docs/specs/foreign-roundtrip-D.md` §8). The self-healing held, but two things moved. The join now goes through the **`played_uri_track`** view rather than `track.uri` directly, so relinked URIs resolve as well; and "foreign" as *the absence of a `track` row* stopped being the useful distinction the moment D started creating those rows. D splits it into **known to Symr** (a `track` row exists, in a playlist or not) and **in your library** (that track also has a `membership` row).
 - **"Foreign" is not a stored flag.** It's the absence of a matching `track` row — a `LEFT JOIN … WHERE t.track_id IS NULL`. Storing it would go stale the moment D lands.
 - **No per-play `raw_json`.** Unlike `track.raw_json` — irreplaceable, because every enrichment endpoint 403s — the export files stay on disk and re-parsing is free and offline. A blob would add ~64 MB to an 18 MB database to duplicate what's already on disk.
 - **No `media_type` column.** Audio vs video is 493 rows (0.55%), and for every downstream use a music-video play is just a play. `source_file` already carries `_Video_` in the filename if it ever needs segmenting.
@@ -271,6 +273,8 @@ Three sections:
 | Date range | `MIN(ts)` / `MAX(ts)` |
 | Library tracks never played | tracks with no `play` row |
 
+*(The first and last rows were rewritten by step D — see `docs/specs/foreign-roundtrip-D.md` §8. "In library" split into **known to Symr** and **in your library**, and "library tracks never played" now counts only tracks with a `membership` row, since D adds ~6,000 that are in no playlist.)*
+
 **3. Import history.** Every `play_import` row, newest first: `uploaded_at`, `kind`, `original_name`, files parsed, rows read, rows inserted, covered range, and the error if there is one. Timestamps render through the existing `data-datetime` mechanism in `format.js`.
 
 No delete action — pruning uploads is manual on disk.
@@ -279,6 +283,6 @@ No delete action — pruning uploads is manual on disk.
 - **Any Spotify API request or write.** No new scopes.
 - **ListenBrainz.** The `source` column exists and defaults to `'export'`; nothing writes `'listenbrainz'` yet. Its precedence rule (delete LB rows inside an export's covered range, then insert) belongs to that feature.
 - **Charts, metrics, rankings, per-play browsing.** The coverage panel is the only readout. F/G/H own the rest.
-- **Resolving foreign URIs to tracks** — that's step D, and this model needs no change to absorb it.
+- **Resolving foreign URIs to tracks** — that's step D, and this model needs no change to absorb it. *(D landed and confirmed this: `play` was not touched. What did change is the coverage readout — see `docs/specs/foreign-roundtrip-D.md` §8, and the note on the data model above.)*
 - **Timezone conversion for display.**
 - **Pruning or managing upload folders from the UI.**
