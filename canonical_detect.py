@@ -715,12 +715,27 @@ def cross_buckets(conn):
 def pending_song_ids(conn):
     """The distinct song groups awaiting a tier pass. Deduped at read time:
     two newcomers landing in the same group are two rows resolving to one
-    item."""
+    item.
+
+    A group that has fallen back to a single member is skipped, because there
+    is nothing left to review across -- an auto-group undo restores
+    `track_group` wholesale and can detach an assigned newcomer, and a manual
+    ungroup in the viewer does the same. This filter is the *only* one:
+    pending_tier_items() serves exactly what this returns, so the count on
+    /dev/canonical and the queue behind it can never disagree.
+
+    The pending row itself is deliberately left in place rather than deleted.
+    It still records that the track owes a tier pass, so if a later merge puts
+    it back into a multi-member group the item correctly comes back.
+    """
     song_ids = []
     for row in conn.execute("SELECT track_id FROM pending_tier_review"):
         groups = canonical.groups_for_track(conn, row["track_id"])
-        if groups and groups["song"] not in song_ids:
-            song_ids.append(groups["song"])
+        if not groups or groups["song"] in song_ids:
+            continue
+        if len(canonical.group_members(conn, groups["song"])) < 2:
+            continue
+        song_ids.append(groups["song"])
     return song_ids
 
 
@@ -744,6 +759,9 @@ def pending_tier_items(conn):
     items = []
     for song_id in pending_song_ids(conn):
         members = [tid for tid in canonical.group_members(conn, song_id) if tid in tracks]
+        # Not the singleton check -- pending_song_ids already made that one, and
+        # owns it so the count and this queue agree. This only catches a
+        # track_group row pointing at a track _fetch_tracks no longer returns.
         if len(members) < 2:
             continue
         base = tracks[sorted(members)[0]]["base"]
