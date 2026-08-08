@@ -113,7 +113,7 @@ Track object is ~1,756 bytes and carries, beyond what `track` stores today: **ar
 A (capture) ──► I (detection on the artist model) ──► C (ingest) ──► D (round-trip)
    DONE              DONE                              DONE           DONE
 
-  ──► E (grouping catch-up) ──► B (generations) ──► H (scoring)
+  ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
       DONE                        ↑ NEXT
   ──► J (partial pulls) ──► F/G
 ```
@@ -214,14 +214,46 @@ It is **not**, however, a grouping signal, as this plan previously claimed. Chec
 
 Measured after D, the volume was not "a few hundred": **810 unreviewed main candidates and 541 cross-artist ones**. So E closed 70% of the main queue deterministically (same ISRC + identical normalized full title + duration within 2s, scored 114/114 against the corrected reviewed-pair baseline), stopped the prefill splitting songs it shouldn't, and rebuilt the cross-artist queue — whose historical merge rate is **0 of 292** — around the one-keypress "none of these are related" answer.
 
-## B — Generation engine
+## B — Generations & tenure
+
+**Specced → `docs/specs/generations-B.md`.** That spec is authoritative; the summary below is the shape, not the detail.
 
 Needs **no play history and no Spotify requests**.
 
-- `generation` table + curation UI. Membership is **manually listed once** (~36 entries), with an automatic rule for new `vXX.Y.Z` playlists going forward.
+- `generation` table, seeded once by a `scripts/` one-off with the verified list of **exactly 36**, plus a confirm-on-pull rule for new `vXX.Y.Z` playlists going forward.
 - Naming cannot be pattern-matched: `favourties 5` is a real generation with a typo, and `music im sick of` / `(no longer) current music` are real generations that were **renamed after the fact** when the next one was created. Posthumous name ≠ not a generation.
-- Active spans from earliest `added_at`. Verified: this ordering produces a clean chronological chain with no ties or inversions, from `Songs I Wanna Listen To Rn` (2021-02-09) through `v36.4.1` (2026-07-20).
-- Yields: track tenure, right-censoring flag, **intent score**, adoption stagger.
+- Spans from earliest `added_at`, ending when the next generation starts. Verified: a clean chronological chain, no ties or inversions, `Songs I Wanna Listen To Rn` (2021-02-09) through `v36.4.2`. **From position 25 the ordinal equals the major number in the playlist name** — independent proof the chain is complete at the tail.
+- **Tenure** is presence in the generations, and is not the same thing as membership (presence in any playlist). Counted in **generations first** because a generation is attention-weighted time: a playlist runs long when listening is sparse and short when it's dense, so counting generations weights a song equally either way.
+- Yields: **tenure** (longest run of consecutive generations), total generations, and run count. Derived at query time, never materialized.
+
+**Planning moved three things out of B.** *Intent score* goes to H, *adoption stagger* to F/G (see both), and the *right-censoring flag* is dropped from this layer entirely — tenure is a raw measurement, so a song appearing only in the newest generation has tenure 1 regardless of age. Censoring is the interpreting consumer's job, and H must not read a low tenure on recent material as failure.
+
+## K — Entity viewing pages
+
+**Not specced.** Own `/symr-plan` session.
+
+Proper pages for viewing a **song**, an **album**, an **artist** and a **playlist** — the canonical
+place each entity is displayed, which every other page then links into instead of
+re-deriving its own display. Right now there is no real track-viewing page:
+`/dev/snapshot/track/<id>` exists as an inspection tool, not a destination, and nothing
+links to an album or artist at all.
+
+- **Absorbs B's per-generation view.** B's generation list links each generation to a stub;
+  K replaces that stub with a **"generation view" toggle on the playlist page** for
+  current-favs playlists, showing the extra per-generation detail (its tracks split into
+  carried-forward vs. new, span, survival into the next generation). One page to maintain,
+  not two.
+- **This step is not done until every existing page links into these.** That back-pass is
+  the point of the step, not a follow-up to it — a viewing page nothing links to changes
+  nothing. Sweep `/dev/snapshot*`, `/dev/canonical*`, `/dev/artists`, `/dev/generations*`,
+  `/dev/roundtrip` and the canvas for places currently rendering a bare name where an entity
+  link belongs.
+- The artist page must resolve through `artist_alias`, like everything else artist-level.
+  The song page is the natural home for the canonical group's version/recording/release
+  nesting that `canonical.song_tree` already builds.
+
+Sits after B so the generation view has something to show, and before H so scoring has
+somewhere to display its output.
 
 ## H — Scoring
 
@@ -236,6 +268,10 @@ A general song ranking that feeds album and artist rankings by aggregation. Moti
 **`impact` is a placeholder for the score.** It is currently the summed live-membership count (and before step E, a broken one — see that spec's §0.1), used as the review queue's ordering. When H lands, replace it there.
 
 The score must be **aggregation-comparable across arbitrary group sizes** — a song, an album, an artist's discography and a playlist all need to be rankable against each other. Naive averaging of per-song scores fails: there are albums that are genuinely top-10 where only half the tracks get played, and averaging drags them to mid. Per-song inputs in play: plays, memberships, tenure, recency.
+
+**Also consider — intent score.** Moved here from B during B's planning. An artist's mean track tenure minus the library baseline: *when I add this artist's songs, do they stick?* It separates preference from consumption, which matters because play count alone ranks pleasant background music top. It's a pure function of B's tenure, so it costs nothing but a query once B has landed — decide at scoring time whether it earns its place.
+
+**Right-censoring lives here, not in B.** B's tenure is deliberately raw: a song present only in the newest generation has tenure 1, and B provides no flag saying it hasn't had its chance yet. Any scoring that skips that distinction reads new material as failed material.
 
 ## J — Partial / resumable pulls
 
@@ -276,6 +312,8 @@ evidence of where the ceiling actually sits.
 ## F / G — metrics, reports, visualisations
 
 Deferred. The full inventory is carried in `feature_ideas.md` under *Listening analytics*; revisit which items are actually worth building once A–D have landed and the data is real. G additionally waits on the Power BI prototype step and the still-open charting-library choice.
+
+**Adoption stagger belongs here, not in scoring.** Moved out of B during B's planning. Distinct add-days ÷ tracks per artist — did an artist arrive gradually or as one discography dump? The original analysis found bulk-added artists survive slightly worse: real, but small. The reason it can't go anywhere near H is that it exists to **discover a mechanism** that drives liking and souring — so feeding it into a score would make the score predict itself. As a descriptive report about how listening actually works, it's interesting; as a scoring input, it's circular.
 
 ---
 
