@@ -22,7 +22,8 @@ Fresh chat that checks a completed feature against its spec, then does the finis
 ## Finish-up (only when Finn says so)
 When Finn says finish up / looks good, and once verification has passed:
 1. **Update the Codebase Map in `CLAUDE.md`** to cover anything the feature added or moved — new modules, templates, `static/js/` files, directories, renamed routes. It's the map a fresh session reads first, and it goes stale silently. Check it against the real tree (`ls` the repo), not just against the diff.
-2. Commit any confirmed verify-phase fixes in his name (logical units), including that map update.
-3. **`git merge --ff-only` the feature branch into `main`** — this keeps history linear and avoids merge-commit clutter. If it can't fast-forward, stop and flag it rather than forcing a merge commit.
-4. Push — this is the one sanctioned push, and only when Finn has asked to finish up.
-5. Leave the feature branch in place by default — a feature *category* usually accrues more work later (e.g. more canvas specs), so `feat/*` branches are kept. Only delete a branch that's a genuine one-off (a `chore/`/`fix/` task that won't recur as the same thing), and only if Finn wants it gone.
+2. **Check the step off in `docs/Planning/roadmap.md`** if the spec names a roadmap step (its header line says so). Mark that step's section `✅ DONE`, point it at the spec that is now authoritative for what shipped, update the *Order* diagram and the "X, Y and Z have landed" line, and correct anything the section claims that implementation disproved. If the spec came from no roadmap step, skip this and say so.
+3. Commit any confirmed verify-phase fixes in his name (logical units), including that map update.
+4. **`git merge --ff-only` the feature branch into `main`** — this keeps history linear and avoids merge-commit clutter. If it can't fast-forward, stop and flag it rather than forcing a merge commit.
+5. Push — this is the one sanctioned push, and only when Finn has asked to finish up.
+6. Leave the feature branch in place by default — a feature *category* usually accrues more work later (e.g. more canvas specs), so `feat/*` branches are kept. Only delete a branch that's a genuine one-off (a `chore/`/`fix/` task that won't recur as the same thing), and only if Finn wants it gone.

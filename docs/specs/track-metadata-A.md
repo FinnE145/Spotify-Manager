@@ -6,7 +6,7 @@
 
 ## Read first
 - `CLAUDE.md` — conventions, KISS, the no-assumptions rule.
-- `docs/Planning/listening_data_roadmap.md` — step A in context, and why I / C / D follow it.
+- `docs/Planning/roadmap.md` — step A in context, and why I / C / D follow it.
 - `docs/spotify_constraints.md` — especially *Enrichment endpoints — all 403* and *Dead track-object fields*. Those two sections are the entire justification for this feature.
 - Existing code: `snapshot.py` (`_parse_track_item`, `_upsert_track`, `_apply_playlist_items`, `_sync_playlists_and_get_targets`, `summary_counts`), `db.py` (`SCHEMA`, `_migrate`), `app.py` (`/dev/snapshot*` routes, `/api/snapshot/*`), `templates/snapshot.html`, `templates/snapshot_playlist.html`, `static/js/snapshot.js`.
 - `scripts/backfill_track_details.py` — the existing standalone-script idiom (argument parsing, its own DB connection, commit-as-you-go) for the migration script to follow.

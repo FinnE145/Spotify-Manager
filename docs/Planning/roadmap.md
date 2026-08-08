@@ -1,12 +1,16 @@
-# Listening Data — Roadmap
+# Symr — Roadmap
 
-**Status: planning, not a spec.** This is the ordered plan for getting play history into Symr and building analytics on top. Each lettered feature below becomes its own `/symr-plan` session and its own `docs/specs/<feature>.md`. Nothing here is implementation-ready as written.
+**Status: planning, not a spec.** This is the standing, ordered plan of what gets built next. Each lettered step becomes its own `/symr-plan` session and its own `docs/specs/<feature>.md`. Nothing here is implementation-ready as written.
 
-**Origin.** A July 2026 chat session analysed the Spotify GDPR extended streaming history against `symr.db` and produced a feature inventory (`symr_analysis_features.md`, not committed). This doc supersedes it: every claim has been checked against the real codebase, the real DB, and the live API, and the contradictions resolved. Where the two disagree, **this doc is right**.
+**How this doc works.** It's append-only in spirit: finished steps stay, marked ✅ DONE and pointing at the spec that is authoritative for what actually shipped. New work is added as a new lettered step (continue the letters — they're labels, not an order; the order is the diagram below). Anything measured goes under *Verified facts* with the date it was measured, so a later session can trust it or re-measure it deliberately.
+
+**Origin.** It started as the *listening data* roadmap — steps A–J below are that plan, drawn from a July 2026 chat session that analysed the Spotify GDPR extended streaming history against `symr.db` and produced a feature inventory (`symr_analysis_features.md`, not committed). This doc supersedes that inventory: every claim was checked against the real codebase, the real DB, and the live API, and the contradictions resolved. Where the two disagree, **this doc is right**. It is no longer scoped to listening data — later steps can be anything.
 
 ---
 
 ## Verified facts
+
+Everything in this section was measured for the listening-data steps (A–J). Later steps should add their own subsections rather than assume these still hold.
 
 Measured in July 2026, **re-measured 2026-08-03** during C's planning session (after A and I landed, and against the real export rather than the earlier analysis). Don't re-derive it; don't trust a number that contradicts it without re-measuring.
 
@@ -108,13 +112,18 @@ Track object is ~1,756 bytes and carries, beyond what `track` stores today: **ar
 ```
 A (capture) ──► I (detection on the artist model) ──► C (ingest) ──► D (round-trip)
    DONE              DONE                              DONE           DONE
+
   ──► E (grouping catch-up) ──► B (generations) ──► H (scoring)
+      DONE                        ↑ NEXT
   ──► J (partial pulls) ──► F/G
 ```
 
-**A, I, C and D have landed.** Their sections below are marked, and each points at
-the spec that is authoritative for what actually shipped — read the spec, not the
-summary here, before touching any of them.
+**A, I, C, D and E have landed.** Their sections below are marked, and each points
+at the spec that is authoritative for what actually shipped — read the spec, not
+the summary here, before touching any of them.
+
+New steps that aren't part of the listening-data chain slot into this order
+explicitly when they're added — don't leave them dangling off the end.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 

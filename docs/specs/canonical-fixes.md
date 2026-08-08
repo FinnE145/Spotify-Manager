@@ -219,4 +219,4 @@ detection entry point and so already pays the build once.
 - Repairing existing groups.
 - A persisted detection cache (§2.4).
 - Re-running detection over the ~6,000 tracks step D added — that is step E in
-  `docs/Planning/listening_data_roadmap.md`.
+  `docs/Planning/roadmap.md`.

@@ -6,7 +6,7 @@
 
 ## Read first
 - `CLAUDE.md` — conventions, KISS, the no-assumptions rule.
-- `docs/Planning/listening_data_roadmap.md` — step C in context. **Where it disagrees with this spec, this spec is right** (see *Corrections to the roadmap* below).
+- `docs/Planning/roadmap.md` — step C in context. **Where it disagrees with this spec, this spec is right** (see *Corrections to the roadmap* below).
 - Existing code to mirror: `snapshot.py` (`_status` / `_status_lock` / `_set_status` / `get_status` / `_start` / `summary_counts`), `db.py` (`SCHEMA`, `_migrate`), `app.py` (`/api/snapshot/*` routes), `templates/snapshot.html`, `static/js/snapshot.js` (progress bar + status poller), `templates/dev.html`.
 
 ## What this is

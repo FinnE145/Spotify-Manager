@@ -1,6 +1,6 @@
 # Detection on the artist model — step I
 
-Step **I** of `docs/Planning/listening_data_roadmap.md`. Reworks `canonical_detect.py` to match on the **artist ids** step A captured (`track_artist` / `album_artist`) instead of the comma-joined `track.artists` string, and carries the four consequences that fall out of it.
+Step **I** of `docs/Planning/roadmap.md`. Reworks `canonical_detect.py` to match on the **artist ids** step A captured (`track_artist` / `album_artist`) instead of the comma-joined `track.artists` string, and carries the four consequences that fall out of it.
 
 Read `docs/canonical-tracks/detection.md` for the detection rules themselves — this spec covers the change and the three pieces of surrounding work; that file is the living description of how detection behaves.
 

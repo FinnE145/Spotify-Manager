@@ -1,6 +1,6 @@
 # Foreign-track round-trip (step D)
 
-Step D of `docs/Planning/listening_data_roadmap.md`. Turns the played-but-unknown
+Step D of `docs/Planning/roadmap.md`. Turns the played-but-unknown
 Spotify URIs in `play` into real `track` rows with full metadata, for ~125 requests
 instead of 6,085, by pushing them through a scratch playlist and reading the full
 track objects back out of the playlist-items endpoint.
@@ -642,7 +642,7 @@ expected consequences to be measured after the run, not work for this step.
 Not optional extras — these are part of the work, because each one is currently
 wrong or will become wrong the moment D runs.
 
-1. **`docs/Planning/listening_data_roadmap.md`, the D section** — replace the
+1. **`docs/Planning/roadmap.md`, the D section** — replace the
    "**Relinking** … Handled, it's a **gift**" paragraph. The claim that a relink is
    a higher-confidence release-tier grouping signal than any heuristic in
    `detection.md` is not correct: the relinked-from id never becomes a `track` row,
@@ -650,7 +650,7 @@ wrong or will become wrong the moment D runs.
    relinking actually buys (the alias model, and foreign uris resolving onto tracks
    already owned), and keep the warning that unhandled relinking corrupts
    attribution silently — that part is right.
-2. **`docs/Planning/listening_data_roadmap.md`, the order line** — mark A, I and C
+2. **`docs/Planning/roadmap.md`, the order line** — mark A, I and C
    as landed and D as in progress, so the roadmap stops reading as if nothing has
    been built.
 3. **`docs/specs/play-history-C.md`** — annotate the two places that define foreign

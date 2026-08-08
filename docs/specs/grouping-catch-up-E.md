@@ -566,7 +566,7 @@ group that ought to be attached to an owned track looks settled when it isn't.
   song-tier merge-by-default, the version-tier nesting fix, the auto-group rule.
 - **`docs/canonical-tracks/review-ui.md`** — remove the `?queue=cross-artist` row,
   add `?queue=pending`, note the not-in-library badge.
-- **`docs/Planning/listening_data_roadmap.md`** — mark E landed, pointing at this
+- **`docs/Planning/roadmap.md`** — mark E landed, pointing at this
   spec, and add to **H**:
   > `impact` (currently membership count, and before step E a broken one) is a
   > placeholder for the score. When H lands, replace it as the queue ordering.

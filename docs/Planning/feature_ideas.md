@@ -8,9 +8,9 @@ Living list of features surfaced during planning. Not yet specced unless linked 
 - **Canonical tracks** — `docs/specs/canonical-tracks.md` + the four sub-specs in `docs/canonical-tracks/`. The four-tier grouping layer (song / version / recording / release) and its review UI. Consumers — dedup, version engine, analytics — are listed below and still to build.
 
 ## Listening analytics
-The ordered plan lives in **`docs/Planning/listening_data_roadmap.md`** — read that first; it carries the measured facts and the resolved decisions. The items below are the backlog it feeds, kept here so nothing gets lost. Most are **not yet worth committing to** — revisit once play history has actually landed.
+The ordered plan lives in **`docs/Planning/roadmap.md`** — the standing roadmap, whose steps A–J are the listening-data chain. Read it first; it carries the measured facts and the resolved decisions. The items below are the backlog it feeds, kept here so nothing gets lost. Most are **not yet worth committing to** — revisit once play history has actually landed.
 
-**Foundations** (roadmap features A–E, planned)
+**Foundations** (roadmap steps A–E, ✅ all landed)
 - Track metadata capture + re-pull; play-history ingestion; foreign-track round-trip; grouping catch-up.
 
 **Generation metrics** (roadmap feature B, planned)
@@ -67,7 +67,7 @@ Lives under the **Audit** page (`/audit`), not its own nav entry.
 
 ## Analytics / aggregation
 - **Top albums by % of songs saved**, and similar aggregations.
-- **Extended streaming-history integration** — full GDPR per-play JSON. **Planned in detail: see `listening_data_roadmap.md`.**
+- **Extended streaming-history integration** — full GDPR per-play JSON. **Planned in detail: see `roadmap.md`.**
 - **ListenBrainz integration** — live play tracking/storage. Not an alternative to the export (which is the only source of back history) but a second writer into the same table; its listens carry `spotify_id`, so they join on the existing `track_id` with no MBID resolution needed.
 - **Dashboards** — Finn experiments in Power BI on Windows first (raw data export), then reproduce the views he likes natively in JS. No Power BI built into Symr.
 
