@@ -16,7 +16,7 @@ The click-through: one candidate group on screen at a time, keyboard-first, deci
 
 All three render the identical UI; only the item list differs.
 
-The `pending` queue is ordinary ad-hoc items: a cross-artist assignment is already applied at song tier, so the prefill simply fills in below it. Committing one deletes its `pending_tier_review` row. It is reached by a redirect when the cross queue empties, and by a link and count on `/dev/canonical` — the link is what stops work stranding, since the queue gets worked in sittings and a redirect that only fires on the last item would leave earlier assignments unreachable.
+The `pending` queue is ordinary candidate items — *not* ad-hoc ones, which pre-fill nothing and would render the saved state that is the very thing being reviewed. A cross-artist assignment is already applied at song tier, and `_same_real` keeps it that way, so the prefill simply fills in below it. Committing one deletes its `pending_tier_review` row. It is reached by a redirect when the cross queue empties, and by a link and count on `/dev/canonical` — the link is what stops work stranding, since the queue gets worked in sittings and a redirect that only fires on the last item would leave earlier assignments unreachable.
 
 The same-title/no-shared-artist candidates are **no longer a mode of this page**. `?queue=cross-artist` is gone; that queue lives at `/dev/canonical/cross` with its own template and JS (spec E §4).
 

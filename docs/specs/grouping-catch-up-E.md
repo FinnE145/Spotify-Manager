@@ -486,9 +486,18 @@ exists to produce.
 ### 4.4 What save writes
 
 1. **The song-tier merge, immediately** — `apply_partition` with every track in an
-   assignment sharing one song label, each keeping its existing version, recording
-   and release labels and each newcomer getting singleton ones. The decision is
-   durable the moment it's made; it does not wait on the tier pass.
+   assignment sharing one song label, each keeping its **current** version,
+   recording and release group ids. The decision is durable the moment it's made;
+   it does not wait on the tier pass.
+
+   > ⚠️ **Corrected during implementation.** This originally said the newcomer
+   > gets *singleton* finer-tier labels. It must not: a newcomer is often
+   > already in a real version/recording/release group of its own, and handing
+   > it fresh singletons would silently detach it from that group as a
+   > side-effect of a song-tier decision. Passing its current ids back is what
+   > makes the write purely additive at song tier. Where a newcomer genuinely
+   > has no finer grouping its current ids *are* singletons, so the original
+   > wording was right only for that case.
 2. **A `pending_tier_review(track_id)` row per assigned newcomer.**
 3. **`mark_reviewed` over every pair in the bucket** — assigned or not — so the
    bucket doesn't resurface until another newcomer arrives.
@@ -508,16 +517,25 @@ absorbed into another, leaving a stored group id pointing at nothing. Track ids
 never move.
 
 The queue reads each row as *"review whichever song group this track is in right
-now"*, resolving through `track_group` and serving `ad_hoc_group()` over that
+now"*, resolving through `track_group` and serving a full candidate item over that
 group's current members. Two newcomers landing in the same group produce two rows
 that resolve to one item — **dedupe by resolved song group at read time**. A row is
 deleted when its item is saved.
 
+> ⚠️ **Corrected during implementation.** This originally said `ad_hoc_group()`.
+> It can't be: `ad_hoc_group` pre-fills nothing and renders the tracks' saved
+> grouping, which here is four singleton chips per row — the exact state being
+> reviewed. The pending queue exists to *assign* the finer tiers, so the
+> prefill has to run. It serves `_make_candidate_group` instead. The song tier
+> still comes out shared, because `_prefill_labels`' `same_song` consults
+> `_same_real` first and every member is already in the one song group, so the
+> assignment stands and the prefill only proposes below it.
+
 ### 4.6 The tier pass
 
 `/dev/canonical/review?queue=pending`, reusing the existing review UI unchanged —
-the items are ordinary ad-hoc items with the assignment already applied at song
-tier and the prefill filling in below it.
+the items are ordinary candidate items with the assignment already applied at song
+tier and the prefill filling in below it (see §4.5).
 
 Reached two ways:
 
