@@ -107,6 +107,10 @@
       </label>
     </form>
 
+    {# Scrolls in place: at 797 groups the full four-tier tree runs to ~190,000px
+       and the filter box ends up a five-second scroll away from whatever you
+       were looking at. #}
+    <div class="group-scroll">
     {% for g in groups %}
     {% set tree = trees[g.song_id] %}
     <details class="song-group" id="song-{{ g.song_id }}" {{ "open" if g.song_id == expand_song_id }}>
@@ -159,11 +163,15 @@
     {% else %}
     <p class="empty">No groups match.</p>
     {% endfor %}
+    </div>
   </section>
 
   <section class="panel">
     <h2>Cross-artist ({{ cross_artist_groups|length }})</h2>
     <p><a href="{{ url_for('canonical_cross') }}">Review in queue &rarr;</a></p>
+    {# Same reason as the Groups listing, more so: 602 buckets with every track
+       inline run to ~140,000px, which was 99% of this page's height. #}
+    <div class="group-scroll">
     {% for g in cross_artist_groups %}
     <div class="panel cross-artist-entry">
       <h3>{{ g.base }} <span class="leaf-meta">impact {{ g.impact }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>
@@ -180,6 +188,7 @@
     {% else %}
     <p class="empty">No cross-artist candidates.</p>
     {% endfor %}
+    </div>
   </section>
 
   <section class="panel">

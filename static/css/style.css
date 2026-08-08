@@ -253,6 +253,21 @@ body.immersive {
   border-top: 1px solid #eee;
 }
 
+/* The canonical viewer's group listing. Every group renders its whole
+   four-tier tree, so at 797 groups the page is ~190,000px tall and the filter
+   box scrolls away entirely. Capping it keeps the page a page; the DOM is
+   unchanged, so load cost is the same. */
+.group-scroll {
+  /* min-height guards the case where 70vh resolves to 0 (a hidden or
+     zero-height viewport), which would otherwise collapse the panel to
+     nothing rather than merely shortening it. */
+  max-height: 70vh;
+  min-height: 240px;
+  overflow-y: auto;
+  border-top: 1px solid #eee;
+  padding-top: 8px;
+}
+
 /* A select sizes itself to its longest option, and a candidate label carries
    track + artists + album + year — enough to push the review table past the
    panel edge and shove the Save button off-screen. */
