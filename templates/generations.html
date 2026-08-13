@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span, generation_confirm_banner %}
+
+{% block title %}Symr — Generations{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Generations</h1>
+  <p class="meta">
+    The chain of current-favs playlists, numbered 1&ndash;36 and counting. A minor or patch
+    bump renames the active playlist in place; a major bump starts a new generation.
+    &middot; <a href="{{ url_for('dev_generations_tenure', tier=tier) }}">Tenure table &rarr;</a>
+  </p>
+
+  {{ generation_confirm_banner(pending_generation, "dev_generations") }}
+
+  <section class="panel">
+    <p class="toggle-links">
+      <a href="{{ url_for('dev_generations', tier='version') }}" class="{{ 'active' if tier == 'version' }}">Version</a>
+      &middot;
+      <a href="{{ url_for('dev_generations', tier='song') }}" class="{{ 'active' if tier == 'song' }}">Song</a>
+      <span class="meta">&mdash; tier for the counts below</span>
+    </p>
+
+    {% if gens %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Generation</th>
+          <th>Playlist</th>
+          <th>Span</th>
+          <th>{{ tier|capitalize }} groups</th>
+          <th>Carried in / new</th>
+          <th>Survived to next</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in gens %}
+        <tr>
+          <td><a href="{{ url_for('dev_generation', ordinal=g.ordinal) }}">Generation {{ g.ordinal }}</a></td>
+          <td>{{ g.name }}</td>
+          <td>{{ datetime_span(g.started_at) }} &ndash; {{ datetime_span(g.ended_at) if g.ended_at else "ongoing" }}</td>
+          <td>{{ g.group_count }}</td>
+          <td>{{ g.carried_in }} carried / {{ g.new_in }} new</td>
+          <td>{{ g.survived_out if g.survived_out is not none else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No generations yet &mdash; run <code>scripts/seed_generations.py</code>.</p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

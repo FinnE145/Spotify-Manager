@@ -8,6 +8,7 @@ import canonical
 import canonical_autogroup
 import canonical_detect
 import db
+import generations
 import history_import
 import jobs
 import roundtrip
@@ -450,6 +451,7 @@ def create_app():
             track_matches=track_matches,
             changes=changes,
             liked_playlist_id=snapshot.LIKED_PLAYLIST_ID,
+            pending_generation=generations.pending_new_generation(conn),
         )
 
     @app.route("/dev/snapshot/playlist/<playlist_id>", endpoint="dev_snapshot_playlist")
@@ -538,6 +540,120 @@ def create_app():
             canonical_groups=canonical_groups,
             canonical_siblings=canonical_siblings,
         )
+
+    # -- Generations & tenure -------------------------------------------
+
+    def _generations_tier_arg():
+        tier = request.args.get("tier", "version")
+        return tier if tier in ("version", "song") else "version"
+
+    @app.route("/dev/generations", endpoint="dev_generations")
+    def dev_generations_index():
+        conn = db.get_db()
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        tier = _generations_tier_arg()
+        return render_template(
+            "generations.html",
+            active="dev_generations",
+            tier=tier,
+            gens=generations.generations(conn, tier=tier),
+            pending_generation=generations.pending_new_generation(conn),
+        )
+
+    _TENURE_SORT_KEYS = {"tenure": "tenure", "total": "total_generations", "runs": "run_count"}
+    _TENURE_PAGE_SIZE = 100
+
+    @app.route("/dev/generations/tenure", endpoint="dev_generations_tenure")
+    def dev_generations_tenure():
+        conn = db.get_db()
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        tier = _generations_tier_arg()
+        sort = request.args.get("sort", "tenure")
+        if sort not in _TENURE_SORT_KEYS:
+            sort = "tenure"
+        page = request.args.get("page", 1, type=int) or 1
+        page = max(page, 1)
+
+        spans = generations.generation_spans(conn)
+
+        all_tenures = generations.tenures(conn, tier=tier)
+        sort_key = _TENURE_SORT_KEYS[sort]
+        # group_id as the tiebreak keeps paging stable across requests.
+        all_tenures.sort(key=lambda t: (-t[sort_key], t["group_id"]))
+
+        total = len(all_tenures)
+        total_pages = max(1, -(-total // _TENURE_PAGE_SIZE))
+        page = min(page, total_pages)
+        start = (page - 1) * _TENURE_PAGE_SIZE
+        page_slice = all_tenures[start : start + _TENURE_PAGE_SIZE]
+
+        rows = []
+        for t in page_slice:
+            rep_id = canonical.representative(conn, t["group_id"])
+            present = {o for start_o, end_o in t["runs"] for o in range(start_o, end_o + 1)}
+            # Self-contained per cell (ordinal, name, present) rather than a
+            # bare bool list -- Jinja has no zip() to line it back up against
+            # spans, and this keeps the template dumb.
+            strip = [
+                {"ordinal": s["ordinal"], "name": s["name"], "present": s["ordinal"] in present}
+                for s in spans
+            ]
+            rows.append(
+                {
+                    **t,
+                    "representative": canonical.track_display(conn, rep_id) if rep_id else None,
+                    "strip": strip,
+                }
+            )
+
+        return render_template(
+            "generations_tenure.html",
+            active="dev_generations",
+            tier=tier,
+            sort=sort,
+            page=page,
+            total_pages=total_pages,
+            total=total,
+            generation_count=len(spans),
+            rows=rows,
+        )
+
+    @app.route("/dev/generations/<int:ordinal>", endpoint="dev_generation")
+    def dev_generation_detail(ordinal):
+        conn = db.get_db()
+        row = conn.execute("SELECT ordinal FROM generation WHERE ordinal = ?", (ordinal,)).fetchone()
+        if row is None:
+            abort(404, description="No such generation.")
+        return render_template(
+            "coming_soon.html", active="dev_generations", page_name=f"Generation {ordinal}"
+        )
+
+    @app.route("/dev/generations/confirm", methods=["POST"], endpoint="dev_generations_confirm")
+    def dev_generations_confirm():
+        playlist_id = request.form.get("playlist_id")
+        decision = request.form.get("decision")
+        # Closed set rather than trusting an arbitrary path back from the
+        # form, even though it's this app's own hidden field.
+        return_to = {"dev_snapshot": "dev_snapshot", "dev_generations": "dev_generations"}.get(
+            request.form.get("return_to"), "dev_generations"
+        )
+        if not playlist_id or decision not in ("yes", "no"):
+            abort(400, description="playlist_id and a yes/no decision are required")
+
+        conn = db.get_db()
+        try:
+            if decision == "yes":
+                generations.confirm_generation(conn, playlist_id)
+            else:
+                generations.decline_generation(conn, playlist_id)
+        except ValueError as e:
+            abort(400, description=str(e))
+        conn.commit()
+        return redirect(url_for(return_to))
 
     # -- OAuth ----------------------------------------------------------
 

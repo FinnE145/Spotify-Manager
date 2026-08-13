@@ -821,3 +821,48 @@ body.immersive {
 .cross-artist-entry {
   margin-bottom: 10px;
 }
+
+/* -- Generations & tenure ------------------------------------------ */
+
+.generation-confirm {
+  font-size: 13px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 16px 0;
+}
+
+.generation-confirm p {
+  margin: 0 0 6px;
+}
+
+.generation-confirm .inline-form {
+  margin-bottom: 0;
+}
+
+.toggle-links a.active {
+  font-weight: 700;
+  color: #000;
+  text-decoration: none;
+}
+
+/* The strip's 36+ columns push the table wider than .page's 900px cap; the
+   page itself must not gain a horizontal scrollbar for it. */
+.tenure-scroll {
+  overflow-x: auto;
+}
+
+/* Real <td>s, one per generation (see docs/specs/generations-B.md's
+   performance note) -- kept minimal so 3,600 of them per page stay cheap. */
+.data-table td.gen-cell {
+  padding: 0;
+  width: 9px;
+  min-width: 9px;
+  border-left: 1px solid #fff;
+  background: #eee;
+}
+
+.data-table td.gen-cell.filled {
+  background: #3b82f6;
+}

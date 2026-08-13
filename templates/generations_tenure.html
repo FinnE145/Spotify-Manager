@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Symr — Tenure{% endblock %}
+
+{% macro sort_link(key, label) -%}
+<a href="{{ url_for('dev_generations_tenure', tier=tier, sort=key, page=1) }}" class="{{ 'active' if sort == key }}">{{ label }}</a>
+{%- endmacro %}
+
+{% block content %}
+<main class="page">
+  <h1>Tenure</h1>
+  <p class="meta">
+    <a href="{{ url_for('dev_generations', tier=tier) }}">&larr; Generations</a>
+    &middot; {{ total }} group{{ "s" if total != 1 }} ever present in a generation
+    &middot; a low tenure on recent material means it hasn't had the chance yet, not that it failed
+  </p>
+
+  <section class="panel">
+    <p class="toggle-links">
+      <a href="{{ url_for('dev_generations_tenure', tier='version', sort=sort, page=1) }}" class="{{ 'active' if tier == 'version' }}">Version</a>
+      &middot;
+      <a href="{{ url_for('dev_generations_tenure', tier='song', sort=sort, page=1) }}" class="{{ 'active' if tier == 'song' }}">Song</a>
+      <span class="meta">&mdash; tier</span>
+    </p>
+    <p class="meta">
+      Sort by {{ sort_link('tenure', 'tenure') }}, {{ sort_link('total', 'total generations') }},
+      or {{ sort_link('runs', 'runs') }} &mdash; each descending.
+    </p>
+
+    {% if rows %}
+    <div class="tenure-scroll">
+    <table class="data-table" id="tenure-table">
+      <thead>
+        <tr>
+          <th>Track</th>
+          <th>Tenure</th>
+          <th>Total</th>
+          <th>Runs</th>
+          <th>First</th>
+          <th>Last</th>
+          <th>Days</th>
+          <th colspan="{{ generation_count }}">Generations</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            {% if r.representative %}
+            <a href="{{ url_for('dev_snapshot_track', track_id=r.representative.track_id) }}">{{ r.representative.name }}</a>
+            <span class="leaf-meta">{{ r.representative.artists }}</span>
+            {% else %}
+            <span class="muted">group {{ r.group_id }}</span>
+            {% endif %}
+          </td>
+          <td>{{ r.tenure }}</td>
+          <td>{{ r.total_generations }}</td>
+          <td>{{ r.run_count }}</td>
+          <td><a href="{{ url_for('dev_generation', ordinal=r.first_ordinal) }}">{{ r.first_ordinal }}</a></td>
+          <td><a href="{{ url_for('dev_generation', ordinal=r.last_ordinal) }}">{{ r.last_ordinal }}</a></td>
+          <td>{{ r.days }} day{{ "s" if r.days != 1 }}</td>
+          {% for cell in r.strip %}
+          <td class="gen-cell {{ 'filled' if cell.present }}" title="Generation {{ cell.ordinal }} — {{ cell.name }}"></td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+
+    <p class="meta">
+      Page {{ page }} of {{ total_pages }}
+      {% if page > 1 %}&middot; <a href="{{ url_for('dev_generations_tenure', tier=tier, sort=sort, page=page-1) }}">&larr; Prev</a>{% endif %}
+      {% if page < total_pages %}&middot; <a href="{{ url_for('dev_generations_tenure', tier=tier, sort=sort, page=page+1) }}">Next &rarr;</a>{% endif %}
+    </p>
+    {% else %}
+    <p class="empty">No tenure data yet &mdash; seed the generations first.</p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

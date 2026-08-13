@@ -10,3 +10,21 @@
 {%- set track_id = uri.rsplit(':', 1)[-1] -%}
 <a href="https://open.spotify.com/track/{{ track_id }}" target="_blank" rel="noreferrer">{{ text or track_id }}</a>
 {%- endmacro %}
+
+{# The new-generation confirm line shared by /dev/snapshot and
+   /dev/generations (docs/specs/generations-B.md). return_to is a closed set
+   ("dev_snapshot" or "dev_generations") that the confirm route maps back to
+   a real endpoint -- never a raw path trusted from form data. #}
+{% macro generation_confirm_banner(pending, return_to) -%}
+{%- if pending %}
+<div class="generation-confirm">
+  <p><code>{{ pending.name }}</code> looks like a new generation {{ pending.ordinal }}. Add it?</p>
+  <form method="post" action="{{ url_for('dev_generations_confirm') }}" class="inline-form">
+    <input type="hidden" name="playlist_id" value="{{ pending.playlist_id }}">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <button type="submit" name="decision" value="yes">Yes</button>
+    <button type="submit" name="decision" value="no">No</button>
+  </form>
+</div>
+{%- endif %}
+{%- endmacro %}
