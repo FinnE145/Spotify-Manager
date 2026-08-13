@@ -29,7 +29,11 @@ CREATE TABLE IF NOT EXISTS snapshot (
     unfollowed_at TEXT,
     description TEXT,
     last_pull_error TEXT,
-    excluded INTEGER NOT NULL DEFAULT 0
+    excluded INTEGER NOT NULL DEFAULT 0,
+    -- Set when Finn answers "no" to the new-generation prompt (see
+    -- generations.pending_new_generation), so it stops asking on every
+    -- subsequent pull.
+    generation_declined INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS artist (
@@ -351,6 +355,18 @@ CREATE TABLE IF NOT EXISTS roundtrip_run (
                          'breaker', 'error')),
     error           TEXT
 );
+
+-- One row per current-favs generation (docs/specs/generations-B.md). No name
+-- column -- the display name is snapshot.name, which already tracks in-place
+-- minor/patch renames. ordinal is stored, not derived from sort order: for
+-- 25-36 it is literally the major number in the playlist's own name, and
+-- deriving it by sorting would let an inserted mid-chain generation silently
+-- renumber everything above it. Seeded once by scripts/seed_generations.py
+-- for the historical 36; new ones are added by the confirm-on-pull flow.
+CREATE TABLE IF NOT EXISTS generation (
+    ordinal INTEGER PRIMARY KEY,
+    playlist_id TEXT NOT NULL UNIQUE REFERENCES snapshot(playlist_id)
+);
 """
 
 # Rebuilt whenever the definition here changes (see _ensure_views) rather than
@@ -371,6 +387,7 @@ DROP VIEW IF EXISTS track_artist_credit;
 DROP VIEW IF EXISTS resolved_album_artist;
 DROP VIEW IF EXISTS resolved_track_artist;
 DROP VIEW IF EXISTS played_uri_track;
+DROP VIEW IF EXISTS generation_presence;
 
 -- Every play -> track resolution goes through here, so no read path ever
 -- hand-rolls the relink-alias union: a played uri resolves either because it
@@ -459,6 +476,18 @@ FROM (
     FROM track_artist_credit
     GROUP BY track_id
 );
+
+-- Which canonical groups were live in which generation's playlist
+-- (docs/specs/generations-B.md). DISTINCT matters: membership is an
+-- append-only log, so one track can hold several rows for the same
+-- playlist. The join to track_group silently drops any track without a
+-- track_group row -- every reader must call canonical.ensure_track_groups(conn)
+-- first, exactly as the canonical pages do.
+CREATE VIEW generation_presence AS
+SELECT DISTINCT g.ordinal, m.track_id, tg.version_id, tg.song_id
+FROM generation g
+JOIN membership m ON m.playlist_id = g.playlist_id AND m.removed_at IS NULL
+JOIN track_group tg ON tg.track_id = m.track_id;
 
 COMMIT;
 """
@@ -563,6 +592,8 @@ def _migrate(conn):
         ("unfollowed_at", "ALTER TABLE snapshot ADD COLUMN unfollowed_at TEXT"),
         ("description", "ALTER TABLE snapshot ADD COLUMN description TEXT"),
         ("last_pull_error", "ALTER TABLE snapshot ADD COLUMN last_pull_error TEXT"),
+        ("generation_declined",
+         "ALTER TABLE snapshot ADD COLUMN generation_declined INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in snapshot_columns:
             conn.execute(ddl)
