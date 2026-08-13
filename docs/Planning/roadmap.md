@@ -114,11 +114,11 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
    DONE              DONE                              DONE           DONE
 
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
-      DONE                        ↑ NEXT
+      DONE                      DONE                ↑ NEXT
   ──► J (partial pulls) ──► F/G
 ```
 
-**A, I, C, D and E have landed.** Their sections below are marked, and each points
+**A, I, C, D, E and B have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
@@ -214,7 +214,7 @@ It is **not**, however, a grouping signal, as this plan previously claimed. Chec
 
 Measured after D, the volume was not "a few hundred": **810 unreviewed main candidates and 541 cross-artist ones**. So E closed 70% of the main queue deterministically (same ISRC + identical normalized full title + duration within 2s, scored 114/114 against the corrected reviewed-pair baseline), stopped the prefill splitting songs it shouldn't, and rebuilt the cross-artist queue — whose historical merge rate is **0 of 292** — around the one-keypress "none of these are related" answer.
 
-## B — Generations & tenure
+## B — Generations & tenure ✅ DONE
 
 **Specced → `docs/specs/generations-B.md`.** That spec is authoritative; the summary below is the shape, not the detail.
 
