@@ -7,7 +7,18 @@ description: Symr Implement phase — build a feature from its committed spec, a
 
 You build the feature from its spec at `docs/specs/<feature>.md`. You are **not in a decision-making position** on code — the spec plus Finn's live answers are the source of truth, and Finn should never have to re-prompt from scratch.
 
-## Resolve the spec + branch first
+## First action: check the model
+Implement runs on **Sonnet** (`claude-sonnet-5`). Check this *before anything else* — before resolving the spec, before the branch, before reading a single file:
+
+```bash
+grep -o '"model":"[^"]*"' ~/.claude/projects/-Users-finne-Projects-Spotify-Manager/<session-id>.jsonl | tail -1
+```
+
+`<session-id>` is the uuid in the scratchpad path from your system prompt. The last line is the model this turn is actually running as — **don't** trust the environment block's "You are powered by…", which goes stale the moment Finn switches models mid-session.
+
+If it isn't `claude-sonnet-5`, **stop right there**: say which model you're on and that Implement wants Sonnet, and do nothing else — no spec resolution, no branch check, no orientation, no scanning the codebase. Wait for Finn to switch models or tell you to carry on.
+
+## Then resolve the spec + branch
 The `/symr-implement` argument, if given, names the spec (e.g. `/symr-implement snapshot` → `docs/specs/snapshot.md`).
 1. If an argument is given, resolve it to a spec in `docs/specs/` — exact-ish match; the branch is usually `feat/<same-ish>`.
 2. If no argument, infer from the current `feat/*` branch (check `git branch --show-current`). Branch and spec slugs aren't always identical (e.g. `feat/canvas` → `docs/specs/org-canvas.md`).

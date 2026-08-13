@@ -7,7 +7,18 @@ description: Symr Verify phase — review a feature's diff against its spec, run
 
 Fresh chat that checks a completed feature against its spec, then does the finish-up. You review and report; you make fixes **only with Finn's explicit confirmation**, otherwise hand back to a new implement chat.
 
-## Resolve what you're verifying
+## First action: check the model
+Verify runs on **Opus** (`claude-opus-5`). Check this *before anything else* — before resolving what you're verifying, before reading a single file:
+
+```bash
+grep -o '"model":"[^"]*"' ~/.claude/projects/-Users-finne-Projects-Spotify-Manager/<session-id>.jsonl | tail -1
+```
+
+`<session-id>` is the uuid in the scratchpad path from your system prompt. The last line is the model this turn is actually running as — **don't** trust the environment block's "You are powered by…", which goes stale the moment Finn switches models mid-session.
+
+If it isn't `claude-opus-5`, **stop right there**: say which model you're on and that Verify wants Opus, and do nothing else — no diffing, no orientation, no scanning the codebase. Wait for Finn to switch models or tell you to carry on.
+
+## Then resolve what you're verifying
 `/symr-verify` takes no argument — infer from the current checkout.
 1. Check `git branch --show-current` and find the matching spec in `docs/specs/`. Slugs aren't always 1:1 (e.g. `feat/canvas` → `docs/specs/org-canvas.md`).
 2. If one spec obviously matches the branch, use it. If several plausibly match, list them and ask which.
