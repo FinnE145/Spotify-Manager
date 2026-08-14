@@ -571,11 +571,32 @@ def all_candidate_groups(conn):
     return _order(main + cross)
 
 
+def filter_groups(groups, query):
+    """Candidate groups whose base title, track title or artists match `query`.
+
+    Matched with SQL LIKE's `%` wildcard rather than a plain substring so this
+    filter behaves like the LIKE-backed Groups filter beside it on
+    `/dev/canonical` -- in particular, searching `%` lists everything, which is
+    how you get past that listing's unfiltered cap."""
+    if not query:
+        return groups
+    rx = re.compile(".*".join(re.escape(part) for part in query.split("%")), re.IGNORECASE)
+    out = []
+    for g in groups:
+        values = [g["base"]]
+        for t in g["tracks"].values():
+            values += [t["title"], t["artists"]]
+        if any(v and rx.search(v) for v in values):
+            out.append(g)
+    return out
+
+
 def canonical_page_groups(conn):
-    """The three results `/dev/canonical` needs -- the unreviewed main queue,
-    the unreviewed cross-artist bucket count, and every candidate for the
-    listing -- derived from a single _build_all_groups() instead of the three
-    separate rebuilds calling them one at a time would cost."""
+    """The three results `/dev/canonical`'s cross-artist pane needs -- the
+    unreviewed main queue, the unreviewed cross-artist bucket count, and every
+    candidate for the listing -- derived from a single _build_all_groups()
+    instead of the three separate rebuilds calling them one at a time would
+    cost. Served by /api/canonical/cross/listing, not by the page itself."""
     main, cross = _build_all_groups(conn)
     unreviewed_main = _order([g for g in main if not g["reviewed"]])
     unreviewed_cross = _order([g for g in cross if not g["reviewed"]])

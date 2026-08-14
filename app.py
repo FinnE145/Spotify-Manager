@@ -20,6 +20,17 @@ from grouping import render_export_text
 from spotify_client import get_auth_manager, get_spotify_client
 
 
+# /dev/canonical's two scrolling listings render every row they're given, which
+# unfiltered was ~800 four-tier trees and ~600 buckets -- 4.3MB of HTML. Both
+# are capped unless you've searched; a search is taken as asking for all of its
+# matches, so `%` (a LIKE wildcard in both filters) still gets you everything.
+_LISTING_CAP = 50
+
+
+def _cap_listing(rows, query):
+    return rows if query else rows[:_LISTING_CAP]
+
+
 def create_app():
     app = Flask(__name__)
     app.secret_key = SECRET_KEY
@@ -642,6 +653,7 @@ def create_app():
 
         q = request.args.get("q", "").strip()
         show_singletons = request.args.get("singletons") == "1"
+        cross_q = request.args.get("cross", "").strip()
         search_q = request.args.get("search", "").strip()
         expand_song_id = request.args.get("expand", type=int)
 
@@ -649,13 +661,23 @@ def create_app():
             "SELECT COUNT(*) AS c, MAX(decided_at) AS latest FROM reviewed_pair"
         ).fetchone()
 
-        groups = canonical.song_groups(conn, query=q, include_singletons=show_singletons)
+        all_song_groups = canonical.song_group_rows(
+            conn, query=q, include_singletons=show_singletons
+        )
+        shown = _cap_listing(all_song_groups, q)
+        # A deep link to a group past the cap would otherwise land on a page
+        # that doesn't contain it.
+        if expand_song_id and not any(g["song_id"] == expand_song_id for g in shown):
+            shown = [g for g in all_song_groups if g["song_id"] == expand_song_id] + shown
+        groups = canonical.hydrate_song_groups(conn, shown)
+
+        # The listing's real cost: one four-tier tree per group rendered. Built
+        # for the capped slice only, which is the point of the cap.
         trees = {g["song_id"]: canonical.song_tree(conn, g["song_id"]) for g in groups}
 
-        unreviewed_main_groups, unreviewed_cross_groups, all_groups = (
-            canonical_detect.canonical_page_groups(conn)
-        )
-        cross_artist_groups = [g for g in all_groups if g["cross_artist"]]
+        # Detection is deliberately absent here: it cost ~350ms of this page's
+        # ~500ms and feeds only the cross-artist pane and the two unreviewed
+        # counts, so /api/canonical/cross/listing serves both after paint.
 
         search_results = []
         if search_q:
@@ -681,8 +703,6 @@ def create_app():
             if g["representative_track_id"]:
                 credit_track_ids.add(g["representative_track_id"])
             credit_track_ids.update(trees[g["song_id"]]["track_ids"])
-        for g in cross_artist_groups:
-            credit_track_ids.update(g["track_ids"])
         credit_track_ids.update(t["track_id"] for t in search_results)
 
         return render_template(
@@ -690,15 +710,14 @@ def create_app():
             active="dev_canonical",
             total_tracks=conn.execute("SELECT COUNT(*) FROM track").fetchone()[0],
             tier_counts=canonical.tier_counts(conn),
-            unreviewed_main=len(unreviewed_main_groups),
-            unreviewed_cross=len(unreviewed_cross_groups),
             reviewed_count=reviewed_row["c"],
             reviewed_latest=reviewed_row["latest"],
             groups=groups,
+            group_total=len(all_song_groups),
             trees=trees,
             show_singletons=show_singletons,
             q=q,
-            cross_artist_groups=cross_artist_groups,
+            cross_q=cross_q,
             search_q=search_q,
             search_results=search_results,
             expand_song_id=expand_song_id,
@@ -757,6 +776,49 @@ def create_app():
                 # in an earlier sitting would otherwise be unreachable until
                 # some future session happened to finish the queue.
                 "pending_count": len(canonical_detect.pending_song_ids(conn)),
+            }
+        )
+
+    @app.route("/api/canonical/cross/listing")
+    def api_canonical_cross_listing():
+        """The /dev/canonical cross-artist pane, plus the two unreviewed counts
+        that sit in its Stats panel. Split out of the page because all three
+        need full detection (~350ms), which is most of what that page used to
+        spend before painting anything.
+
+        Returns rendered HTML rather than JSON rows so the entity links in it
+        stay the same entity_link macro every other page uses.
+
+        Assumes the page's own ensure_track_groups() has already run -- this is
+        only ever fetched by that page, and a GET returning a listing has no
+        business taking a write lock."""
+        conn = db.get_db()
+        cross_q = request.args.get("cross", "").strip()
+
+        unreviewed_main, unreviewed_cross, all_groups = canonical_detect.canonical_page_groups(conn)
+        matched = canonical_detect.filter_groups(
+            [g for g in all_groups if g["cross_artist"]], cross_q
+        )
+        shown = _cap_listing(matched, cross_q)
+
+        credit_track_ids = set()
+        for g in shown:
+            credit_track_ids.update(g["track_ids"])
+
+        return jsonify(
+            {
+                "html": render_template(
+                    "_canonical_cross.html",
+                    groups=shown,
+                    total=len(matched),
+                    cross_q=cross_q,
+                    artist_credits=canonical.artist_credits_for_tracks(
+                        conn, list(credit_track_ids)
+                    ),
+                ),
+                "total": len(matched),
+                "unreviewed_main": len(unreviewed_main),
+                "unreviewed_cross": len(unreviewed_cross),
             }
         )
 

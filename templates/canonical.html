@@ -1,9 +1,8 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, entity_link, artist_names %}
+{% from "_macros.html" import datetime_span, entity_link, artist_names, edit_link,
+                              explicit_badge, not_in_library, listing_cap_note %}
 
 {% block title %}Symr — Canonical Tracks{% endblock %}
-
-{% macro edit_link(track_ids) %}<a class="edit-link" href="{{ url_for('canonical_review', tracks=track_ids|join(',')) }}">Edit in queue</a>{% endmacro %}
 
 {% macro artist_links(track_id) -%}
 {{ artist_names(artist_credits.get(track_id, [])) }}
@@ -14,12 +13,6 @@
         data-track-id="{{ track_id }}"
         title="{{ 'Pinned representative' if (is_current and pinned) else ('Current representative (computed)' if is_current else 'Set as representative') }}">{{ "★" if (is_current and pinned) else "☆" }}</button>
 {% endmacro %}
-
-{# 6,070 of 9,693 tracks are in no playlist at all. Without this, a group of
-   tracks you recognise gives no hint that none of them are actually yours. #}
-{% macro not_in_library(live_count) %}{% if not live_count %}<span class="badge muted" title="No live playlist membership">not in library</span>{% endif %}{% endmacro %}
-
-{% macro explicit_badge(explicit) %}{% if explicit %}<span class="badge explicit" title="Explicit">E</span>{% endif %}{% endmacro %}
 
 {% macro auto_badge(group_id, auto_grouped) %}{% if group_id in auto_grouped %}<span class="badge auto" title="Created by an auto-group run">auto</span>{% endif %}{% endmacro %}
 
@@ -58,9 +51,11 @@
         {% endfor %}
       </tbody>
     </table>
+    {# The two unreviewed counts come from full detection, so they arrive with
+       the cross-artist pane rather than with the page. #}
     <p>
-      Unreviewed: <a href="{{ url_for('canonical_review') }}">{{ unreviewed_main }} in the main queue</a>
-      &middot; <a href="{{ url_for('canonical_cross') }}">{{ unreviewed_cross }} in the cross-artist queue</a>
+      Unreviewed: <a href="{{ url_for('canonical_review') }}"><span id="unreviewed-main">…</span> in the main queue</a>
+      &middot; <a href="{{ url_for('canonical_cross') }}"><span id="unreviewed-cross">…</span> in the cross-artist queue</a>
       {% if pending_tier_count %}
       &middot; <a href="{{ url_for('canonical_review', queue='pending') }}">{{ pending_tier_count }} group{{ "s" if pending_tier_count != 1 }} awaiting tier review</a>
       {% endif %}
@@ -100,8 +95,9 @@
   </section>
 
   <section class="panel">
-    <h2>Groups ({{ groups|length }})</h2>
+    <h2>Groups ({{ group_total }})</h2>
     <form method="get" class="inline-form">
+      <input type="hidden" name="cross" value="{{ cross_q }}">
       <input type="text" name="q" value="{{ q }}" placeholder="Filter by title or artist">
       <button type="submit">Filter</button>
       <label class="checkbox-label">
@@ -110,6 +106,7 @@
         Include singletons
       </label>
     </form>
+    {{ listing_cap_note(groups|length, group_total) }}
 
     {# Scrolls in place: at 797 groups the full four-tier tree runs to ~190,000px
        and the filter box ends up a five-second scroll away from whatever you
@@ -172,28 +169,19 @@
   </section>
 
   <section class="panel">
-    <h2>Cross-artist ({{ cross_artist_groups|length }})</h2>
+    {# Body loaded from /api/canonical/cross/listing -- see _canonical_cross.html
+       for why. Kept as a real <form> so Enter submits it and the field behaves
+       like the Groups filter beside it, but the JS always intercepts: with no
+       JS this pane stays empty, because nothing server-renders it any more. #}
+    <h2>Cross-artist (<span id="cross-total">…</span>)</h2>
     <p><a href="{{ url_for('canonical_cross') }}">Review in queue &rarr;</a></p>
-    {# Same reason as the Groups listing, more so: 602 buckets with every track
-       inline run to ~140,000px, which was 99% of this page's height. #}
-    <div class="group-scroll">
-    {% for g in cross_artist_groups %}
-    <div class="panel cross-artist-entry">
-      <h3>{{ g.base }} <span class="leaf-meta">impact {{ g.impact }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>
-      {% for tid in g.track_ids %}
-      {% set t = g.tracks[tid] %}
-      <div class="tree-leaf">
-        {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
-        <span class="leaf-title"><strong>{{ artist_links(tid) }}</strong> — {{ entity_link('track', tid, t.title) }} {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}</span>
-        <span class="leaf-meta">{{ t.album or "" }} &middot; {{ t.live_count }} playlist{{ "s" if t.live_count != 1 }}</span>
-      </div>
-      {% endfor %}
-      {{ edit_link(g.track_ids) }}
-    </div>
-    {% else %}
-    <p class="empty">No cross-artist candidates.</p>
-    {% endfor %}
-    </div>
+    <form method="get" class="inline-form" id="cross-form">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="singletons" value="{{ '1' if show_singletons }}">
+      <input type="text" name="cross" id="cross-input" value="{{ cross_q }}" placeholder="Filter by title or artist">
+      <button type="submit">Filter</button>
+    </form>
+    <div id="cross-body"><p class="meta">Loading cross-artist candidates…</p></div>
   </section>
 
   <section class="panel">
@@ -201,6 +189,7 @@
     <form method="get" class="inline-form">
       <input type="hidden" name="q" value="{{ q }}">
       <input type="hidden" name="singletons" value="{{ '1' if show_singletons }}">
+      <input type="hidden" name="cross" value="{{ cross_q }}">
       <input type="text" name="search" value="{{ search_q }}" placeholder="Track or artist name">
       <button type="submit">Search</button>
     </form>

@@ -67,6 +67,33 @@
 {% for a in credits %}{{ entity_link('artist', a.artist_id, a.name) }}{{ ", " if not loop.last }}{% endfor %}
 {%- endmacro %}
 
+{# The canonical listings' small shared pieces. They live here rather than in
+   canonical.html because the cross-artist pane is now rendered separately by
+   /api/canonical/cross/listing into _canonical_cross.html, and a badge rendered
+   two ways in two templates is exactly the drift entity_link exists to prevent. #}
+
+{% macro edit_link(track_ids) -%}
+<a class="edit-link" href="{{ url_for('canonical_review', tracks=track_ids|join(',')) }}">Edit in queue</a>
+{%- endmacro %}
+
+{% macro explicit_badge(explicit) -%}
+{%- if explicit %}<span class="badge explicit" title="Explicit">E</span>{% endif -%}
+{%- endmacro %}
+
+{# 6,070 of 9,693 tracks are in no playlist at all. Without this, a group of
+   tracks you recognise gives no hint that none of them are actually yours. #}
+{% macro not_in_library(live_count) -%}
+{%- if not live_count %}<span class="badge muted" title="No live playlist membership">not in library</span>{% endif -%}
+{%- endmacro %}
+
+{# Both /dev/canonical listings are capped on an unfiltered load (see app.py's
+   _LISTING_CAP); this is how you find out you're not looking at all of it. #}
+{% macro listing_cap_note(shown, total) -%}
+{%- if shown < total %}
+<p class="meta">Showing the top {{ shown }} of {{ total }} by impact — search to see the rest, or search <code>%</code> for all of them.</p>
+{%- endif %}
+{%- endmacro %}
+
 {# The 37-cell generation-presence strip, extracted from generations_tenure.html
    so the tenure table and the group/artist pages share one implementation.
    ordinals is the set/list of ordinals present; spans is generations.generation_spans()'s

@@ -164,6 +164,54 @@
     });
   }
 
+  // ---------- Cross-artist pane ----------
+  // Loaded after the page paints: it and the two unreviewed counts are the
+  // only things here that need full detection, which is ~350ms. Searching
+  // refetches in place rather than reloading, so a search doesn't re-render
+  // the (server-rendered, unaffected) Groups listing above it.
+
+  const crossForm = document.getElementById("cross-form");
+  const crossInput = document.getElementById("cross-input");
+  const crossBody = document.getElementById("cross-body");
+  const crossTotal = document.getElementById("cross-total");
+
+  function loadCross(query) {
+    crossBody.innerHTML = '<p class="meta">Loading cross-artist candidates…</p>';
+    fetch("/api/canonical/cross/listing?cross=" + encodeURIComponent(query))
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) {
+          crossBody.innerHTML = "";
+          showError(data.detail || data.error);
+          return;
+        }
+        crossBody.innerHTML = data.html;
+        crossTotal.textContent = String(data.total);
+        document.getElementById("unreviewed-main").textContent = String(data.unreviewed_main);
+        document.getElementById("unreviewed-cross").textContent = String(data.unreviewed_cross);
+      })
+      .catch(() => {
+        crossBody.innerHTML = "";
+        showError("Could not load the cross-artist candidates.");
+      });
+  }
+
+  if (crossForm) {
+    crossForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const query = crossInput.value.trim();
+      // Keep ?cross= in the URL so a reload or a copied link still shows the
+      // same filter -- replaceState, so Back still leaves the page.
+      const url = new URL(window.location.href);
+      if (query) url.searchParams.set("cross", query);
+      else url.searchParams.delete("cross");
+      window.history.replaceState({}, "", url);
+      loadCross(query);
+    });
+
+    loadCross(crossInput.value.trim());
+  }
+
   document.querySelectorAll(".pin-star").forEach((btn) => {
     btn.addEventListener("click", () => {
       const trackId = btn.dataset.trackId;

@@ -1,0 +1,27 @@
+{# The cross-artist listing's body, rendered by /api/canonical/cross rather than
+   with the page: building it needs full detection (~350ms of /dev/canonical's
+   ~500ms), so the page paints without it and canonical_viewer.js drops it in.
+   Server-rendered rather than built in JS so the entity links here stay the
+   same entity_link every other page uses. #}
+{% from "_macros.html" import entity_link, artist_names, edit_link, explicit_badge, not_in_library, listing_cap_note %}
+
+{{ listing_cap_note(groups|length, total) }}
+
+<div class="group-scroll">
+{% for g in groups %}
+<div class="panel cross-artist-entry">
+  <h3>{{ g.base }} <span class="leaf-meta">impact {{ g.impact }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>
+  {% for tid in g.track_ids %}
+  {% set t = g.tracks[tid] %}
+  <div class="tree-leaf">
+    {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
+    <span class="leaf-title"><strong>{{ artist_names(artist_credits.get(tid, [])) }}</strong> — {{ entity_link('track', tid, t.title) }} {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}</span>
+    <span class="leaf-meta">{{ t.album or "" }} &middot; {{ t.live_count }} playlist{{ "s" if t.live_count != 1 }}</span>
+  </div>
+  {% endfor %}
+  {{ edit_link(g.track_ids) }}
+</div>
+{% else %}
+<p class="empty">{{ 'No cross-artist candidates match.' if cross_q else 'No cross-artist candidates.' }}</p>
+{% endfor %}
+</div>

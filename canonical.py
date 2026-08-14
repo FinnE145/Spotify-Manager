@@ -419,9 +419,15 @@ def artist_credits_for_tracks(conn, track_ids):
     return dict(credits)
 
 
-def song_groups(conn, query="", include_singletons=False):
-    """Song-tier group summaries for the /dev/canonical browser, ordered by
-    playlist impact (summed live memberships) descending."""
+def song_group_rows(conn, query="", include_singletons=False):
+    """Song-tier groups for the /dev/canonical browser -- id, size and playlist
+    impact only -- ordered by impact (summed live memberships) descending.
+
+    Deliberately unhydrated. The listing renders a capped slice, and filling in
+    a representative track_display for all 944 groups cost 307ms of that page's
+    800ms only to discard 894 of them. The impact this orders by comes from the
+    aggregate below (39ms), so the ordering never needs the hydration. Pass the
+    slice you actually render to hydrate_song_groups()."""
     rows = conn.execute(
         """
         SELECT tg.song_id, COUNT(*) AS track_count,
@@ -455,20 +461,33 @@ def song_groups(conn, query="", include_singletons=False):
             ).fetchone()
             if not match:
                 continue
-        rep_id = representative(conn, song_id)
-        rep = track_display(conn, rep_id) if rep_id else None
         results.append(
             {
                 "song_id": song_id,
                 "track_count": row["track_count"],
                 "impact": row["impact"],
-                "representative_track_id": rep_id,
-                "representative": rep,
-                "pinned": _is_pinned(conn, song_id),
             }
         )
     results.sort(key=lambda r: (-r["impact"], r["song_id"]))
     return results
+
+
+def hydrate_song_groups(conn, rows):
+    """song_group_rows() output with each group's representative track and
+    pinned flag filled in -- several queries per group, so only ever call it on
+    the rows being rendered."""
+    out = []
+    for row in rows:
+        rep_id = representative(conn, row["song_id"])
+        out.append(
+            {
+                **row,
+                "representative_track_id": rep_id,
+                "representative": track_display(conn, rep_id) if rep_id else None,
+                "pinned": _is_pinned(conn, row["song_id"]),
+            }
+        )
+    return out
 
 
 def _enrich(conn, tier, nodes):
