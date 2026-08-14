@@ -98,8 +98,8 @@ Probed directly (see `docs/spotify_constraints.md` for the full record):
 Consequences that shape everything below:
 
 - **The track object is the complete and final universe of Spotify metadata.** There is no follow-up pull to plan for. Capture it whole.
-- No artist images, genres, followers, or popularity. **Monthly listeners is not in the Web API at all**, quota irrelevant.
-- No album label, genres, or copyrights.
+- No artist genres, followers, or popularity. **Monthly listeners is not in the Web API at all**, quota irrelevant. ~~No artist images~~ — **corrected by K**: only the *bulk* `/v1/artists?ids=` 403s; `GET /v1/artists/{id}` works and returns images, which the artist page now fetches one-per-first-view. `GET /v1/albums/{id}` likewise works and carries the tracklist inline. See `docs/spotify_constraints.md`.
+- No album label or genres. (Copyrights do come back on the singular album endpoint; nothing wants them yet.)
 - **No audio features** — tempo, key, energy, valence, danceability are all gone (2024-11-27 deprecation).
 - `popularity` and `preview_url` are dead (0/3,589 populated; `preview_url` isn't even a key in the response). **No audio access of any kind**, so no locally-computed features and no audio-trained classifier.
 
@@ -114,11 +114,11 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
    DONE              DONE                              DONE           DONE
 
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
-      DONE                      DONE                ↑ NEXT, specced
+      DONE                      DONE                DONE                ↑ NEXT
   ──► J (partial pulls) ──► F/G ──► L (better search)
 ```
 
-**A, I, C, D, E and B have landed.** Their sections below are marked, and each points
+**A, I, C, D, E, B and K have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
@@ -230,12 +230,22 @@ Needs **no play history and no Spotify requests**.
 
 ## K — Entity viewing pages
 
-**Specced → `docs/specs/entity-pages-K.md`.** That spec is authoritative; the summary below is
-the shape, not the detail. Planning **corrected two things here**: `GET /v1/artists/{id}` and
-`GET /v1/albums/{id}` both work (only the bulk forms 403), so **artist images and full album
-tracklists are obtainable** — the *API capability* section above is wrong on artist images; and
-the library has tripled since those measurements (3,611 → 9,930 tracks, 63% with no playlist
-membership). It also settled nine tiers-and-URLs questions the summary below doesn't cover.
+**✅ DONE → `docs/specs/entity-pages-K.md`.** That spec is authoritative for what actually
+shipped; the summary below is the original shape, kept for the reasoning. Planning **corrected
+two things here**: `GET /v1/artists/{id}` and `GET /v1/albums/{id}` both work (only the bulk
+forms 403), so **artist images and full album tracklists are obtainable** — the *API capability*
+section above is wrong on artist images; and the library has tripled since those measurements
+(3,611 → 9,930 tracks, 63% with no playlist membership). It also settled nine tiers-and-URLs
+questions the summary below doesn't cover.
+
+**What shipped differs from the summary below in three ways.** Group pages are the *primary*
+entity pages, one per tier at flat top-level URLs (`/version/<id>`, never `/song/<id>/version/<id>`)
+— the track page is the narrow one, carrying only what can't be aggregated. The verification pass
+decided **three surfaces keep their bare names on purpose** (both canonical review queues and the
+round-trip's manual-alias table — spec §12.3), so the sweep below is complete without them; the
+canvas stayed out of scope as planned. And the album/artist detail fetches are capped at **one
+Spotify request per page load, first view only**, which is why an album past 50 tracks renders
+the first page plus any owned track that fell beyond it rather than paging.
 
 Proper pages for viewing a **song**, an **album**, an **artist** and a **playlist** — the canonical
 place each entity is displayed, which every other page then links into instead of
@@ -352,4 +362,4 @@ is why this sits at the end rather than next to K.
 - **Grouping stays a query-time lens.** `docs/specs/canonical-tracks.md` guarantees nothing mutates `track` or `membership`. That makes two things the source inventory flagged as easy-to-get-wrong — "merges must keep the earliest `added_at`", "generation membership must be unioned" — structurally impossible to get wrong here; they fall out of `MIN(added_at) … GROUP BY version_id`.
 - **Right-censoring must be explicit.** Anything first seen in the last two generations hasn't had a chance to survive yet. The inventory measured ATG tracks peaking at a mean of week 72 versus week 17 for non-ATG, so material under ~18 months old is genuinely unevaluable — worth surfacing in the UI, since the instinct is to judge far sooner.
 - **The snapshot holds one pull's worth of state.** `membership.removed_at` has 4 rows. Frozen old generations are unaffected, but patch removals from the active version before the first pull are invisible. "Dropped from current-favs" is only observable going forward.
-- **Genre and artist imagery are deferred, not impossible.** Both need a non-Spotify source. ISRC is populated for 100% of library tracks and MusicBrainz supports ISRC lookup, so ISRC → recording MBID → MusicBrainz/Last.fm tags (genre) or Wikidata → Wikimedia Commons (artist images) is the route when it's wanted.
+- **Genre is deferred, not impossible.** It needs a non-Spotify source. ISRC is populated for 100% of library tracks and MusicBrainz supports ISRC lookup, so ISRC → recording MBID → MusicBrainz/Last.fm tags is the route when it's wanted. **Artist imagery is no longer on this list** — K gets it from `GET /v1/artists/{id}`; only richer-than-Spotify imagery would need Wikidata → Wikimedia Commons.
