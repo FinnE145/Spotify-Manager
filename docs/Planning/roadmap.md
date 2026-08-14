@@ -114,8 +114,8 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
    DONE              DONE                              DONE           DONE
 
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
-      DONE                      DONE                ↑ NEXT
-  ──► J (partial pulls) ──► F/G
+      DONE                      DONE                ↑ NEXT, specced
+  ──► J (partial pulls) ──► F/G ──► L (better search)
 ```
 
 **A, I, C, D, E and B have landed.** Their sections below are marked, and each points
@@ -230,7 +230,12 @@ Needs **no play history and no Spotify requests**.
 
 ## K — Entity viewing pages
 
-**Not specced.** Own `/symr-plan` session.
+**Specced → `docs/specs/entity-pages-K.md`.** That spec is authoritative; the summary below is
+the shape, not the detail. Planning **corrected two things here**: `GET /v1/artists/{id}` and
+`GET /v1/albums/{id}` both work (only the bulk forms 403), so **artist images and full album
+tracklists are obtainable** — the *API capability* section above is wrong on artist images; and
+the library has tripled since those measurements (3,611 → 9,930 tracks, 63% with no playlist
+membership). It also settled nine tiers-and-URLs questions the summary below doesn't cover.
 
 Proper pages for viewing a **song**, an **album**, an **artist** and a **playlist** — the canonical
 place each entity is displayed, which every other page then links into instead of
@@ -273,6 +278,16 @@ The score must be **aggregation-comparable across arbitrary group sizes** — a 
 
 **Right-censoring lives here, not in B.** B's tenure is deliberately raw: a song present only in the newest generation has tenure 1, and B provides no flag saying it hasn't had its chance yet. Any scoring that skips that distinction reads new material as failed material.
 
+**Two things K leaves for H.** K's entity pages (`docs/specs/entity-pages-K.md`) deliberately
+apply **no ordering** to any track, album or artist list — they sort by name, because ranking is
+this step's job. When the score lands, order those lists by it and **render the score on the
+entity pages themselves**, which is the natural place to see it.
+
+**Fold in `entities.play_stats`.** K added a small per-entity play read (total / past 30 days /
+past 7 days for a set of track ids, resolved through `played_uri_track`). It is deliberately
+simple. Whatever bulk play aggregation H — or F/G — builds should absorb it rather than leaving
+two read paths that can disagree.
+
 ## J — Partial / resumable pulls
 
 **Not specced.** Own `/symr-plan` session.
@@ -314,6 +329,20 @@ evidence of where the ceiling actually sits.
 Deferred. The full inventory is carried in `feature_ideas.md` under *Listening analytics*; revisit which items are actually worth building once A–D have landed and the data is real. G additionally waits on the Power BI prototype step and the still-open charting-library choice.
 
 **Adoption stagger belongs here, not in scoring.** Moved out of B during B's planning. Distinct add-days ÷ tracks per artist — did an artist arrive gradually or as one discography dump? The original analysis found bulk-added artists survive slightly worse: real, but small. The reason it can't go anywhere near H is that it exists to **discover a mechanism** that drives liking and souring — so feeding it into a score would make the score predict itself. As a descriptive report about how listening actually works, it's interesting; as a scoring input, it's circular.
+
+## L — Better search
+
+**Not specced.** Own `/symr-plan` session.
+
+K ships the deliberately plain version: a navbar box posting to `/search?q=`, four
+`LIKE '%q%'` groups (songs, albums, artists, playlists), each capped at 50 and ordered by name,
+server-rendered with no JS. It is enough to reach any entity page and no more.
+
+L is what makes it good: a **dropdown** that answers as you type, **fuzzy matching** so a typo
+or a half-remembered title still finds the track, and **ranked results** — across types, so the
+artist you have 358 tracks by outranks a one-play song whose title happens to contain their
+name. Ranking is the part with real design in it, and it wants H's score to exist first, which
+is why this sits at the end rather than next to K.
 
 ---
 

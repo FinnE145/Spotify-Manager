@@ -65,7 +65,7 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 - Consequence: there is **no 50-per-request batch path** for topping up track metadata. Backfilling *N* tracks costs *N* requests, which for a full library (~3,600) is far past the burst that triggers app-level quota exhaustion. Get bulk track metadata from **playlist item reads instead** — `GET /playlists/{id}/items` returns full track objects carrying `external_ids` and `album.images` (verified Jul 2026), so a normal snapshot pull populates them ~10x cheaper. Reserve single-track reads for small mop-up passes.
 - **`popularity` is NULL everywhere**, from both the playlist-items and single-track endpoints — Spotify no longer populates it for this app. Don't design anything that depends on it (`docs/specs/canonical-tracks.md` drops it from its representative tie-break for this reason).
 
-## Enrichment endpoints — all 403 (verified Jul 2026)
+## Enrichment endpoints — every *bulk* form 403s (verified Jul 2026, corrected Aug 2026)
 
 Probed directly against Symr's dev-mode app with a valid, unexpired token carrying the app's normal scopes:
 
@@ -79,9 +79,34 @@ Probed directly against Symr's dev-mode app with a valid, unexpired token carryi
 | `GET /v1/audio-features` | `sp.audio_features()` | **403** |
 | `GET /v1/artists/{id}/related-artists` | `sp.artist_related_artists()` | **403** |
 
-- Consequence: Symr can obtain **no artist metadata** (genres, popularity, followers, artist images), **no album metadata** (label, genres, copyrights), and **no audio features** (tempo, key, energy, valence, danceability, loudness). Genre- or audio-feature-based analytics must come from a non-Spotify source (MusicBrainz / Last.fm tags) or not be built.
 - The `audio-features` and `related-artists` 403s are the **2024-11-27 deprecation** (withdrawn for apps without a pre-existing extended-quota grant). The `/artists` and `/albums` 403s are the same app-level restriction that blocks `/v1/tracks?ids=`.
-- **The track object is therefore the complete and final universe of Spotify metadata Symr can ever hold.** There is no follow-up pull to plan for, because there is nothing else to fetch — capture the track object whole (raw JSON) rather than parsing a fixed field list and re-pulling later for a field nobody thought of.
+- **The track object is the complete and final universe of Spotify metadata Symr can ever hold *about a track*.** Capture it whole (raw JSON) rather than parsing a fixed field list and re-pulling later for a field nobody thought of. The Aug 2026 correction below adds exactly two things beyond it, both one-request-per-entity and both outside the track object: an artist's image and an album's tracklist. Nothing else is fetchable.
+
+### The singular forms work — corrected Aug 2026
+
+The table above probed only the **bulk** artist and album endpoints. The singular forms behave
+like `GET /v1/tracks/{id}` and **work**, which changes what is obtainable:
+
+| Endpoint | Spotipy | Result |
+|---|---|---|
+| `GET /v1/artists/{id}` | `sp.artist()` | **works** — returns `images` (640/320/160) |
+| `GET /v1/albums/{id}` | `sp.album()` | **works** — returns `copyrights`, `external_ids`, and **the tracklist inline** |
+| `GET /v1/albums/{id}/tracks` | `sp.album_tracks()` | **works** — simplified track objects |
+
+- **Artist images are available after all**, one request per artist. Still absent from the
+  artist object: `genres`, `followers`, `popularity` — those keys are not returned at all.
+- **Album objects carry their full tracklist inline**, up to 50 items per page, so one request
+  gets album metadata *and* the tracklist. Absent: `label`, `popularity`; `genres` comes back
+  as an empty array.
+- **Album tracklist items are the *simplified* track object**: `artists`, `disc_number`,
+  `duration_ms`, `explicit`, `id`, `name`, `track_number`, `uri`, `is_local`, `external_urls`.
+  No `album`, **no `external_ids`/ISRC**, no `is_playable`, no `linked_from` — so they cannot
+  become complete `track` rows without a `GET /v1/tracks/{id}` each (see
+  `docs/specs/entity-pages-K.md` §5.3).
+- Consequence: Symr can obtain artist images and album tracklists, but still **no genres, no
+  popularity, no followers, no album label**, and **no audio features** (tempo, key, energy,
+  valence, danceability, loudness). Genre- or audio-feature-based analytics must still come
+  from a non-Spotify source (MusicBrainz / Last.fm tags) or not be built.
 
 ## Dead track-object fields (verified Jul 2026)
 - **`popularity`** — NULL for all 3,589 library tracks, from both working endpoints (see above).
