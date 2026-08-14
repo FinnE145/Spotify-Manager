@@ -10,15 +10,11 @@ Finn is brain-dumping a feature; you turn it into a committed, fully-decided spe
 The `/symr-plan` argument is the brain-dump / feature idea. Treat it as the opening of the planning conversation, not a full spec.
 
 ## First action: check the model
-Plan runs on **Opus** (`claude-opus-5`). Check this *before anything else* — before the branch, before reading a single file:
+Plan runs on **Opus** (`claude-opus-5`). Check this *before anything else* — before the branch, before reading a single file. Read it straight off the environment block in your system prompt ("You are powered by the model named…"). **No command — don't shell out for this.**
 
-```bash
-grep -o '"model":"[^"]*"' ~/.claude/projects/-Users-finne-Projects-Spotify-Manager/<session-id>.jsonl | tail -1
-```
+If it isn't Opus, **stop right there**: say which model you're on and that Plan wants Opus, and do nothing else — no branch check, no orientation, no scanning the codebase. Wait for Finn to switch models or tell you to carry on.
 
-`<session-id>` is the uuid in the scratchpad path from your system prompt. The last line is the model this turn is actually running as — **don't** trust the environment block's "You are powered by…", which goes stale the moment Finn switches models mid-session.
-
-If it isn't `claude-opus-5`, **stop right there**: say which model you're on and that Plan wants Opus, and do nothing else — no branch check, no orientation, no scanning the codebase. Wait for Finn to switch models or tell you to carry on.
+That block is written at session start, so it's a *fresh-session* check. If Finn has switched models mid-session it can be stale — so if he says he's already on Opus and the block disagrees, take his word and carry on. Never stop him twice for the same check.
 
 ## Second action: settle the branch
 Before reading any code, confirm where this work lives — a fresh session inherits whatever branch was last checked out, likely the wrong one.
