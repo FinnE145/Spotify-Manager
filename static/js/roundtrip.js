@@ -21,6 +21,7 @@
     "resolved_tracks",
     "aliases",
     "failed_uris",
+    "wanted_uris",
     "reconcilable",
     "review_uris",
     "requests",

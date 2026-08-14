@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span %}
+{% from "_macros.html" import datetime_span, entity_link %}
 
 {% block title %}Symr — Artists{% endblock %}
 
@@ -27,10 +27,7 @@
           {% for side in (pair.a, pair.b) %}
           <tr>
             <td><code>{{ side.artist_id }}</code></td>
-            <td>
-              {% if side.external_url %}<a href="{{ side.external_url }}" target="_blank" rel="noreferrer">{{ side.name }}</a>
-              {% else %}{{ side.name }}{% endif %}
-            </td>
+            <td>{{ entity_link('artist', side.artist_id, side.name) }}</td>
             <td>{{ side.track_count }}</td>
             <td>{{ side.album_count }}</td>
             <td>{{ side.sample_tracks|join(" · ") }}</td>
@@ -59,8 +56,8 @@
         {% for group in merged %}
         {% for alias in group.aliases %}
         <tr data-artist-merged="{{ alias.artist_id }}">
-          <td>{{ group.canonical.name }} <code>{{ group.canonical.artist_id }}</code></td>
-          <td>{{ alias.name }} <code>{{ alias.artist_id }}</code></td>
+          <td>{{ entity_link('artist', group.canonical.artist_id, group.canonical.name) }} <code>{{ group.canonical.artist_id }}</code></td>
+          <td>{{ entity_link('artist', alias.artist_id, alias.name) }} <code>{{ alias.artist_id }}</code></td>
           <td>{{ datetime_span(alias.decided_at) }}</td>
           <td><button type="button" data-artist-unmerge>Unmerge</button></td>
         </tr>

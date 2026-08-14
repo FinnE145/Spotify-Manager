@@ -1,3 +1,4 @@
+import json
 import secrets
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
@@ -8,6 +9,7 @@ import canonical
 import canonical_autogroup
 import canonical_detect
 import db
+import entities
 import generations
 import history_import
 import jobs
@@ -106,6 +108,465 @@ def create_app():
     def analytics():
         return render_template("coming_soon.html", active="analytics", page_name="Analytics")
 
+    # -- Entity pages (docs/specs/entity-pages-K.md) ---------------------
+    #
+    # Top-level, not under /dev: the canonical place each entity is
+    # displayed, which every other page links into.
+
+    _GROUP_TIER_COLUMN = {"song": "song_id", "version": "version_id",
+                           "recording": "recording_id", "release": "release_id"}
+
+    @app.route("/song/<int:group_id>", endpoint="song_page", defaults={"tier": "song"})
+    @app.route("/version/<int:group_id>", endpoint="version_page", defaults={"tier": "version"})
+    @app.route("/recording/<int:group_id>", endpoint="recording_page", defaults={"tier": "recording"})
+    @app.route("/release/<int:group_id>", endpoint="release_page", defaults={"tier": "release"})
+    def group_page(group_id, tier):
+        conn = db.get_db()
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        row = conn.execute("SELECT tier FROM canonical_group WHERE id = ?", (group_id,)).fetchone()
+        if row is None or row["tier"] != tier:
+            abort(404, description="No such group.")
+
+        tree = canonical.group_tree(conn, tier, group_id)
+        track_ids = tree["track_ids"]
+        if not track_ids:
+            abort(404, description="Group has no members.")
+
+        rep_id = tree["representative_track_id"]
+        rep = canonical.track_display(conn, rep_id) if rep_id else None
+        artist_credits = canonical.artist_credits_for_tracks(conn, track_ids)
+
+        breadcrumb = conn.execute(
+            "SELECT song_id, version_id, recording_id, release_id FROM track_group WHERE track_id = ?",
+            (track_ids[0],),
+        ).fetchone()
+
+        member_tracks = sorted(
+            (canonical.track_display(conn, tid) for tid in track_ids),
+            key=lambda t: (t["name"] or "").casefold(),
+        )
+        tracks_by_id = {t["track_id"]: t for t in member_tracks}
+
+        ordinals = generations.presence_for_tracks(conn, track_ids)
+        runs = generations.runs(ordinals) if ordinals else []
+        spans = generations.generation_spans(conn)
+
+        return render_template(
+            "entity_group.html",
+            tier=tier,
+            group_id=group_id,
+            rep=rep,
+            artist_credits=artist_credits,
+            pinned=tree["pinned"],
+            track_count=len(track_ids),
+            breadcrumb=breadcrumb,
+            stats=entities.play_stats(conn, track_ids),
+            playlists=entities.playlists_for_tracks(conn, track_ids),
+            tracks_by_id=tracks_by_id,
+            spans=spans,
+            ordinals=ordinals,
+            tenure=max((end - start + 1 for start, end in runs), default=0),
+            total_generations=len(ordinals),
+            run_count=len(runs),
+            tree=tree,
+            member_tracks=member_tracks,
+        )
+
+    @app.route("/track/<track_id>", endpoint="track_page")
+    def track_page(track_id):
+        conn = db.get_db()
+        if conn.execute("SELECT 1 FROM track WHERE track_id = ?", (track_id,)).fetchone() is None:
+            abort(404, description="Track not found.")
+
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        track = canonical.track_display(conn, track_id)
+        track_artists = canonical.artist_credits_for_tracks(conn, [track_id]).get(track_id, [])
+        groups = canonical.groups_for_track(conn, track_id)
+
+        memberships = conn.execute(
+            """
+            SELECT m.playlist_id, s.name AS playlist_name, m.added_at, m.removed_at, m.position
+            FROM membership m
+            JOIN snapshot s ON s.playlist_id = m.playlist_id
+            WHERE m.track_id = ?
+            ORDER BY s.name COLLATE NOCASE, m.added_at
+            """,
+            (track_id,),
+        ).fetchall()
+
+        aliases = conn.execute(
+            "SELECT requested_uri FROM track_uri_alias WHERE track_id = ? ORDER BY requested_uri",
+            (track_id,),
+        ).fetchall()
+
+        return render_template(
+            "entity_track.html",
+            track=track,
+            track_artists=track_artists,
+            groups=groups,
+            memberships=memberships,
+            stats=entities.play_stats(conn, [track_id]),
+            aliases=aliases,
+        )
+
+    @app.route("/album/<album_id>", endpoint="album_page")
+    def album_page(album_id):
+        conn = db.get_db()
+
+        def _load():
+            return conn.execute(
+                "SELECT album_id, name, album_type, release_date, total_tracks, image_url, "
+                "external_url, tracklist_json, tracklist_pulled_at FROM album WHERE album_id = ?",
+                (album_id,),
+            ).fetchone()
+
+        album = _load()
+        if album is None:
+            abort(404, description="Album not found.")
+
+        if album["tracklist_pulled_at"] is None:
+            entities.fetch_album_tracklist(conn, album_id)
+            album = _load()
+
+        artist_rows = conn.execute(
+            "SELECT COALESCE(aa.canonical_artist_id, ab.artist_id) AS artist_id, ar.name "
+            "FROM album_artist ab "
+            "LEFT JOIN artist_alias aa ON aa.artist_id = ab.artist_id "
+            "JOIN artist ar ON ar.artist_id = COALESCE(aa.canonical_artist_id, ab.artist_id) "
+            "WHERE ab.album_id = ? ORDER BY ab.position",
+            (album_id,),
+        ).fetchall()
+
+        owned_ids = [
+            r["track_id"]
+            for r in conn.execute("SELECT track_id FROM track WHERE album_id = ?", (album_id,))
+        ]
+        # Owned tracks only: an unowned tracklist entry's artist ids come
+        # straight from Spotify's simplified object, with no guarantee we've
+        # ever ingested an `artist` row for them (fetch_album_tracklist never
+        # upserts artists), so linking those would often 404.
+        artist_credits = canonical.artist_credits_for_tracks(conn, owned_ids)
+
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        rows = []
+        tracklist = json.loads(album["tracklist_json"]) if album["tracklist_json"] else None
+        fetched = tracklist is not None
+        if fetched:
+            owned_set = set(owned_ids)
+            for item in tracklist:
+                tid = item.get("id")
+                is_owned = bool(tid and tid in owned_set)
+                version_id = None
+                if is_owned:
+                    g = canonical.groups_for_track(conn, tid)
+                    version_id = g["version"] if g else None
+                rows.append(
+                    {
+                        "owned": is_owned,
+                        "track_id": tid,
+                        "version_id": version_id,
+                        "name": item.get("name"),
+                        "artists": ", ".join(a.get("name", "") for a in item.get("artists") or []),
+                        "duration_ms": item.get("duration_ms"),
+                        "explicit": item.get("explicit"),
+                        "track_number": item.get("track_number"),
+                        "disc_number": item.get("disc_number"),
+                    }
+                )
+        else:
+            # Never successfully fetched -- show only what's independently
+            # known from Symr's own library rather than nothing at all.
+            for r in conn.execute(
+                "SELECT t.track_id, t.name, t.track_number, t.disc_number, t.duration_ms, t.explicit, "
+                "       COALESCE(ta.artists, '') AS artists "
+                "FROM track t LEFT JOIN track_artists ta ON ta.track_id = t.track_id "
+                "WHERE t.album_id = ?",
+                (album_id,),
+            ):
+                g = canonical.groups_for_track(conn, r["track_id"])
+                rows.append(
+                    {
+                        "owned": True,
+                        "track_id": r["track_id"],
+                        "version_id": g["version"] if g else None,
+                        "name": r["name"],
+                        "artists": r["artists"],
+                        "duration_ms": r["duration_ms"],
+                        "explicit": r["explicit"],
+                        "track_number": r["track_number"],
+                        "disc_number": r["disc_number"],
+                    }
+                )
+        rows.sort(key=lambda r: (r["disc_number"] or 1, r["track_number"] or 0))
+        track_names = {r["track_id"]: r["name"] for r in rows if r["owned"]}
+
+        return render_template(
+            "entity_album.html",
+            album=album,
+            artists=artist_rows,
+            rows=rows,
+            track_artist_credits=artist_credits,
+            track_names=track_names,
+            fetched=fetched,
+            known_count=len(owned_ids),
+            stats=entities.play_stats(conn, owned_ids),
+            playlists=entities.playlists_for_tracks(conn, owned_ids),
+        )
+
+    @app.route("/artist/<artist_id>", endpoint="artist_page")
+    def artist_page(artist_id):
+        conn = db.get_db()
+
+        alias_row = conn.execute(
+            "SELECT canonical_artist_id FROM artist_alias WHERE artist_id = ?", (artist_id,)
+        ).fetchone()
+        if alias_row is not None:
+            return redirect(url_for("artist_page", artist_id=alias_row["canonical_artist_id"]))
+
+        def _load():
+            return conn.execute(
+                "SELECT artist_id, name, external_url, image_url, detail_pulled_at "
+                "FROM artist WHERE artist_id = ?",
+                (artist_id,),
+            ).fetchone()
+
+        artist = _load()
+        if artist is None:
+            abort(404, description="Artist not found.")
+
+        if artist["detail_pulled_at"] is None:
+            entities.fetch_artist_image(conn, artist_id)
+            artist = _load()
+
+        merged_ids = [
+            r["artist_id"]
+            for r in conn.execute(
+                "SELECT artist_id FROM artist_alias WHERE canonical_artist_id = ? ORDER BY artist_id",
+                (artist_id,),
+            )
+        ]
+
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        credit_rows = conn.execute(
+            "SELECT tar.track_id, tar.role, tg.version_id FROM track_artist_role tar "
+            "JOIN track_group tg ON tg.track_id = tar.track_id WHERE tar.artist_id = ?",
+            (artist_id,),
+        ).fetchall()
+        all_track_ids = [r["track_id"] for r in credit_rows]
+
+        primary_versions, featured_versions = set(), set()
+        for r in credit_rows:
+            (primary_versions if r["role"] == "primary" else featured_versions).add(r["version_id"])
+        # A version already counted as primary (via some other member track)
+        # doesn't also need a featured row -- primary is the more informative
+        # badge for this artist.
+        featured_versions -= primary_versions
+
+        def _version_rows(version_ids):
+            out = []
+            for vid in version_ids:
+                rid = canonical.representative(conn, vid)
+                if rid is None:
+                    continue
+                out.append({"version_id": vid, **canonical.track_display(conn, rid)})
+            out.sort(key=lambda t: (t["name"] or "").casefold())
+            return out
+
+        album_rows = conn.execute(
+            "SELECT a.album_id, a.name, a.release_date, a.image_url FROM resolved_album_artist raa "
+            "JOIN album a ON a.album_id = raa.album_id "
+            "WHERE raa.artist_id = ? ORDER BY a.name COLLATE NOCASE",
+            (artist_id,),
+        ).fetchall()
+
+        playlists_seen = {}
+        for row in entities.playlists_for_tracks(conn, all_track_ids):
+            playlists_seen.setdefault(row["playlist_id"], row)
+
+        return render_template(
+            "entity_artist.html",
+            artist=artist,
+            merged_ids=merged_ids,
+            track_count=len(all_track_ids),
+            album_count=len(album_rows),
+            primary_tracks=_version_rows(primary_versions),
+            featured_tracks=_version_rows(featured_versions),
+            albums=album_rows,
+            playlists=list(playlists_seen.values()),
+            ordinals=generations.presence_for_tracks(conn, all_track_ids),
+            spans=generations.generation_spans(conn),
+            stats=entities.play_stats(conn, all_track_ids),
+        )
+
+    @app.route("/playlist/<playlist_id>", endpoint="playlist_page")
+    def playlist_page(playlist_id):
+        conn = db.get_db()
+        playlist = conn.execute(
+            "SELECT * FROM snapshot WHERE playlist_id = ?", (playlist_id,)
+        ).fetchone()
+        if playlist is None:
+            abort(404, description="Playlist not found.")
+
+        canonical.ensure_track_groups(conn)
+        conn.commit()
+
+        rows = conn.execute(
+            """
+            SELECT m.id, m.track_id, t.name, t.album_id, a.name AS album_name, t.duration_ms,
+                   m.added_at, m.removed_at, m.position
+            FROM membership m
+            JOIN track t ON t.track_id = m.track_id
+            LEFT JOIN album a ON a.album_id = t.album_id
+            WHERE m.playlist_id = ?
+            ORDER BY m.position
+            """,
+            (playlist_id,),
+        ).fetchall()
+
+        version_by_track = {}
+        for r in rows:
+            g = canonical.groups_for_track(conn, r["track_id"])
+            version_by_track[r["track_id"]] = g["version"] if g else None
+        artist_credits = canonical.artist_credits_for_tracks(conn, [r["track_id"] for r in rows])
+
+        live_track_ids = [r["track_id"] for r in rows if r["removed_at"] is None]
+        totals = conn.execute(
+            "SELECT SUM(t.duration_ms) AS runtime, MIN(m.added_at) AS first_added, "
+            "MAX(m.added_at) AS last_added FROM membership m JOIN track t ON t.track_id = m.track_id "
+            "WHERE m.playlist_id = ? AND m.removed_at IS NULL",
+            (playlist_id,),
+        ).fetchone()
+
+        generation = conn.execute(
+            "SELECT ordinal FROM generation WHERE playlist_id = ?", (playlist_id,)
+        ).fetchone()
+
+        gen_view = None
+        if generation is not None and request.args.get("generation") == "1":
+            tier = request.args.get("tier", "version")
+            tier = tier if tier in ("version", "song") else "version"
+            column = _GROUP_TIER_COLUMN[tier]
+
+            spans = generations.generation_spans(conn)
+            idx = next(i for i, s in enumerate(spans) if s["ordinal"] == generation["ordinal"])
+
+            def _groups_at(ordinal):
+                return {
+                    r[0]
+                    for r in conn.execute(
+                        f"SELECT DISTINCT {column} FROM generation_presence WHERE ordinal = ?",
+                        (ordinal,),
+                    )
+                }
+
+            this_groups = _groups_at(generation["ordinal"])
+            prev_groups = _groups_at(spans[idx - 1]["ordinal"]) if idx > 0 else set()
+            next_groups = _groups_at(spans[idx + 1]["ordinal"]) if idx + 1 < len(spans) else None
+
+            def _summaries(ids):
+                out = []
+                for gid in sorted(ids):
+                    rid = canonical.representative(conn, gid)
+                    if rid is None:
+                        continue
+                    out.append({"group_id": gid, **canonical.track_display(conn, rid)})
+                return out
+
+            gen_view = {
+                "ordinal": generation["ordinal"],
+                "tier": tier,
+                "span": spans[idx],
+                "carried": _summaries(this_groups & prev_groups),
+                "new": _summaries(this_groups - prev_groups),
+                "survived_out": len(this_groups & next_groups) if next_groups is not None else None,
+            }
+
+        return render_template(
+            "entity_playlist.html",
+            playlist=playlist,
+            rows=rows,
+            version_by_track=version_by_track,
+            artist_credits=artist_credits,
+            totals=totals,
+            stats=entities.play_stats(conn, live_track_ids),
+            generation=generation,
+            gen_view=gen_view,
+        )
+
+    @app.route("/search", endpoint="search_page")
+    def search_page():
+        conn = db.get_db()
+        q = request.args.get("q", "").strip()
+
+        songs, albums, artists_result, playlists_result = [], [], [], []
+        if q:
+            canonical.ensure_track_groups(conn)
+            conn.commit()
+            like = f"%{q}%"
+
+            track_rows = conn.execute(
+                "SELECT t.track_id FROM track t WHERE t.name LIKE ? "
+                "   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id) "
+                "              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "
+                "ORDER BY t.name COLLATE NOCASE",
+                (like, like),
+            ).fetchall()
+            seen_versions = {}
+            for row in track_rows:
+                if len(seen_versions) >= 50:
+                    break
+                groups = canonical.groups_for_track(conn, row["track_id"])
+                if not groups or groups["version"] in seen_versions:
+                    continue
+                vid = groups["version"]
+                rep_id = canonical.representative(conn, vid) or row["track_id"]
+                seen_versions[vid] = {"version_id": vid, **canonical.track_display(conn, rep_id)}
+            songs = list(seen_versions.values())
+
+            albums = conn.execute(
+                "SELECT album_id, name, image_url FROM album WHERE name LIKE ? "
+                "ORDER BY name COLLATE NOCASE LIMIT 50",
+                (like,),
+            ).fetchall()
+
+            artist_rows = conn.execute(
+                "SELECT ar.artist_id, ar.name, COALESCE(aa.canonical_artist_id, ar.artist_id) AS resolved_id "
+                "FROM artist ar LEFT JOIN artist_alias aa ON aa.artist_id = ar.artist_id "
+                "WHERE ar.name LIKE ?",
+                (like,),
+            ).fetchall()
+            seen_artists = {}
+            for row in artist_rows:
+                if row["resolved_id"] not in seen_artists:
+                    canonical_artist = conn.execute(
+                        "SELECT artist_id, name FROM artist WHERE artist_id = ?", (row["resolved_id"],)
+                    ).fetchone()
+                    seen_artists[row["resolved_id"]] = dict(canonical_artist)
+            artists_result = sorted(seen_artists.values(), key=lambda a: (a["name"] or "").casefold())[:50]
+
+            playlists_result = conn.execute(
+                "SELECT playlist_id, name, image_url FROM snapshot WHERE name LIKE ? "
+                "ORDER BY name COLLATE NOCASE LIMIT 50",
+                (like,),
+            ).fetchall()
+
+        return render_template(
+            "search.html",
+            q=q,
+            songs=songs,
+            albums=albums,
+            artists=artists_result,
+            playlists=playlists_result,
+        )
+
     @app.route("/dev")
     def dev_index():
         return render_template("dev.html", active="dev")
@@ -183,6 +644,19 @@ def create_app():
                 info["groups"] = canonical.groups_for_track(conn, row["track_id"])
                 search_results.append(info)
 
+        # Every track id whose artist names this page might render as links,
+        # gathered up front so artist_credits_for_tracks is one batched query
+        # rather than one per track (see its own docstring for why that
+        # matters on this page specifically).
+        credit_track_ids = set()
+        for g in groups:
+            if g["representative_track_id"]:
+                credit_track_ids.add(g["representative_track_id"])
+            credit_track_ids.update(trees[g["song_id"]]["track_ids"])
+        for g in cross_artist_groups:
+            credit_track_ids.update(g["track_ids"])
+        credit_track_ids.update(t["track_id"] for t in search_results)
+
         return render_template(
             "canonical.html",
             active="dev_canonical",
@@ -203,6 +677,7 @@ def create_app():
             last_auto_run=canonical_autogroup.last_run(conn),
             auto_grouped=canonical.auto_grouped_ids(conn),
             pending_tier_count=len(canonical_detect.pending_song_ids(conn)),
+            artist_credits=canonical.artist_credits_for_tracks(conn, list(credit_track_ids)),
         )
 
     @app.route("/dev/canonical/group/<int:group_id>")
@@ -454,93 +929,6 @@ def create_app():
             pending_generation=generations.pending_new_generation(conn),
         )
 
-    @app.route("/dev/snapshot/playlist/<playlist_id>", endpoint="dev_snapshot_playlist")
-    def snapshot_playlist(playlist_id):
-        conn = db.get_db()
-        playlist = conn.execute(
-            "SELECT * FROM snapshot WHERE playlist_id = ?", (playlist_id,)
-        ).fetchone()
-        if playlist is None:
-            abort(404, description="Playlist not found.")
-
-        rows = conn.execute(
-            """
-            SELECT m.id, m.track_id, t.name, COALESCE(ta.artists, '') AS artists, a.name AS album_name, m.added_at,
-                   m.removed_at, m.position
-            FROM membership m
-            JOIN track t ON t.track_id = m.track_id
-            LEFT JOIN album a ON a.album_id = t.album_id
-            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
-            WHERE m.playlist_id = ?
-            ORDER BY m.position
-            """,
-            (playlist_id,),
-        ).fetchall()
-
-        return render_template(
-            "snapshot_playlist.html", active="dev_snapshot", playlist=playlist, rows=rows
-        )
-
-    @app.route("/dev/snapshot/track/<track_id>", endpoint="dev_snapshot_track")
-    def snapshot_track(track_id):
-        conn = db.get_db()
-        track = conn.execute(
-            """
-            SELECT t.track_id, t.name, COALESCE(ta.artists, '') AS artists, t.album_id, t.duration_ms, t.explicit,
-                   t.external_url, t.uri, t.isrc, t.track_number, t.disc_number, t.is_playable,
-                   t.linked_from, t.linked_from_id,
-                   a.name AS album_name, a.image_url AS album_image_url
-            FROM track t
-            LEFT JOIN album a ON a.album_id = t.album_id
-            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
-            WHERE t.track_id = ?
-            """,
-            (track_id,),
-        ).fetchone()
-        if track is None:
-            abort(404, description="Track not found.")
-
-        rows = conn.execute(
-            """
-            SELECT m.id, m.playlist_id, s.name AS playlist_name, m.added_at, m.removed_at,
-                   m.position
-            FROM membership m
-            JOIN snapshot s ON s.playlist_id = m.playlist_id
-            WHERE m.track_id = ?
-            ORDER BY s.name COLLATE NOCASE, m.added_at
-            """,
-            (track_id,),
-        ).fetchall()
-
-        canonical.ensure_track_groups(conn)
-        conn.commit()
-        canonical_groups = canonical.groups_for_track(conn, track_id)
-        canonical_siblings = {}
-        for tier, group_id in canonical_groups.items():
-            sibling_ids = [
-                tid for tid in canonical.group_members(conn, group_id) if tid != track_id
-            ]
-            if not sibling_ids:
-                canonical_siblings[tier] = []
-                continue
-            placeholders = ",".join("?" for _ in sibling_ids)
-            canonical_siblings[tier] = [
-                dict(row)
-                for row in conn.execute(
-                    f"SELECT track_id, name, artists FROM track WHERE track_id IN ({placeholders})",
-                    sibling_ids,
-                )
-            ]
-
-        return render_template(
-            "snapshot_track.html",
-            active="dev_snapshot",
-            track=track,
-            rows=rows,
-            canonical_groups=canonical_groups,
-            canonical_siblings=canonical_siblings,
-        )
-
     # -- Generations & tenure -------------------------------------------
 
     def _generations_tier_arg():
@@ -595,18 +983,11 @@ def create_app():
         for t in page_slice:
             rep_id = canonical.representative(conn, t["group_id"])
             present = {o for start_o, end_o in t["runs"] for o in range(start_o, end_o + 1)}
-            # Self-contained per cell (ordinal, name, present) rather than a
-            # bare bool list -- Jinja has no zip() to line it back up against
-            # spans, and this keeps the template dumb.
-            strip = [
-                {"ordinal": s["ordinal"], "name": s["name"], "present": s["ordinal"] in present}
-                for s in spans
-            ]
             rows.append(
                 {
                     **t,
                     "representative": canonical.track_display(conn, rep_id) if rep_id else None,
-                    "strip": strip,
+                    "present_ordinals": present,
                 }
             )
 
@@ -619,17 +1000,8 @@ def create_app():
             total_pages=total_pages,
             total=total,
             generation_count=len(spans),
+            spans=spans,
             rows=rows,
-        )
-
-    @app.route("/dev/generations/<int:ordinal>", endpoint="dev_generation")
-    def dev_generation_detail(ordinal):
-        conn = db.get_db()
-        row = conn.execute("SELECT ordinal FROM generation WHERE ordinal = ?", (ordinal,)).fetchone()
-        if row is None:
-            abort(404, description="No such generation.")
-        return render_template(
-            "coming_soon.html", active="dev_generations", page_name=f"Generation {ordinal}"
         )
 
     @app.route("/dev/generations/confirm", methods=["POST"], endpoint="dev_generations_confirm")

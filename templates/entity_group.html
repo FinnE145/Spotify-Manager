@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, generation_strip %}
+
+{% block title %}Symr — {{ rep.name if rep else "Group " ~ group_id }}{% endblock %}
+
+{% macro subtree_node(node) -%}
+{%- if node.versions is defined -%}
+<ul class="subtree-level">
+  {% for v in node.versions %}
+  <li>{{ entity_link('version', v.version_id, 'Version ' ~ v.version_id) }}
+    {{ subtree_node(v) }}</li>
+  {% endfor %}
+</ul>
+{%- elif node.recordings is defined -%}
+<ul class="subtree-level">
+  {% for r in node.recordings %}
+  <li>{{ entity_link('recording', r.recording_id, 'Recording ' ~ r.recording_id) }}
+    {{ subtree_node(r) }}</li>
+  {% endfor %}
+</ul>
+{%- elif node.releases is defined -%}
+<ul class="subtree-level">
+  {% for rel in node.releases %}
+  <li>{{ entity_link('release', rel.release_id, 'Release ' ~ rel.release_id) }}
+    {{ subtree_node(rel) }}</li>
+  {% endfor %}
+</ul>
+{%- elif node.tracks is defined -%}
+<ul class="subtree-level">
+  {% for t in node.tracks %}
+  <li>{{ entity_link('track', t.track_id, t.name) }}</li>
+  {% endfor %}
+</ul>
+{%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<main class="page">
+  <div class="entity-header">
+    {% if rep and rep.album_image_url %}<img class="cover-lg" src="{{ rep.album_image_url }}" alt="">{% endif %}
+    <div>
+      <h1>
+        {{ rep.name if rep else "Group " ~ group_id }}
+        {% if pinned %}<span class="rep-marker pinned" title="Pinned representative">★</span>{% endif %}
+      </h1>
+      <p class="meta">
+        {{ artist_names(artist_credits.get(rep.track_id, [])) if rep else "" }}
+        {% if rep and rep.album_name %} &middot; {{ entity_link('album', rep.album_id, rep.album_name) }}{% endif %}
+        {% if rep and rep.duration_ms %} &middot; {{ "%d:%02d"|format(rep.duration_ms // 60000, (rep.duration_ms // 1000) % 60) }}{% endif %}
+      </p>
+      <p class="meta">
+        <span class="tier-chip {{ tier }}">{{ tier|capitalize }}</span>
+        &middot; {{ track_count }} track{{ "s" if track_count != 1 }}
+      </p>
+      <p class="breadcrumb">
+        {% for b_tier in ('song', 'version', 'recording', 'release') %}
+        {% if b_tier == tier %}<strong>{{ b_tier|capitalize }}</strong>
+        {% else %}{{ entity_link(b_tier, breadcrumb[b_tier ~ '_id'], b_tier|capitalize) }}{% endif %}
+        {{ "›" if not loop.last }}
+        {% endfor %}
+      </p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Plays</h2>
+    {{ play_stats(stats) }}
+  </section>
+
+  <section class="panel">
+    <h2>Playlists</h2>
+    {% if playlists %}
+    <table class="data-table">
+      <thead><tr><th>Playlist</th><th>Track</th><th>Added</th><th>Removed</th></tr></thead>
+      <tbody>
+        {% for p in playlists %}
+        <tr class="{{ 'removed' if p.removed_at }}">
+          <td>{{ entity_link('playlist', p.playlist_id, p.playlist_name) }}</td>
+          <td>{{ entity_link('track', p.track_id, tracks_by_id[p.track_id].name if p.track_id in tracks_by_id else p.track_id) }}</td>
+          <td>{{ datetime_span(p.added_at) }}</td>
+          <td>{{ datetime_span(p.removed_at) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">Played but never added to a playlist.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Generations</h2>
+    {% if ordinals %}
+    <p class="meta">
+      Tenure {{ tenure }} generation{{ "s" if tenure != 1 }}
+      &middot; present in {{ total_generations }} total
+      &middot; {{ run_count }} run{{ "s" if run_count != 1 }}
+    </p>
+    <div class="tenure-scroll">
+    <table class="data-table"><tbody><tr>{{ generation_strip(ordinals, spans) }}</tr></tbody></table>
+    </div>
+    {% else %}
+    <p class="empty">Never present in a generation.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Subtree</h2>
+    {{ subtree_node(tree) }}
+  </section>
+
+  <section class="panel">
+    <h2>Member tracks</h2>
+    <table class="data-table">
+      <thead><tr><th>Track</th><th>Artists</th><th>Album</th><th>Duration</th><th>ISRC</th></tr></thead>
+      <tbody>
+        {% for t in member_tracks %}
+        <tr>
+          <td>{{ entity_link('track', t.track_id, t.name) }}</td>
+          <td>{{ artist_names(artist_credits.get(t.track_id, [])) }}</td>
+          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
+          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+          <td>{{ t.isrc or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Edit</h2>
+    <p><a href="{{ url_for('canonical_group_deep_link', group_id=group_id) }}">Edit this group in the review queue &rarr;</a></p>
+  </section>
+</main>
+{% endblock %}

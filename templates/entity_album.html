@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names %}
+
+{% block title %}Symr — {{ album.name }}{% endblock %}
+
+{% block content %}
+<main class="page">
+  <div class="entity-header">
+    {% if album.image_url %}<img class="cover-lg" src="{{ album.image_url }}" alt="">{% endif %}
+    <div>
+      <h1>{{ album.name }}</h1>
+      <p class="meta">
+        {% for a in artists %}{{ entity_link('artist', a.artist_id, a.name) }}{{ ", " if not loop.last }}{% endfor %}
+        {% if album.album_type %} &middot; {{ album.album_type|capitalize }}{% endif %}
+        {% if album.release_date %} &middot; {{ album.release_date }}{% endif %}
+      </p>
+      <p class="meta">
+        {{ known_count }} of {{ album.total_tracks if album.total_tracks is not none else "?" }} known
+        {% if album.external_url %} &middot; <a href="{{ album.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}
+      </p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Tracklist</h2>
+    {% if not fetched %}
+    <p class="meta">Not fetched from Spotify yet — showing what Symr already knows.</p>
+    {% elif album.total_tracks and album.total_tracks > 50 %}
+    <p class="meta">First 50 of {{ album.total_tracks }}; Spotify pages beyond this and we don't follow them.</p>
+    {% endif %}
+    {% if rows %}
+    <table class="data-table">
+      <thead><tr><th></th><th>Track</th><th>Artists</th><th>Duration</th></tr></thead>
+      <tbody>
+        {% for t in rows %}
+        <tr class="{{ '' if t.owned else 'unowned' }}">
+          <td>{{ t.track_number if t.track_number is not none else "" }}</td>
+          <td>
+            {% if t.owned and t.version_id %}{{ entity_link('version', t.version_id, t.name) }}
+            {% else %}{{ t.name }}{% endif %}
+            {% if t.explicit %} <span class="badge explicit" title="Explicit">E</span>{% endif %}
+          </td>
+          <td>{% if t.owned %}{{ artist_names(track_artist_credits.get(t.track_id, [])) }}{% else %}{{ t.artists }}{% endif %}</td>
+          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">Nothing known about this album's tracklist.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Plays</h2>
+    {{ play_stats(stats) }}
+  </section>
+
+  <section class="panel">
+    <h2>Playlists</h2>
+    {% if playlists %}
+    <table class="data-table">
+      <thead><tr><th>Playlist</th><th>Track</th><th>Added</th><th>Removed</th></tr></thead>
+      <tbody>
+        {% for p in playlists %}
+        <tr class="{{ 'removed' if p.removed_at }}">
+          <td>{{ entity_link('playlist', p.playlist_id, p.playlist_name) }}</td>
+          <td>{{ entity_link('track', p.track_id, track_names.get(p.track_id, p.track_id)) }}</td>
+          <td>{{ datetime_span(p.added_at) }}</td>
+          <td>{{ datetime_span(p.removed_at) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">None of the known tracks are in a playlist.</p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

@@ -37,8 +37,8 @@
       <tbody>
         {% for g in gens %}
         <tr>
-          <td><a href="{{ url_for('dev_generation', ordinal=g.ordinal) }}">Generation {{ g.ordinal }}</a></td>
-          <td>{{ g.name }}</td>
+          <td><a href="{{ url_for('playlist_page', playlist_id=g.playlist_id, generation=1) }}">Generation {{ g.ordinal }}</a></td>
+          <td><a href="{{ url_for('playlist_page', playlist_id=g.playlist_id) }}">{{ g.name }}</a></td>
           <td>{{ datetime_span(g.started_at) }} &ndash; {{ datetime_span(g.ended_at) if g.ended_at else "ongoing" }}</td>
           <td>{{ g.group_count }}</td>
           <td>{{ g.carried_in }} carried / {{ g.new_in }} new</td>

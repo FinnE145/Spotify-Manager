@@ -28,3 +28,51 @@
 </div>
 {%- endif %}
 {%- endmacro %}
+
+{# Total / past-30d / past-7d plays plus the data-through date, rendered
+   identically everywhere (docs/specs/entity-pages-K.md §8). month/week are
+   None when data_through predates that window's start -- a stale export
+   renders "—" there rather than a genuine-looking 0. #}
+{% macro play_stats(stats) -%}
+<span class="play-stats">
+  {{ "{:,}".format(stats.total) }} play{{ "" if stats.total == 1 else "s" }}
+  &middot; {{ "{:,}".format(stats.month) if stats.month is not none else "—" }} in 30d
+  &middot; {{ "{:,}".format(stats.week) if stats.week is not none else "—" }} in 7d
+  {%- if stats.data_through %} &middot; data through {{ datetime_span(stats.data_through) }}{% endif %}
+</span>
+{%- endmacro %}
+
+{# One way to link every entity kind, so it can't drift page to page. song/
+   version/recording/release all take a group_id; the rest take their own
+   named id, matching each route's own URL parameter. #}
+{% macro entity_link(kind, id, text) -%}
+{%- if kind == 'track' -%}
+<a href="{{ url_for('track_page', track_id=id) }}">{{ text }}</a>
+{%- elif kind == 'album' -%}
+<a href="{{ url_for('album_page', album_id=id) }}">{{ text }}</a>
+{%- elif kind == 'artist' -%}
+<a href="{{ url_for('artist_page', artist_id=id) }}">{{ text }}</a>
+{%- elif kind == 'playlist' -%}
+<a href="{{ url_for('playlist_page', playlist_id=id) }}">{{ text }}</a>
+{%- else -%}
+<a href="{{ url_for(kind ~ '_page', group_id=id) }}">{{ text }}</a>
+{%- endif -%}
+{%- endmacro %}
+
+{# A track's credited artists as individual links, comma-joined -- credits is
+   a list of {"artist_id", "name"} as canonical.artist_credits_for_tracks()
+   returns per track. Takes the list rather than a track id so callers stay
+   free to batch the lookup however fits their page. #}
+{% macro artist_names(credits) -%}
+{% for a in credits %}{{ entity_link('artist', a.artist_id, a.name) }}{{ ", " if not loop.last }}{% endfor %}
+{%- endmacro %}
+
+{# The 37-cell generation-presence strip, extracted from generations_tenure.html
+   so the tenure table and the group/artist pages share one implementation.
+   ordinals is the set/list of ordinals present; spans is generations.generation_spans()'s
+   full ordered list. Emits bare <td>s -- the caller supplies the <tr>. #}
+{% macro generation_strip(ordinals, spans) -%}
+{% for s in spans %}
+<td class="gen-cell {{ 'filled' if s.ordinal in ordinals }}" title="Generation {{ s.ordinal }} — {{ s.name }}"></td>
+{% endfor %}
+{%- endmacro %}

@@ -1,9 +1,13 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span %}
+{% from "_macros.html" import datetime_span, entity_link, artist_names %}
 
 {% block title %}Symr — Canonical Tracks{% endblock %}
 
 {% macro edit_link(track_ids) %}<a class="edit-link" href="{{ url_for('canonical_review', tracks=track_ids|join(',')) }}">Edit in queue</a>{% endmacro %}
+
+{% macro artist_links(track_id) -%}
+{{ artist_names(artist_credits.get(track_id, [])) }}
+{%- endmacro %}
 
 {% macro pin_star(track_id, is_current, pinned) %}
 <button type="button" class="pin-star{{ ' filled' if (is_current and pinned) }}{{ ' current' if (is_current and not pinned) }}"
@@ -24,7 +28,7 @@
   {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
   <span class="leaf-title">
     {{ pin_star(t.track_id, is_current_rep, pinned) }}
-    <a href="{{ url_for('dev_snapshot_track', track_id=t.track_id) }}">{{ t.name }}</a>
+    <a href="{{ url_for('track_page', track_id=t.track_id) }}">{{ t.name }}</a>
     {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}
   </span>
   <span class="leaf-meta">
@@ -119,11 +123,12 @@
         <img class="cover" src="{{ g.representative.album_image_url }}" alt="">
         {% endif %}
         <span class="song-title">
-          {{ g.representative.name if g.representative else "?" }}
+          {% if g.representative %}{{ entity_link('track', g.representative.track_id, g.representative.name) }}
+          {% else %}?{% endif %}
           {% if g.pinned %}<span class="rep-marker pinned" title="Pinned representative">★</span>{% endif %}
-          — {{ g.representative.artists if g.representative else "" }}
+          — {{ artist_links(g.representative.track_id) if g.representative else "" }}
         </span>
-        <span class="leaf-meta">{{ g.track_count }} tracks &middot; impact {{ g.impact }} &middot; song {{ g.song_id }}</span>
+        <span class="leaf-meta">{{ g.track_count }} tracks &middot; impact {{ g.impact }} &middot; {{ entity_link('song', g.song_id, 'song ' ~ g.song_id) }}</span>
         {{ auto_badge(g.song_id, auto_grouped) }}
         {{ edit_link(tree.track_ids) }}
       </summary>
@@ -132,21 +137,21 @@
         {% for v in tree.versions %}
         <div class="tree-node tier-version" id="group-{{ v.version_id }}">
           <div class="tree-node-head">
-            <span class="tier-chip version">Version {{ v.version_id }}</span>
+            <span class="tier-chip version">{{ entity_link('version', v.version_id, 'Version ' ~ v.version_id) }}</span>
             {{ auto_badge(v.version_id, auto_grouped) }}
           </div>
 
           {% for r in v.recordings %}
           <div class="tree-node tier-recording" id="group-{{ r.recording_id }}">
             <div class="tree-node-head">
-              <span class="tier-chip recording">Recording {{ r.recording_id }}</span>
+              <span class="tier-chip recording">{{ entity_link('recording', r.recording_id, 'Recording ' ~ r.recording_id) }}</span>
               {{ auto_badge(r.recording_id, auto_grouped) }}
             </div>
 
             {% for rel in r.releases %}
             <div class="tree-node tier-release" id="group-{{ rel.release_id }}">
               <div class="tree-node-head">
-                <span class="tier-chip release">Release {{ rel.release_id }}</span>
+                <span class="tier-chip release">{{ entity_link('release', rel.release_id, 'Release ' ~ rel.release_id) }}</span>
                 {{ auto_badge(rel.release_id, auto_grouped) }}
               </div>
               {% for t in rel.tracks %}
@@ -179,7 +184,7 @@
       {% set t = g.tracks[tid] %}
       <div class="tree-leaf">
         {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
-        <span class="leaf-title"><strong>{{ t.artists }}</strong> — {{ t.title }} {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}</span>
+        <span class="leaf-title"><strong>{{ artist_links(tid) }}</strong> — {{ entity_link('track', tid, t.title) }} {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}</span>
         <span class="leaf-meta">{{ t.album or "" }} &middot; {{ t.live_count }} playlist{{ "s" if t.live_count != 1 }}</span>
       </div>
       {% endfor %}
@@ -218,8 +223,8 @@
           <tr>
             <td><input type="checkbox" class="search-checkbox" data-track-id="{{ t.track_id }}"></td>
             <td>{% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}</td>
-            <td><a href="{{ url_for('dev_snapshot_track', track_id=t.track_id) }}">{{ t.name }}</a></td>
-            <td>{{ t.artists }}</td>
+            <td><a href="{{ url_for('track_page', track_id=t.track_id) }}">{{ t.name }}</a></td>
+            <td>{{ artist_links(t.track_id) }}</td>
             <td>{{ t.album_name or "" }}</td>
             <td>{{ t.isrc or "—" }}</td>
             <td>{{ t.live_count }}</td>

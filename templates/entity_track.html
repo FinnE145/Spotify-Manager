@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, spotify_track_link %}
+
+{% block title %}Symr — {{ track.name }}{% endblock %}
+
+{% block content %}
+<main class="page">
+  <div class="entity-header">
+    {% if track.album_image_url %}<img class="cover-lg" src="{{ track.album_image_url }}" alt="">{% endif %}
+    <div>
+      <h1>{{ track.name }}{% if track.explicit %} <span class="badge explicit" title="Explicit">E</span>{% endif %}</h1>
+      <p class="meta">
+        {% for a in track_artists %}{{ entity_link('artist', a.artist_id, a.name) }}{{ ", " if not loop.last }}{% endfor %}
+        {% if track.album_name %} &middot; {{ entity_link('album', track.album_id, track.album_name) }}{% endif %}
+        {% if track.duration_ms %} &middot; {{ "%d:%02d"|format(track.duration_ms // 60000, (track.duration_ms // 1000) % 60) }}{% endif %}
+      </p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Spotify identity</h2>
+    <table class="data-table">
+      <tbody>
+        <tr><td>Track id</td><td><code>{{ track.track_id }}</code></td></tr>
+        <tr><td>URI</td><td><code>{{ track.uri or "" }}</code></td></tr>
+        <tr><td>ISRC</td><td>{{ track.isrc or "—" }}</td></tr>
+        <tr><td>Track / disc</td><td>{{ track.track_number if track.track_number is not none else "?" }} / {{ track.disc_number if track.disc_number is not none else "?" }}</td></tr>
+        <tr><td>Playable</td><td>{{ "yes" if track.is_playable else ("no" if track.is_playable is not none else "unknown") }}</td></tr>
+        <tr><td>Linked from</td><td>{{ track.linked_from_id or "—" }}</td></tr>
+        <tr><td>Spotify link</td><td>{% if track.external_url %}<a href="{{ track.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Canonical</h2>
+    <table class="data-table">
+      <thead><tr><th>Tier</th><th>Group</th></tr></thead>
+      <tbody>
+        {% for tier in ('song', 'version', 'recording', 'release') %}
+        <tr>
+          <td>{{ tier|capitalize }}</td>
+          <td>{{ entity_link(tier, groups[tier], groups[tier]) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Plays</h2>
+    {{ play_stats(stats) }}
+  </section>
+
+  <section class="panel">
+    <h2>Memberships</h2>
+    {% if memberships %}
+    <table class="data-table">
+      <thead><tr><th>Playlist</th><th>Added</th><th>Removed</th><th>Position</th></tr></thead>
+      <tbody>
+        {% for m in memberships %}
+        <tr class="{{ 'removed' if m.removed_at }}">
+          <td>{{ entity_link('playlist', m.playlist_id, m.playlist_name) }}</td>
+          <td>{{ datetime_span(m.added_at) }}</td>
+          <td>{{ datetime_span(m.removed_at) }}</td>
+          <td>{{ m.position if m.position is not none else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">Not in any captured playlist.</p>
+    {% endif %}
+  </section>
+
+  {% if aliases %}
+  <section class="panel">
+    <h2>Relink aliases</h2>
+    <p class="meta">Uris Spotify substituted onto this track during the foreign-track round-trip.</p>
+    <table class="data-table">
+      <tbody>
+        {% for a in aliases %}
+        <tr><td>{{ spotify_track_link(a.requested_uri) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

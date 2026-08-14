@@ -40,7 +40,13 @@ CREATE TABLE IF NOT EXISTS artist (
     artist_id    TEXT PRIMARY KEY,
     name         TEXT,
     external_url TEXT,
-    raw_json     TEXT
+    raw_json     TEXT,
+    -- The artist page's one-request-on-first-view detail fetch
+    -- (docs/specs/entity-pages-K.md §7.1). Not raw_json: genres/followers/
+    -- popularity are absent from GET /v1/artists/{id} for this app, so the
+    -- only thing worth keeping is the image url.
+    image_url        TEXT,
+    detail_pulled_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS album (
@@ -54,7 +60,14 @@ CREATE TABLE IF NOT EXISTS album (
     total_tracks           INTEGER,
     image_url              TEXT,
     external_url           TEXT,
-    raw_json               TEXT
+    raw_json               TEXT,
+    -- The album page's one-request-on-first-view tracklist fetch
+    -- (docs/specs/entity-pages-K.md §5.3). Kept separate from raw_json,
+    -- which the snapshot pull overwrites with the *simplified* album object
+    -- embedded in every track -- storing the richer fetch there would be
+    -- destroyed on the next pull.
+    tracklist_json      TEXT,
+    tracklist_pulled_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS track (
@@ -367,6 +380,16 @@ CREATE TABLE IF NOT EXISTS generation (
     ordinal INTEGER PRIMARY KEY,
     playlist_id TEXT NOT NULL UNIQUE REFERENCES snapshot(playlist_id)
 );
+
+-- Uris seen on an album tracklist with no track row of their own
+-- (docs/specs/entity-pages-K.md §6), merged into the round-trip's existing
+-- work list rather than a second queue. `source` exists so a later source
+-- is additive rather than a migration; only 'album' is written for now.
+CREATE TABLE IF NOT EXISTS wanted_uri (
+    uri          TEXT PRIMARY KEY,
+    source       TEXT NOT NULL,
+    requested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 """
 
 # Rebuilt whenever the definition here changes (see _ensure_views) rather than
@@ -621,6 +644,22 @@ def _migrate(conn):
         ("isrc", "ALTER TABLE track ADD COLUMN isrc TEXT"),
     ):
         if column not in track_columns:
+            conn.execute(ddl)
+
+    album_columns = {row[1] for row in conn.execute("PRAGMA table_info(album)")}
+    for column, ddl in (
+        ("tracklist_json", "ALTER TABLE album ADD COLUMN tracklist_json TEXT"),
+        ("tracklist_pulled_at", "ALTER TABLE album ADD COLUMN tracklist_pulled_at TEXT"),
+    ):
+        if column not in album_columns:
+            conn.execute(ddl)
+
+    artist_columns = {row[1] for row in conn.execute("PRAGMA table_info(artist)")}
+    for column, ddl in (
+        ("image_url", "ALTER TABLE artist ADD COLUMN image_url TEXT"),
+        ("detail_pulled_at", "ALTER TABLE artist ADD COLUMN detail_pulled_at TEXT"),
+    ):
+        if column not in artist_columns:
             conn.execute(ddl)
 
     # These two were briefly written as naive UTC ("2026-07-30 13:34:51"),

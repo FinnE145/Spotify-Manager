@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import entity_link, generation_strip %}
 
 {% block title %}Symr — Tenure{% endblock %}
 
@@ -47,7 +48,7 @@
         <tr>
           <td>
             {% if r.representative %}
-            <a href="{{ url_for('dev_snapshot_track', track_id=r.representative.track_id) }}">{{ r.representative.name }}</a>
+            {{ entity_link(tier, r.group_id, r.representative.name) }}
             <span class="leaf-meta">{{ r.representative.artists }}</span>
             {% else %}
             <span class="muted">group {{ r.group_id }}</span>
@@ -56,12 +57,10 @@
           <td>{{ r.tenure }}</td>
           <td>{{ r.total_generations }}</td>
           <td>{{ r.run_count }}</td>
-          <td><a href="{{ url_for('dev_generation', ordinal=r.first_ordinal) }}">{{ r.first_ordinal }}</a></td>
-          <td><a href="{{ url_for('dev_generation', ordinal=r.last_ordinal) }}">{{ r.last_ordinal }}</a></td>
+          <td>{{ r.first_ordinal }}</td>
+          <td>{{ r.last_ordinal }}</td>
           <td>{{ r.days }} day{{ "s" if r.days != 1 }}</td>
-          {% for cell in r.strip %}
-          <td class="gen-cell {{ 'filled' if cell.present }}" title="Generation {{ cell.ordinal }} — {{ cell.name }}"></td>
-          {% endfor %}
+          {{ generation_strip(r.present_ordinals, spans) }}
         </tr>
         {% endfor %}
       </tbody>

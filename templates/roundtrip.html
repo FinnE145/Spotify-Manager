@@ -27,6 +27,11 @@
       &middot; ~<span data-field="requests_estimate">{{ counts.requests_estimate }}</span> requests
     </p>
     <p class="meta">
+      of which <span data-field="wanted_uris">{{ "{:,}".format(counts.wanted_uris) }}</span>
+      URI<span data-plural-for="wanted_uris">{{ "" if counts.wanted_uris == 1 else "s" }}</span>
+      wanted by an album tracklist rather than played
+    </p>
+    <p class="meta">
       <span data-field="resolved_tracks">{{ "{:,}".format(counts.resolved_tracks) }}</span>
       track<span data-plural-for="resolved_tracks">{{ "" if counts.resolved_tracks == 1 else "s" }}</span>
       known but in no playlist

@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, generation_strip %}
+
+{% block title %}Symr — {{ artist.name }}{% endblock %}
+
+{% block content %}
+<main class="page">
+  <div class="entity-header">
+    {% if artist.image_url %}<img class="cover-lg" src="{{ artist.image_url }}" alt="">{% endif %}
+    <div>
+      <h1>{{ artist.name }}</h1>
+      <p class="meta">
+        {{ track_count }} track{{ "s" if track_count != 1 }}
+        &middot; {{ album_count }} album{{ "s" if album_count != 1 }}
+        {% if artist.external_url %} &middot; <a href="{{ artist.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}
+      </p>
+      {% if merged_ids %}
+      <p class="meta">
+        Merged id{{ "s" if merged_ids|length != 1 }}: {{ merged_ids|join(", ") }}
+        &middot; <a href="{{ url_for('dev_artists') }}">manage in /dev/artists &rarr;</a>
+      </p>
+      {% endif %}
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Tracks</h2>
+    <h3>Primary</h3>
+    {% if primary_tracks %}
+    <table class="data-table">
+      <thead><tr><th>Track</th><th>Album</th><th>Duration</th></tr></thead>
+      <tbody>
+        {% for t in primary_tracks %}
+        <tr>
+          <td>{{ entity_link('version', t.version_id, t.name) }}</td>
+          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
+          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">None.</p>
+    {% endif %}
+
+    <h3>Featured</h3>
+    {% if featured_tracks %}
+    <table class="data-table">
+      <thead><tr><th>Track</th><th>Album</th><th>Duration</th></tr></thead>
+      <tbody>
+        {% for t in featured_tracks %}
+        <tr>
+          <td>{{ entity_link('version', t.version_id, t.name) }}</td>
+          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
+          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">None.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Albums</h2>
+    {% if albums %}
+    <table class="data-table">
+      <thead><tr><th>Album</th><th>Release date</th></tr></thead>
+      <tbody>
+        {% for a in albums %}
+        <tr>
+          <td>{{ entity_link('album', a.album_id, a.name) }}</td>
+          <td>{{ a.release_date or "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No album credits.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Playlists</h2>
+    {% if playlists %}
+    <table class="data-table">
+      <thead><tr><th>Playlist</th></tr></thead>
+      <tbody>
+        {% for p in playlists %}
+        <tr><td>{{ entity_link('playlist', p.playlist_id, p.playlist_name) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">None of their tracks are in a playlist.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Generations</h2>
+    {% if ordinals %}
+    <div class="tenure-scroll">
+    <table class="data-table"><tbody><tr>{{ generation_strip(ordinals, spans) }}</tr></tbody></table>
+    </div>
+    {% else %}
+    <p class="empty">Never present in a generation.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Plays</h2>
+    {{ play_stats(stats) }}
+  </section>
+</main>
+{% endblock %}

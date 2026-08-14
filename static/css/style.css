@@ -866,3 +866,77 @@ body.immersive {
 .data-table td.gen-cell.filled {
   background: #3b82f6;
 }
+
+/* -- Entity pages (docs/specs/entity-pages-K.md) -------------------- */
+
+.entity-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.entity-header .cover-lg {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: none;
+}
+
+.entity-header h1 {
+  margin: 0 0 4px;
+}
+
+.breadcrumb {
+  color: #666;
+  font-size: 13px;
+}
+
+.nav-search {
+  display: flex;
+  gap: 4px;
+}
+
+.nav-search input {
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  width: 160px;
+}
+
+.nav-search button {
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+/* An album's unowned tracklist rows -- rendered from the simplified Spotify
+   object, not linked, and visually distinct from the rows Symr actually
+   knows as tracks. */
+.data-table tr.unowned {
+  color: #999;
+}
+
+.tier-chip.song {
+  background: #7c3aed;
+  color: #fff;
+}
+
+/* Tier chips carry a colored background; the link inside must stay
+   readable against it rather than defaulting to link-blue. */
+.tier-chip a {
+  color: inherit;
+}
+
+/* The group page's subtree and the generation view's carried/new lists --
+   plain nested lists, indented one step per tier. */
+.subtree-level {
+  margin: 4px 0;
+  padding-left: 18px;
+  list-style: disc;
+}

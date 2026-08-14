@@ -136,6 +136,9 @@ def counts(conn):
         ).fetchone()[0],
         "aliases": conn.execute("SELECT COUNT(*) FROM track_uri_alias").fetchone()[0],
         "failed_uris": conn.execute("SELECT COUNT(*) FROM roundtrip_failed_uri").fetchone()[0],
+        # This run's share of remaining_uris that came from an album
+        # tracklist rather than a play.
+        "wanted_uris": conn.execute(_WANTED_REMAINING_SQL).fetchone()[0],
         # Worth one more look: recorded as not-returned and still unresolved.
         "reconcilable": len(_reconcile_list(conn)),
         "review_uris": conn.execute(
@@ -272,14 +275,41 @@ def clear_failures(conn):
 # "done" is derived -- a uri is done when it resolves through
 # played_uri_track, which covers both a direct track row and a relink alias.
 # A re-run simply recomputes and finds less to do.
+#
+# The second arm folds in uris an album tracklist wanted but has no track row
+# for (docs/specs/entity-pages-K.md §6) -- not a second queue, just more work
+# in the same one. A wanted uri has no plays by definition, so plays=0 sorts
+# it after every play-derived uri without a special case; the NOT IN against
+# `play` keeps a uri that's both wanted and played from appearing twice.
 _WORK_LIST_SQL = """
-SELECT p.spotify_track_uri, COUNT(*) AS plays
-FROM play p
-LEFT JOIN played_uri_track x ON x.uri = p.spotify_track_uri
+SELECT spotify_track_uri, plays FROM (
+    SELECT p.spotify_track_uri AS spotify_track_uri, COUNT(*) AS plays
+    FROM play p
+    LEFT JOIN played_uri_track x ON x.uri = p.spotify_track_uri
+    WHERE x.track_id IS NULL
+      AND p.spotify_track_uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
+    GROUP BY p.spotify_track_uri
+
+    UNION ALL
+
+    SELECT w.uri AS spotify_track_uri, 0 AS plays
+    FROM wanted_uri w
+    LEFT JOIN played_uri_track x ON x.uri = w.uri
+    WHERE x.track_id IS NULL
+      AND w.uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
+      AND w.uri NOT IN (SELECT spotify_track_uri FROM play)
+)
+ORDER BY plays DESC, spotify_track_uri ASC
+"""
+
+# The wanted arm's own contribution, for counts() to report separately so
+# /dev/roundtrip can show what a run is about to do.
+_WANTED_REMAINING_SQL = """
+SELECT COUNT(*) FROM wanted_uri w
+LEFT JOIN played_uri_track x ON x.uri = w.uri
 WHERE x.track_id IS NULL
-  AND p.spotify_track_uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
-GROUP BY p.spotify_track_uri
-ORDER BY plays DESC, p.spotify_track_uri ASC
+  AND w.uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
+  AND w.uri NOT IN (SELECT spotify_track_uri FROM play)
 """
 
 

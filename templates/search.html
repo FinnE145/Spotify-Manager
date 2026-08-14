@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% from "_macros.html" import entity_link %}
+
+{% block title %}Symr — Search{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Search</h1>
+  <form method="get" action="{{ url_for('search_page') }}" class="inline-form">
+    <input type="text" name="q" value="{{ q }}" placeholder="Track, artist, album or playlist name" autofocus>
+    <button type="submit">Search</button>
+  </form>
+
+  {% if q %}
+  <section class="panel">
+    <h2>Songs ({{ songs|length }})</h2>
+    {% if songs %}
+    <table class="data-table">
+      <thead><tr><th></th><th>Track</th><th>Artists</th><th>Album</th></tr></thead>
+      <tbody>
+        {% for t in songs %}
+        <tr>
+          <td>{% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}</td>
+          <td>{{ entity_link('version', t.version_id, t.name) }}</td>
+          <td>{{ t.artists }}</td>
+          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No songs match "{{ q }}".</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Albums ({{ albums|length }})</h2>
+    {% if albums %}
+    <table class="data-table">
+      <thead><tr><th></th><th>Album</th></tr></thead>
+      <tbody>
+        {% for a in albums %}
+        <tr>
+          <td>{% if a.image_url %}<img class="cover" src="{{ a.image_url }}" alt="">{% endif %}</td>
+          <td>{{ entity_link('album', a.album_id, a.name) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No albums match "{{ q }}".</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Artists ({{ artists|length }})</h2>
+    {% if artists %}
+    <table class="data-table">
+      <tbody>
+        {% for a in artists %}
+        <tr><td>{{ entity_link('artist', a.artist_id, a.name) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No artists match "{{ q }}".</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Playlists ({{ playlists|length }})</h2>
+    {% if playlists %}
+    <table class="data-table">
+      <thead><tr><th></th><th>Playlist</th></tr></thead>
+      <tbody>
+        {% for p in playlists %}
+        <tr>
+          <td>{% if p.image_url %}<img class="cover" src="{{ p.image_url }}" alt="">{% endif %}</td>
+          <td>{{ entity_link('playlist', p.playlist_id, p.name) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No playlists match "{{ q }}".</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

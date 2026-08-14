@@ -97,20 +97,34 @@ def generations(conn, tier="version"):
     return result
 
 
-def _runs(ordinals):
+def runs(ordinals):
     """Collapse a set of ordinals into (start, end) runs of consecutive
     integers, e.g. {5, 6, 7, 10} -> [(5, 7), (10, 10)]."""
     ordinals = sorted(ordinals)
-    runs = []
+    result = []
     start = prev = ordinals[0]
     for o in ordinals[1:]:
         if o == prev + 1:
             prev = o
         else:
-            runs.append((start, prev))
+            result.append((start, prev))
             start = prev = o
-    runs.append((start, prev))
-    return runs
+    result.append((start, prev))
+    return result
+
+
+def presence_for_tracks(conn, track_ids):
+    """The sorted ordinals any of `track_ids` was present in, from
+    generation_presence. Same ensure_track_groups precondition as
+    generations()/tenures()."""
+    if not track_ids:
+        return []
+    placeholders = ",".join("?" for _ in track_ids)
+    rows = conn.execute(
+        f"SELECT DISTINCT ordinal FROM generation_presence WHERE track_id IN ({placeholders})",
+        list(track_ids),
+    ).fetchall()
+    return sorted(row["ordinal"] for row in rows)
 
 
 def tenures(conn, tier="version"):
@@ -132,10 +146,10 @@ def tenures(conn, tier="version"):
     now = jobs.now_iso()
     result = []
     for group_id, ordinals in group_ordinals.items():
-        runs = _runs(ordinals)
-        lengths = [end - start + 1 for start, end in runs]
+        group_runs = runs(ordinals)
+        lengths = [end - start + 1 for start, end in group_runs]
         tenure = max(lengths)
-        start_ordinal, end_ordinal = runs[lengths.index(tenure)]
+        start_ordinal, end_ordinal = group_runs[lengths.index(tenure)]
 
         start_at = spans[start_ordinal]["started_at"]
         end_at = spans[end_ordinal]["ended_at"] or now
@@ -144,10 +158,10 @@ def tenures(conn, tier="version"):
         result.append(
             {
                 "group_id": group_id,
-                "runs": runs,
+                "runs": group_runs,
                 "tenure": tenure,
                 "total_generations": sum(lengths),
-                "run_count": len(runs),
+                "run_count": len(group_runs),
                 "first_ordinal": min(ordinals),
                 "last_ordinal": max(ordinals),
                 "days": days,

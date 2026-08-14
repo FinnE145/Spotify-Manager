@@ -310,31 +310,44 @@ def groups_for_track(conn, track_id):
     }
 
 
+# The tier one step finer than each key (mirrors the finer_column apply_partition
+# computes via TIER_ORDER). "release" has no finer tier -- subtree() and
+# _enrich() below both special-case it as where nesting bottoms out at tracks.
+_FINER_TIER = {"song": "version", "version": "recording", "recording": "release"}
+
+# subtree()'s field name for a node's nested children, keyed by the child
+# tier (i.e. what a version-node nests its recordings under, a recording-node
+# its releases under, a release-node its plain track ids under).
+_SUBTREE_FIELD = {"version": "recordings", "recording": "releases", "release": "track_ids"}
+
+# group_tree()'s equivalent: additionally covers "song" (the top wrapper when
+# called at song tier), and renames a release's plain "track_ids" to "tracks"
+# now that its members carry the full display, not just an id.
+_ENRICHED_FIELD = {"song": "versions", "version": "recordings", "recording": "releases", "release": "tracks"}
+
+
+def subtree(conn, tier, group_id):
+    """The nesting from `tier` down to member track ids. nested_tree(conn, song_id)
+    is subtree(conn, "song", song_id); a release has no finer tier, so its
+    subtree is simply its member track ids."""
+    if tier == "release":
+        return [
+            row["track_id"]
+            for row in conn.execute("SELECT track_id FROM track_group WHERE release_id = ?", (group_id,))
+        ]
+    finer = _FINER_TIER[tier]
+    finer_column = TIER_COLUMN[finer]
+    return [
+        {f"{finer}_id": row[finer_column], _SUBTREE_FIELD[finer]: subtree(conn, finer, row[finer_column])}
+        for row in conn.execute(
+            f"SELECT DISTINCT {finer_column} FROM track_group WHERE {TIER_COLUMN[tier]} = ?", (group_id,)
+        )
+    ]
+
+
 def nested_tree(conn, song_id):
     """The song's version -> recording -> release -> track nesting."""
-    tree = []
-    for v in conn.execute(
-        "SELECT DISTINCT version_id FROM track_group WHERE song_id = ?", (song_id,)
-    ):
-        recordings = []
-        for r in conn.execute(
-            "SELECT DISTINCT recording_id FROM track_group WHERE version_id = ?", (v["version_id"],)
-        ):
-            releases = []
-            for rel in conn.execute(
-                "SELECT DISTINCT release_id FROM track_group WHERE recording_id = ?",
-                (r["recording_id"],),
-            ):
-                track_ids = [
-                    row["track_id"]
-                    for row in conn.execute(
-                        "SELECT track_id FROM track_group WHERE release_id = ?", (rel["release_id"],)
-                    )
-                ]
-                releases.append({"release_id": rel["release_id"], "track_ids": track_ids})
-            recordings.append({"recording_id": r["recording_id"], "releases": releases})
-        tree.append({"version_id": v["version_id"], "recordings": recordings})
-    return tree
+    return subtree(conn, "song", song_id)
 
 
 def _is_pinned(conn, group_id):
@@ -383,6 +396,27 @@ def track_display(conn, track_id):
     info["artists"] = _artist_display(conn, track_id)
     info["live_count"] = live_count
     return info
+
+
+def artist_credits_for_tracks(conn, track_ids):
+    """{track_id: [{"artist_id", "name"}, ...]} in credit order, for linking
+    individual artist names -- track_artists/track_display's "artists" field
+    is a pre-joined display string with no per-artist id to link to. One
+    batched query over exactly the tracks a page needs, the same shape as
+    _artist_display's whole-view preload: track_artist_credit still has to
+    compute its GROUP BY once regardless, so batching beats a lookup per
+    track for the same reason a per-track probe of track_artists does."""
+    if not track_ids:
+        return {}
+    placeholders = ",".join("?" for _ in track_ids)
+    credits = defaultdict(list)
+    for row in conn.execute(
+        f"SELECT track_id, artist_id, name FROM track_artist_credit "
+        f"WHERE track_id IN ({placeholders}) ORDER BY track_id, position",
+        list(track_ids),
+    ):
+        credits[row["track_id"]].append({"artist_id": row["artist_id"], "name": row["name"]})
+    return dict(credits)
 
 
 def song_groups(conn, query="", include_singletons=False):
@@ -437,38 +471,45 @@ def song_groups(conn, query="", include_singletons=False):
     return results
 
 
+def _enrich(conn, tier, nodes):
+    """subtree()'s output for one tier, with track-id leaves replaced by
+    track_display() dicts. Returns (enriched_nodes, flat_track_ids)."""
+    if tier == "release":
+        return [track_display(conn, tid) for tid in nodes], list(nodes)
+    finer = _FINER_TIER[tier]
+    field = _SUBTREE_FIELD[finer]
+    enriched_field = _ENRICHED_FIELD[finer]
+    enriched, flat = [], []
+    for node in nodes:
+        children, child_flat = _enrich(conn, finer, node[field])
+        enriched.append({f"{finer}_id": node[f"{finer}_id"], enriched_field: children})
+        flat.extend(child_flat)
+    return enriched, flat
+
+
+def group_tree(conn, tier, group_id):
+    """Full nesting from `tier` down to tracks, enriched with track display
+    fields. song_tree(conn, song_id) is group_tree(conn, "song", song_id).
+    Only the top node carries a flat track-id list and a representative --
+    representative() is tier-agnostic, but in practice only song-tier groups
+    are ever pinned."""
+    enriched, flat = _enrich(conn, tier, subtree(conn, tier, group_id))
+    return {
+        f"{tier}_id": group_id,
+        "representative_track_id": representative(conn, group_id),
+        "pinned": _is_pinned(conn, group_id),
+        "track_ids": flat,
+        _ENRICHED_FIELD[tier]: enriched,
+    }
+
+
 def song_tree(conn, song_id):
     """Full version -> recording -> release -> track nesting for one song
     group, enriched with track display fields. Only the song node carries a
     track-id list (for its "Edit in queue" link) and a representative -- the
     finer nodes have neither: the queue edits all four tiers of the whole
     song group at once, and representative is a song-level-only concept."""
-    tree = nested_tree(conn, song_id)
-
-    song_track_ids = []
-    versions = []
-    for v in tree:
-        recordings = []
-        for r in v["recordings"]:
-            releases = []
-            for rel in r["releases"]:
-                song_track_ids.extend(rel["track_ids"])
-                releases.append(
-                    {
-                        "release_id": rel["release_id"],
-                        "tracks": [track_display(conn, tid) for tid in rel["track_ids"]],
-                    }
-                )
-            recordings.append({"recording_id": r["recording_id"], "releases": releases})
-        versions.append({"version_id": v["version_id"], "recordings": recordings})
-
-    return {
-        "song_id": song_id,
-        "representative_track_id": representative(conn, song_id),
-        "pinned": _is_pinned(conn, song_id),
-        "track_ids": song_track_ids,
-        "versions": versions,
-    }
+    return group_tree(conn, "song", song_id)
 
 
 def auto_grouped_ids(conn):
