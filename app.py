@@ -254,6 +254,37 @@ def create_app():
         canonical.ensure_track_groups(conn)
         conn.commit()
 
+        # An owned row built from Symr's own `track` table. Used both when the
+        # fetch never succeeded and for the tracks the fetched page didn't
+        # reach, so there's one way to render a track Symr actually holds.
+        def _owned_rows(track_ids):
+            if not track_ids:
+                return []
+            placeholders = ",".join("?" for _ in track_ids)
+            out = []
+            for r in conn.execute(
+                "SELECT t.track_id, t.name, t.track_number, t.disc_number, t.duration_ms, t.explicit, "
+                "       COALESCE(ta.artists, '') AS artists "
+                "FROM track t LEFT JOIN track_artists ta ON ta.track_id = t.track_id "
+                f"WHERE t.track_id IN ({placeholders})",
+                list(track_ids),
+            ):
+                g = canonical.groups_for_track(conn, r["track_id"])
+                out.append(
+                    {
+                        "owned": True,
+                        "track_id": r["track_id"],
+                        "version_id": g["version"] if g else None,
+                        "name": r["name"],
+                        "artists": r["artists"],
+                        "duration_ms": r["duration_ms"],
+                        "explicit": r["explicit"],
+                        "track_number": r["track_number"],
+                        "disc_number": r["disc_number"],
+                    }
+                )
+            return out
+
         rows = []
         tracklist = json.loads(album["tracklist_json"]) if album["tracklist_json"] else None
         fetched = tracklist is not None
@@ -282,35 +313,25 @@ def create_app():
         else:
             # Never successfully fetched -- show only what's independently
             # known from Symr's own library rather than nothing at all.
-            for r in conn.execute(
-                "SELECT t.track_id, t.name, t.track_number, t.disc_number, t.duration_ms, t.explicit, "
-                "       COALESCE(ta.artists, '') AS artists "
-                "FROM track t LEFT JOIN track_artists ta ON ta.track_id = t.track_id "
-                "WHERE t.album_id = ?",
-                (album_id,),
-            ):
-                g = canonical.groups_for_track(conn, r["track_id"])
-                rows.append(
-                    {
-                        "owned": True,
-                        "track_id": r["track_id"],
-                        "version_id": g["version"] if g else None,
-                        "name": r["name"],
-                        "artists": r["artists"],
-                        "duration_ms": r["duration_ms"],
-                        "explicit": r["explicit"],
-                        "track_number": r["track_number"],
-                        "disc_number": r["disc_number"],
-                    }
-                )
+            rows = _owned_rows(owned_ids)
         rows.sort(key=lambda r: (r["disc_number"] or 1, r["track_number"] or 0))
-        track_names = {r["track_id"]: r["name"] for r in rows if r["owned"]}
+
+        # Owned tracks the fetched page didn't contain (§5.2). An album past 50
+        # tracks can easily hold the one track Symr knows beyond the first page,
+        # and without these the tracklist contradicts its own "N of M known"
+        # header. Costs no request -- these come from the `track` table.
+        shown = {r["track_id"] for r in rows if r["track_id"]}
+        appended = _owned_rows([tid for tid in owned_ids if tid not in shown])
+        appended.sort(key=lambda r: (r["disc_number"] or 1, r["track_number"] or 0))
+
+        track_names = {r["track_id"]: r["name"] for r in rows + appended if r["owned"]}
 
         return render_template(
             "entity_album.html",
             album=album,
             artists=artist_rows,
             rows=rows,
+            appended=appended,
             track_artist_credits=artist_credits,
             track_names=track_names,
             fetched=fetched,
@@ -391,14 +412,21 @@ def create_app():
         for row in entities.playlists_for_tracks(conn, all_track_ids):
             playlists_seen.setdefault(row["playlist_id"], row)
 
+        # Counted off the rendered rows, not off credit_rows: the lists below
+        # are one row per version group, and _version_rows drops a group whose
+        # representative resolves to nothing. Counting anything else lets the
+        # header disagree with the list directly under it.
+        primary_rows = _version_rows(primary_versions)
+        featured_rows = _version_rows(featured_versions)
+
         return render_template(
             "entity_artist.html",
             artist=artist,
             merged_ids=merged_ids,
-            track_count=len(all_track_ids),
+            version_count=len(primary_rows) + len(featured_rows),
             album_count=len(album_rows),
-            primary_tracks=_version_rows(primary_versions),
-            featured_tracks=_version_rows(featured_versions),
+            primary_tracks=primary_rows,
+            featured_tracks=featured_rows,
             albums=album_rows,
             playlists=list(playlists_seen.values()),
             ordinals=generations.presence_for_tracks(conn, all_track_ids),

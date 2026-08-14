@@ -10,7 +10,7 @@
     <div>
       <h1>{{ artist.name }}</h1>
       <p class="meta">
-        {{ track_count }} track{{ "s" if track_count != 1 }}
+        {{ version_count }} version{{ "s" if version_count != 1 }}
         &middot; {{ album_count }} album{{ "s" if album_count != 1 }}
         {% if artist.external_url %} &middot; <a href="{{ artist.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}
       </p>

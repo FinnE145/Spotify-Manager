@@ -922,6 +922,15 @@ body.immersive {
   color: #999;
 }
 
+/* Separates the tracklist page Spotify returned from the owned tracks that
+   fell past it (docs/specs/entity-pages-K.md §5.2). */
+.data-table tr.tracklist-divider td {
+  padding-top: 12px;
+  border-top: 2px solid #ddd;
+  color: #666;
+  font-size: 12px;
+}
+
 .tier-chip.song {
   background: #7c3aed;
   color: #fff;

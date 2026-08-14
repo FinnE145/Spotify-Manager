@@ -28,22 +28,29 @@
     {% elif album.total_tracks and album.total_tracks > 50 %}
     <p class="meta">First 50 of {{ album.total_tracks }}; Spotify pages beyond this and we don't follow them.</p>
     {% endif %}
-    {% if rows %}
+    {% macro track_row(t) -%}
+    <tr class="{{ '' if t.owned else 'unowned' }}">
+      <td>{{ t.track_number if t.track_number is not none else "" }}</td>
+      <td>
+        {% if t.owned and t.version_id %}{{ entity_link('version', t.version_id, t.name) }}
+        {% else %}{{ t.name }}{% endif %}
+        {% if t.explicit %} <span class="badge explicit" title="Explicit">E</span>{% endif %}
+      </td>
+      <td>{% if t.owned %}{{ artist_names(track_artist_credits.get(t.track_id, [])) }}{% else %}{{ t.artists }}{% endif %}</td>
+      <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+    </tr>
+    {%- endmacro %}
+    {% if rows or appended %}
     <table class="data-table">
       <thead><tr><th></th><th>Track</th><th>Artists</th><th>Duration</th></tr></thead>
       <tbody>
-        {% for t in rows %}
-        <tr class="{{ '' if t.owned else 'unowned' }}">
-          <td>{{ t.track_number if t.track_number is not none else "" }}</td>
-          <td>
-            {% if t.owned and t.version_id %}{{ entity_link('version', t.version_id, t.name) }}
-            {% else %}{{ t.name }}{% endif %}
-            {% if t.explicit %} <span class="badge explicit" title="Explicit">E</span>{% endif %}
-          </td>
-          <td>{% if t.owned %}{{ artist_names(track_artist_credits.get(t.track_id, [])) }}{% else %}{{ t.artists }}{% endif %}</td>
-          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+        {% for t in rows %}{{ track_row(t) }}{% endfor %}
+        {% if appended %}
+        <tr class="tracklist-divider">
+          <td colspan="4">Known to Symr, but past the tracklist page Spotify returned</td>
         </tr>
-        {% endfor %}
+        {% for t in appended %}{{ track_row(t) }}{% endfor %}
+        {% endif %}
       </tbody>
     </table>
     {% else %}

@@ -191,7 +191,9 @@ as the canonical and generations pages already do.
 
 - **Header**: name, artists (linked), album (linked, with cover), duration, explicit flag.
 - **Spotify identity**: `track_id`, `uri`, `isrc`, `track_number`, `disc_number`, `is_playable`,
-  `linked_from` / `linked_from_id`, `external_url` as an outbound Spotify link.
+  `linked_from_id`, `external_url` as an outbound Spotify link. **`linked_from` (the full uri) is
+  deliberately not shown** — it says nothing the id doesn't, and an id on its own is all this row
+  is ever read for.
 - **Canonical**: the four groups, each linked to its group page. This replaces the existing
   Canonical table, whose sibling lists become unnecessary — the group page shows them properly.
 - **Memberships**: playlist (→ `/playlist/<id>`), `added_at`, `removed_at`, `position`. As the
@@ -223,6 +225,11 @@ Rendered in `(disc_number, track_number)` order from the cached tracklist:
 - If the album has never been fetched, the page shows only the owned tracks and says so.
 - `total_tracks > 50`: render the 50 fetched and note "first 50 of 460; Spotify pages beyond
   this and we don't follow them."
+- **Any owned track the fetched page didn't contain is appended after it**, in the same
+  `(disc_number, track_number)` order, under a divider saying so. Without this an album whose one
+  known track sits at position 312 renders 50 rows that are all unowned and never shows the track
+  Symr actually has — the page would contradict its own "1 of 460 known" header. Costs no
+  request: those rows come from the `track` table.
 
 Below it: plays (total / 30d / 7d) over the owned tracks, and the playlists they appear in.
 
@@ -277,8 +284,10 @@ Nothing else about the round-trip changes: same guard, same batching, same break
 - **Alias redirect first.** If the requested id has an `artist_alias` row, redirect to the
   canonical id. Every read below resolves through `resolved_track_artist` /
   `resolved_album_artist`, per the standing rule that anything artist-level resolves aliases.
-- **Header**: image (§7.1), name, outbound Spotify link, track and album counts. When the artist
-  has merged ids, list them with a link to `/dev/artists`.
+- **Header**: image (§7.1), name, outbound Spotify link, **version** and album counts. Counting
+  versions, not `track` rows, is what makes the number agree with the list under it — the track
+  lists below are deduped to one row per version group, so a track count reads as wrong the
+  moment an artist has the same song on two releases.
 - **Tracks**: split **primary** vs **featured** using `track_artist_role`, which gives the split
   structurally. Each links to `/version/<id>`, deduped to one row per version group.
 - **Albums**: albums where they hold an album credit, linked, with release date.
@@ -426,9 +435,7 @@ Every one of these currently renders a bare name, or links to a route being dele
 - **`/dev/canonical`** — group headers link out to their new group pages; representative and
   member track names to `/track/<id>`; artist names to `/artist/<id>`. The existing
   `/dev/canonical/group/<id>` deep link stays, as the *edit* direction from a group page.
-- **`/dev/canonical/review`, `/dev/canonical/cross`** — track names in the queue UIs.
 - **`/dev/artists`** — artist names on both the candidate-pair and merged-group lists.
-- **`/dev/roundtrip`** — the manual-alias candidate table's track names.
 - **`/dev/generations`** — playlist name → `/playlist/<id>`; the per-generation link →
   `/playlist/<id>?generation=1`.
 - **`/dev/generations/tenure`** — the representative track → its group page at the current tier.
@@ -436,8 +443,20 @@ Every one of these currently renders a bare name, or links to a route being dele
 
 The **org canvas is deliberately out of scope**; that page is due its own rework.
 
-Verification for this step is not complete until every bare entity name in the list above is a
-link.
+### 12.3 Deliberately not relinked
+
+Three surfaces keep their bare names, decided during verification:
+
+- **`/dev/canonical/review` and `/dev/canonical/cross`.** These are keyboard-driven queues whose
+  whole job is triaging the rows in front of you. A link in every title is a tab-stop and a
+  mis-click away from losing the queue position, and the queue already offers no reason to leave
+  it.
+- **`/dev/roundtrip`'s manual-alias table.** Its candidates live in `<option>` elements, which
+  cannot hold a link at all; the "Played as" column is a uri with no `track` row *by definition*,
+  which is the entire reason the row is in that table. The Spotify link it already carries is the
+  only useful target.
+
+Verification for this step is not complete until every bare entity name in §12.2 is a link.
 
 ---
 
