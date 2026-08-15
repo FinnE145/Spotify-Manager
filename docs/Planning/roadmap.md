@@ -121,18 +121,18 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
    DONE              DONE                              DONE           DONE
 
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
-      DONE                      DONE                DONE                SPECCED
+      DONE                      DONE                DONE                DONE
   ──► M (grouping fix + album backfill) ──► J (partial pulls) ──► F/G ──► L (better search)
 ```
 
-**A, I, C, D, E, B and K have landed.** Their sections below are marked, and each points
+**A, I, C, D, E, B, K and H have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
-**H is specced but not built** → `docs/specs/scoring-H.md`. Unusually, its *parameters are
-already settled* — tuning happened during the planning session against the real DB, and
-`docs/scoring/tuning_prototype.py` is the executable reference. Implementation reproduces
-it; it does not re-tune.
+**`score` is now available to everything downstream** → `docs/specs/scoring-H.md`. Anything
+below that wants a ranking should read it rather than inventing one, and anything that
+would *consume* a stored score inherits H §10's discipline: the parameters are module
+constants, and changing one means recomputing everything that depends on them.
 
 **M sits after H** because H is correct without it and improves automatically as coverage
 grows — M is not a prerequisite for scoring, it just raises the ceiling.
@@ -286,6 +286,39 @@ Sits after B so the generation view has something to show, and before H so scori
 somewhere to display its output.
 
 ## H — Scoring
+
+**✅ DONE → `docs/specs/scoring-H.md`.** That spec is authoritative for what actually
+shipped; the summary below is the original shape, kept for the reasoning. Its §0 exists
+specifically to list what planning reversed here, and is worth reading before trusting any
+line of this section.
+
+**Five terms proposed below were struck**, each for a recorded reason (spec §0.3): the
+**intent score**, because aggregation is deliberately uniform and an artist-specific term
+breaks that; **comeback / run-count**, because comebacks are granted arbitrarily — many old
+greats Finn would re-add and deliberately doesn't — so absence of one is a snub rather than a
+verdict, and only 22 of ~8,950 version groups have more than one run anyway;
+**post-first-year play share**, as arbitrary and time-dependent; and `shuffle` / `reason_start`
+/ `reason_end`, the last struck on measurement (skip plays carry 5.1% of total weight, and the
+continuous listen fraction has already priced them).
+
+**The two horizons are not two models.** `all_time` and `recent` are the *same* computation
+over different time windows, not a long model and a short one with different terms — plus a
+15% all-time blend, without which 86% of the library ties at exactly zero on `recent`.
+
+**Right-censoring needed no special handling.** Rate-over-exposure plus shrinkage toward a
+bucket baseline covers it: new material is measured per unit of exposure, and thin evidence is
+pulled toward its bucket rather than to the floor. The load-bearing invariant is stronger and
+more specific than "don't read new as failed" — **absence of plays is never negative evidence**
+(§4.6), which forbids any membership-to-play ratio outright.
+
+**`impact` is retired**, as this section asks — not just at the review queue but everywhere it
+ordered anything, and in the three templates that rendered it.
+
+**`entities.play_stats` was *not* absorbed**, deliberately (§11.5). It returns raw play counts
+over total/30d/7d; H materializes *weighted* scores over all-time and 90 days. Those are
+different quantities over different windows, so folding one into the other would couple two
+unrelated things. What they share is the play-resolution path and the entity→track-ids
+expansion — the only place they could genuinely disagree.
 
 A general song ranking that feeds album and artist rankings by aggregation. Motivation: play count over-rewards pleasant background music, tenure under-rewards recent arrivals, and neither handles recency.
 
