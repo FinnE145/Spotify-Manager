@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 import db
 import jobs
+import scoring
 
 # One folder per upload, named for the upload time (UTC, like every other
 # timestamp here). The export's chunking isn't stable between exports, so
@@ -149,6 +150,7 @@ def _run_import(action, folder, original_name):
 
         _parse_folder(conn, import_id, folder, counts)
         _finish(conn, import_id, counts, None)
+        scoring.recompute(conn)
         _status.set(phase="done", current_file=None, finished_at=jobs.now_iso())
     except Exception as e:
         # Partial imports are kept: the committed chunks stay, only the
@@ -157,6 +159,7 @@ def _run_import(action, folder, original_name):
         conn.rollback()
         if import_id is not None:
             _finish(conn, import_id, counts, str(e))
+            scoring.recompute(conn)
         _status.set(phase="error", error=str(e), finished_at=jobs.now_iso())
     finally:
         conn.close()

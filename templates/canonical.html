@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import datetime_span, entity_link, artist_names, edit_link,
-                              explicit_badge, not_in_library, listing_cap_note %}
+                              explicit_badge, not_in_library, listing_cap_note, score_display %}
 
 {% block title %}Symr — Canonical Tracks{% endblock %}
 
@@ -125,7 +125,7 @@
           {% if g.pinned %}<span class="rep-marker pinned" title="Pinned representative">★</span>{% endif %}
           — {{ artist_links(g.representative.track_id) if g.representative else "" }}
         </span>
-        <span class="leaf-meta">{{ g.track_count }} tracks &middot; impact {{ g.impact }} &middot; {{ entity_link('song', g.song_id, 'song ' ~ g.song_id) }}</span>
+        <span class="leaf-meta">{{ g.track_count }} tracks &middot; {{ score_display(g.score) }} &middot; {{ entity_link('song', g.song_id, 'song ' ~ g.song_id) }}</span>
         {{ auto_badge(g.song_id, auto_grouped) }}
         {{ edit_link(tree.track_ids) }}
       </summary>

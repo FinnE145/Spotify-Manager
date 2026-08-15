@@ -33,5 +33,13 @@
       — the 36 current-favs playlists and the tenure derived from them.
     </li>
   </ul>
+
+  <section class="panel">
+    <h2>Scoring</h2>
+    <p class="meta">{{ score_count }} materialized version/recording/release/track scores.</p>
+    <form method="post" action="{{ url_for('dev_recompute') }}" class="inline-form">
+      <button type="submit">Recompute scores</button>
+    </form>
+  </section>
 </main>
 {% endblock %}

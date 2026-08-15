@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, spotify_track_link %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, spotify_track_link, score_display %}
 
 {% block title %}Symr — {{ track.name }}{% endblock %}
 
@@ -14,6 +14,7 @@
         {% if track.album_name %} &middot; {{ entity_link('album', track.album_id, track.album_name) }}{% endif %}
         {% if track.duration_ms %} &middot; {{ "%d:%02d"|format(track.duration_ms // 60000, (track.duration_ms // 1000) % 60) }}{% endif %}
       </p>
+      {% if score %}<p class="meta">{{ score_display(score.all_time, score.recent) }}</p>{% endif %}
     </div>
   </div>
 

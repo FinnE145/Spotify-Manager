@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, score_display %}
 
 {% block title %}Symr — {{ playlist.name }}{% endblock %}
 
@@ -17,6 +17,7 @@
         {% if playlist.tracks_pulled_at %}&middot; pulled {{ datetime_span(playlist.tracks_pulled_at) }}{% endif %}
         {% if playlist.unfollowed_at %}&middot; <strong>unfollowed {{ datetime_span(playlist.unfollowed_at) }}</strong>{% endif %}
       </p>
+      {% if score %}<p class="meta">{{ score_display(score.all_time, score.recent) }}</p>{% endif %}
       <label class="checkbox-label">
         <input type="checkbox" data-exclude-toggle data-playlist-id="{{ playlist.playlist_id }}" {{ 'checked' if playlist.excluded }}>
         Exclude from pulls

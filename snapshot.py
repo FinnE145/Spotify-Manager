@@ -8,6 +8,7 @@ from collections import defaultdict
 import canonical
 import db
 import jobs
+import scoring
 from jobs import RateLimited
 from spotify_client import get_spotify_client
 
@@ -166,11 +167,19 @@ def _run_pull(force_all):
         _set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", jobs.now_iso())
         canonical.ensure_track_groups(conn)
         conn.commit()
+        scoring.recompute(conn)
 
         _status.set(phase="done", finished_at=jobs.now_iso())
     except RateLimited as e:
+        # Discard anything this run left uncommitted before recomputing --
+        # otherwise recompute()'s own commit would inadvertently make durable
+        # a partial write this path means to drop on close.
+        conn.rollback()
+        scoring.recompute(conn)
         _status.set(phase="error", error=str(e), retry_at=e.retry_at, finished_at=jobs.now_iso())
     except Exception as e:
+        conn.rollback()
+        scoring.recompute(conn)
         _status.set(phase="error", error=str(e), finished_at=jobs.now_iso())
     finally:
         conn.close()
@@ -218,10 +227,15 @@ def _run_backfill():
 
         canonical.ensure_track_groups(conn)
         conn.commit()
+        scoring.recompute(conn)
         _status.set(phase="done", finished_at=jobs.now_iso())
     except RateLimited as e:
+        conn.rollback()
+        scoring.recompute(conn)
         _status.set(phase="error", error=str(e), retry_at=e.retry_at, finished_at=jobs.now_iso())
     except Exception as e:
+        conn.rollback()
+        scoring.recompute(conn)
         _status.set(phase="error", error=str(e), finished_at=jobs.now_iso())
     finally:
         conn.close()

@@ -3,14 +3,14 @@
    ~500ms), so the page paints without it and canonical_viewer.js drops it in.
    Server-rendered rather than built in JS so the entity links here stay the
    same entity_link every other page uses. #}
-{% from "_macros.html" import entity_link, artist_names, edit_link, explicit_badge, not_in_library, listing_cap_note %}
+{% from "_macros.html" import entity_link, artist_names, edit_link, explicit_badge, not_in_library, listing_cap_note, score_display %}
 
 {{ listing_cap_note(groups|length, total) }}
 
 <div class="group-scroll">
 {% for g in groups %}
 <div class="panel cross-artist-entry">
-  <h3>{{ g.base }} <span class="leaf-meta">impact {{ g.impact }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>
+  <h3>{{ g.base }} <span class="leaf-meta">{{ score_display(g.score) }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>
   {% for tid in g.track_ids %}
   {% set t = g.tracks[tid] %}
   <div class="tree-leaf">

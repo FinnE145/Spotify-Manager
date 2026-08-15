@@ -14,6 +14,7 @@ import generations
 import history_import
 import jobs
 import roundtrip
+import scoring
 import snapshot
 from config import APP_DEBUG, APP_PORT, MAX_CONTENT_LENGTH, SECRET_KEY
 from grouping import render_export_text
@@ -50,6 +51,18 @@ def create_app():
             return None
         if get_spotify_client() is None:
             return redirect(url_for("login"))
+        return None
+
+    # docs/specs/scoring-H.md §9.3's read-time backstop, run on every
+    # authenticated request rather than scattered per-route like
+    # canonical.ensure_track_groups(conn) -- a single hook is a write path
+    # that can never be forgotten, which is the property the backstop exists
+    # for. Cheap on the common case (a 0.03ms PRAGMA); see scoring.ensure_fresh.
+    @app.before_request
+    def refresh_scores():
+        if request.endpoint in _PUBLIC_ENDPOINTS:
+            return None
+        scoring.ensure_fresh(db.get_db())
         return None
 
     # -- Error handling -------------------------------------------------
@@ -154,9 +167,13 @@ def create_app():
             (track_ids[0],),
         ).fetchone()
 
+        track_scores = scoring.scores_for_tier(conn, "track", track_ids)
         member_tracks = sorted(
             (canonical.track_display(conn, tid) for tid in track_ids),
-            key=lambda t: (t["name"] or "").casefold(),
+            key=lambda t: (
+                -track_scores.get(t["track_id"], {}).get("all_time", 0.0),
+                (t["name"] or "").casefold(),
+            ),
         )
         tracks_by_id = {t["track_id"]: t for t in member_tracks}
 
@@ -176,6 +193,15 @@ def create_app():
             stats=entities.play_stats(conn, track_ids),
             playlists=entities.playlists_for_tracks(conn, track_ids),
             tracks_by_id=tracks_by_id,
+            track_scores=track_scores,
+            # "song" isn't a materialized tier (§9.1) -- it aggregates at
+            # query time from its member versions, same as album/artist/
+            # playlist, so it needs song_scores() rather than a direct lookup.
+            score=(
+                scoring.song_scores(conn, [group_id]).get(group_id)
+                if tier == "song"
+                else scoring.get_both(conn, tier, group_id)
+            ),
             spans=spans,
             ordinals=ordinals,
             tenure=max((end - start + 1 for start, end in runs), default=0),
@@ -222,6 +248,7 @@ def create_app():
             memberships=memberships,
             stats=entities.play_stats(conn, [track_id]),
             aliases=aliases,
+            score=scoring.get_both(conn, "track", track_id),
         )
 
     @app.route("/album/<album_id>", endpoint="album_page")
@@ -349,6 +376,7 @@ def create_app():
             known_count=len(owned_ids),
             stats=entities.play_stats(conn, owned_ids),
             playlists=entities.playlists_for_tracks(conn, owned_ids),
+            score=scoring.album_scores(conn, [album_id]).get(album_id, {"all_time": 0.0, "recent": 0.0}),
         )
 
     @app.route("/artist/<artist_id>", endpoint="artist_page")
@@ -403,21 +431,35 @@ def create_app():
         featured_versions -= primary_versions
 
         def _version_rows(version_ids):
+            scores = scoring.scores_for_tier(conn, "version", list(version_ids))
             out = []
             for vid in version_ids:
                 rid = canonical.representative(conn, vid)
                 if rid is None:
                     continue
                 out.append({"version_id": vid, **canonical.track_display(conn, rid)})
-            out.sort(key=lambda t: (t["name"] or "").casefold())
+            out.sort(
+                key=lambda t: (
+                    -scores.get(t["version_id"], {}).get("all_time", 0.0),
+                    (t["name"] or "").casefold(),
+                )
+            )
             return out
 
         album_rows = conn.execute(
             "SELECT a.album_id, a.name, a.release_date, a.image_url FROM resolved_album_artist raa "
             "JOIN album a ON a.album_id = raa.album_id "
-            "WHERE raa.artist_id = ? ORDER BY a.name COLLATE NOCASE",
+            "WHERE raa.artist_id = ?",
             (artist_id,),
         ).fetchall()
+        album_scores = scoring.album_scores(conn, [a["album_id"] for a in album_rows])
+        album_rows = sorted(
+            album_rows,
+            key=lambda a: (
+                -album_scores.get(a["album_id"], {}).get("all_time", 0.0),
+                (a["name"] or "").casefold(),
+            ),
+        )
 
         playlists_seen = {}
         for row in entities.playlists_for_tracks(conn, all_track_ids):
@@ -443,6 +485,7 @@ def create_app():
             ordinals=generations.presence_for_tracks(conn, all_track_ids),
             spans=generations.generation_spans(conn),
             stats=entities.play_stats(conn, all_track_ids),
+            score=scoring.artist_group_score(conn, [artist_id]),
         )
 
     @app.route("/playlist/<playlist_id>", endpoint="playlist_page")
@@ -538,6 +581,9 @@ def create_app():
             stats=entities.play_stats(conn, live_track_ids),
             generation=generation,
             gen_view=gen_view,
+            score=scoring.playlist_scores(conn, [playlist_id]).get(
+                playlist_id, {"all_time": 0.0, "recent": 0.0}
+            ),
         )
 
     @app.route("/search", endpoint="search_page")
@@ -551,6 +597,11 @@ def create_app():
             conn.commit()
             like = f"%{q}%"
 
+            # All four groups here rank by score before capping at 50, not
+            # after: a name-ordered cap returns the alphabetically-first 50
+            # matches rather than the best 50 (docs/specs/scoring-H.md §11.1).
+            # Every match is fetched (no SQL LIMIT) so the ranking sees the
+            # whole result set, which searching bounds to a manageable size.
             track_rows = conn.execute(
                 "SELECT t.track_id FROM track t WHERE t.name LIKE ? "
                 "   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id) "
@@ -560,21 +611,28 @@ def create_app():
             ).fetchall()
             seen_versions = {}
             for row in track_rows:
-                if len(seen_versions) >= 50:
-                    break
                 groups = canonical.groups_for_track(conn, row["track_id"])
                 if not groups or groups["version"] in seen_versions:
                     continue
-                vid = groups["version"]
-                rep_id = canonical.representative(conn, vid) or row["track_id"]
-                seen_versions[vid] = {"version_id": vid, **canonical.track_display(conn, rep_id)}
-            songs = list(seen_versions.values())
+                seen_versions[groups["version"]] = row["track_id"]
+            version_scores = scoring.scores_for_tier(conn, "version", list(seen_versions))
+            ranked_versions = sorted(
+                seen_versions, key=lambda vid: -version_scores.get(vid, {}).get("all_time", 0.0)
+            )[:50]
+            songs = []
+            for vid in ranked_versions:
+                rep_id = canonical.representative(conn, vid) or seen_versions[vid]
+                songs.append({"version_id": vid, **canonical.track_display(conn, rep_id)})
 
-            albums = conn.execute(
+            album_rows = conn.execute(
                 "SELECT album_id, name, image_url FROM album WHERE name LIKE ? "
-                "ORDER BY name COLLATE NOCASE LIMIT 50",
+                "ORDER BY name COLLATE NOCASE",
                 (like,),
             ).fetchall()
+            album_score_map = scoring.album_scores(conn, [a["album_id"] for a in album_rows])
+            albums = sorted(
+                album_rows, key=lambda a: -album_score_map.get(a["album_id"], {}).get("all_time", 0.0)
+            )[:50]
 
             artist_rows = conn.execute(
                 "SELECT ar.artist_id, ar.name, COALESCE(aa.canonical_artist_id, ar.artist_id) AS resolved_id "
@@ -589,13 +647,25 @@ def create_app():
                         "SELECT artist_id, name FROM artist WHERE artist_id = ?", (row["resolved_id"],)
                     ).fetchone()
                     seen_artists[row["resolved_id"]] = dict(canonical_artist)
-            artists_result = sorted(seen_artists.values(), key=lambda a: (a["name"] or "").casefold())[:50]
+            artist_score_map = scoring.artist_scores(conn, list(seen_artists))
+            artists_result = sorted(
+                seen_artists.values(),
+                key=lambda a: (
+                    -artist_score_map.get(a["artist_id"], {}).get("all_time", 0.0),
+                    (a["name"] or "").casefold(),
+                ),
+            )[:50]
 
-            playlists_result = conn.execute(
+            playlist_rows = conn.execute(
                 "SELECT playlist_id, name, image_url FROM snapshot WHERE name LIKE ? "
-                "ORDER BY name COLLATE NOCASE LIMIT 50",
+                "ORDER BY name COLLATE NOCASE",
                 (like,),
             ).fetchall()
+            playlist_score_map = scoring.playlist_scores(conn, [p["playlist_id"] for p in playlist_rows])
+            playlists_result = sorted(
+                playlist_rows,
+                key=lambda p: -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),
+            )[:50]
 
         return render_template(
             "search.html",
@@ -608,7 +678,16 @@ def create_app():
 
     @app.route("/dev")
     def dev_index():
-        return render_template("dev.html", active="dev")
+        conn = db.get_db()
+        score_count = conn.execute("SELECT COUNT(*) FROM score").fetchone()[0]
+        return render_template("dev.html", active="dev", score_count=score_count)
+
+    @app.route("/dev/recompute", methods=["POST"], endpoint="dev_recompute")
+    def dev_recompute():
+        # Synchronous (~1s, §2.11) -- no job slot, no background thread, same
+        # as every other scoring.recompute() call site.
+        scoring.recompute(db.get_db())
+        return redirect(url_for("dev_index"))
 
     @app.route("/dev/artists", endpoint="dev_artists")
     def artists_index():
@@ -664,6 +743,14 @@ def create_app():
         all_song_groups = canonical.song_group_rows(
             conn, query=q, include_singletons=show_singletons
         )
+        # Ranked here rather than in canonical.py: scoring is cheap (one read
+        # of the materialized version tier plus a Python combine() per song),
+        # so the listing still ranks before the expensive hydration step below
+        # touches only the capped slice.
+        song_scores = scoring.song_scores(conn, [g["song_id"] for g in all_song_groups])
+        for g in all_song_groups:
+            g["score"] = song_scores.get(g["song_id"], {}).get("all_time", 0.0)
+        all_song_groups.sort(key=lambda g: (-g["score"], g["song_id"]))
         shown = _cap_listing(all_song_groups, q)
         # A deep link to a group past the cap would otherwise land on a page
         # that doesn't contain it.
@@ -686,10 +773,14 @@ def create_app():
                 "SELECT t.track_id FROM track t WHERE t.name LIKE ? "
                 "   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id) "
                 "              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "
-                "ORDER BY t.name COLLATE NOCASE LIMIT 100",
+                "ORDER BY t.name COLLATE NOCASE",
                 (like, like),
             ).fetchall()
-            for row in rows:
+            row_scores = scoring.scores_for_tier(conn, "track", [r["track_id"] for r in rows])
+            ranked_rows = sorted(
+                rows, key=lambda r: -row_scores.get(r["track_id"], {}).get("all_time", 0.0)
+            )[:100]
+            for row in ranked_rows:
                 info = canonical.track_display(conn, row["track_id"])
                 info["groups"] = canonical.groups_for_track(conn, row["track_id"])
                 search_results.append(info)
@@ -879,6 +970,7 @@ def create_app():
         # until another newcomer arrives.
         canonical.mark_reviewed(conn, track_ids)
         conn.commit()
+        scoring.recompute(conn)
         return jsonify({"ok": True})
 
     @app.route("/api/canonical/queue")
@@ -933,6 +1025,7 @@ def create_app():
         for track_id in track_ids:
             conn.execute("DELETE FROM pending_tier_review WHERE track_id = ?", (track_id,))
         conn.commit()
+        scoring.recompute(conn)
         return jsonify(result)
 
     @app.route("/api/canonical/autogroup/preview")
@@ -965,12 +1058,21 @@ def create_app():
         except ValueError as e:
             abort(400, description=str(e))
         conn.commit()
+        scoring.recompute(conn)
         return jsonify({"ok": True})
 
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
         conn = db.get_db()
-        playlists = conn.execute("SELECT * FROM snapshot ORDER BY name COLLATE NOCASE").fetchall()
+        playlists = conn.execute("SELECT * FROM snapshot").fetchall()
+        playlist_score_map = scoring.playlist_scores(conn, [p["playlist_id"] for p in playlists])
+        playlists = sorted(
+            playlists,
+            key=lambda p: (
+                -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),
+                (p["name"] or "").casefold(),
+            ),
+        )
 
         q = request.args.get("q", "").strip()
         track_matches = []
@@ -1040,7 +1142,9 @@ def create_app():
             pending_generation=generations.pending_new_generation(conn),
         )
 
-    _TENURE_SORT_KEYS = {"tenure": "tenure", "total": "total_generations", "runs": "run_count"}
+    _TENURE_SORT_KEYS = {
+        "tenure": "tenure", "total": "total_generations", "runs": "run_count", "score": "score",
+    }
     _TENURE_PAGE_SIZE = 100
 
     @app.route("/dev/generations/tenure", endpoint="dev_generations_tenure")
@@ -1059,6 +1163,17 @@ def create_app():
         spans = generations.generation_spans(conn)
 
         all_tenures = generations.tenures(conn, tier=tier)
+        # Every row's score, computed up front: the sort below runs before
+        # pagination, same as tenure/total/runs (docs/specs/scoring-H.md
+        # §11.1). "song" aggregates at query time; "version" is a direct
+        # materialized lookup.
+        if tier == "version":
+            score_map = scoring.scores_for_tier(conn, "version", [t["group_id"] for t in all_tenures])
+        else:
+            score_map = scoring.song_scores(conn, [t["group_id"] for t in all_tenures])
+        for t in all_tenures:
+            t["score"] = score_map.get(t["group_id"], {}).get("all_time", 0.0)
+
         sort_key = _TENURE_SORT_KEYS[sort]
         # group_id as the tiebreak keeps paging stable across requests.
         all_tenures.sort(key=lambda t: (-t[sort_key], t["group_id"]))
@@ -1115,6 +1230,10 @@ def create_app():
         except ValueError as e:
             abort(400, description=str(e))
         conn.commit()
+        # Only a new generation is a scoring input (tenure, §4.1) -- declining
+        # just mutes the prompt and touches nothing scoring reads.
+        if decision == "yes":
+            scoring.recompute(conn)
         return redirect(url_for(return_to))
 
     # -- OAuth ----------------------------------------------------------

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, generation_strip %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, generation_strip, score_display %}
 
 {% block title %}Symr — {{ rep.name if rep else "Group " ~ group_id }}{% endblock %}
 
@@ -51,6 +51,7 @@
       <p class="meta">
         <span class="tier-chip {{ tier }}">{{ tier|capitalize }}</span>
         &middot; {{ track_count }} track{{ "s" if track_count != 1 }}
+        {% if score %} &middot; {{ score_display(score.all_time, score.recent) }}{% endif %}
       </p>
       <p class="breadcrumb">
         {% for b_tier in ('song', 'version', 'recording', 'release') %}

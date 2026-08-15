@@ -90,8 +90,21 @@
    _LISTING_CAP); this is how you find out you're not looking at all of it. #}
 {% macro listing_cap_note(shown, total) -%}
 {%- if shown < total %}
-<p class="meta">Showing the top {{ shown }} of {{ total }} by impact — search to see the rest, or search <code>%</code> for all of them.</p>
+<p class="meta">Showing the top {{ shown }} of {{ total }} by score — search to see the rest, or search <code>%</code> for all of them.</p>
 {%- endif %}
+{%- endmacro %}
+
+{# A score, spelled out in words rather than a bare number (docs/specs/
+   scoring-H.md §11.4): the figure is unbounded and on no familiar scale, so
+   an unlabelled "73" beside a track name would read as a play count, a
+   duration or a percentage. Takes plain numbers rather than a dict so one
+   macro covers both call shapes: entity pages pass both horizons
+   ("score 73 · recent 48"), listings pass all_time only ("score 73"),
+   since rows there are dense and all_time is what they're sorted by. #}
+{% macro score_display(all_time, recent=none) -%}
+{%- if all_time is not none -%}
+<span class="score-display">score {{ "%.0f"|format(all_time) }}{% if recent is not none %} &middot; recent {{ "%.0f"|format(recent) }}{% endif %}</span>
+{%- endif -%}
 {%- endmacro %}
 
 {# The 37-cell generation-presence strip, extracted from generations_tenure.html

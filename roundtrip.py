@@ -27,6 +27,7 @@ from spotipy.exceptions import SpotifyException
 import canonical_detect
 import db
 import jobs
+import scoring
 import snapshot
 from jobs import RateLimited
 from spotify_client import get_spotify_client
@@ -404,6 +405,7 @@ def _run(reconcile_only=False):
         )
         _record_run(conn, run_id, outcome)
         _log_totals(outcome)
+        scoring.recompute(conn)
     except RateLimited as e:
         conn.rollback()
         _status.set(
@@ -417,6 +419,7 @@ def _run(reconcile_only=False):
         _status.log(f"Rate limited — retry after {e.retry_at}. Run stopped.")
         _record_run(conn, run_id, "rate_limited", str(e))
         _log_totals("rate_limited")
+        scoring.recompute(conn)
     except Exception as e:
         conn.rollback()
         _status.set(
@@ -426,6 +429,7 @@ def _run(reconcile_only=False):
         _status.log(f"Error — {e}")
         _record_run(conn, run_id, "error", str(e))
         _log_totals("error")
+        scoring.recompute(conn)
     finally:
         conn.close()
 

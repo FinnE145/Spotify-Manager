@@ -9,6 +9,7 @@ from collections import defaultdict
 
 import artists
 import canonical
+import scoring
 
 _SUFFIX_DELIMITERS = (" (", " [", " - ", " – ", " — ", " /")
 
@@ -236,6 +237,12 @@ def _fetch_tracks(conn):
             "real_groups": real_groups.get(row["track_id"]),
             "pinned": row["track_id"] in pinned_ids,
         }
+
+    # Each track's own materialized score (docs/specs/scoring-H.md §11.1),
+    # for ranking candidate/cross-artist groups -- see _make_candidate_group.
+    track_scores = scoring.scores_for_tier(conn, "track", list(tracks))
+    for tid, info in tracks.items():
+        info["score"] = track_scores.get(tid, {}).get("all_time", 0.0)
     return tracks
 
 
@@ -520,7 +527,7 @@ def _make_candidate_group(base, track_ids, tracks, reviewed, cross_artist):
         "track_ids": ids_sorted,
         "tracks": {tid: _display_fields(tracks[tid]) for tid in ids_sorted},
         "labels": _prefill_labels(ids_sorted, tracks),
-        "impact": sum(tracks[tid]["live_count"] for tid in ids_sorted),
+        "score": scoring.group_score([tracks[tid]["score"] for tid in ids_sorted]),
         "pinned_track_id": _pinned_track_id(ids_sorted, tracks),
         "reviewed": reviewed,
         "cross_artist": cross_artist,
@@ -528,7 +535,10 @@ def _make_candidate_group(base, track_ids, tracks, reviewed, cross_artist):
 
 
 def _order(groups):
-    return sorted(groups, key=lambda g: (-g["impact"], -len(g["track_ids"]), g["base"]))
+    """The one ordering key for every candidate-group listing -- main queue,
+    cross-artist buckets, and the /dev/canonical listings both read
+    (docs/specs/scoring-H.md §11.1: `impact` retired in favour of score)."""
+    return sorted(groups, key=lambda g: (-g["score"], -len(g["track_ids"]), g["base"]))
 
 
 def _bucket_components(tracks):
@@ -687,7 +697,7 @@ def _make_cross_item(conn, base, bucket, tracks, reviewed_pairs, song_members):
         "track_ids": ids_sorted,
         "new_tracks": new_rows,
         "groups": groups,
-        "impact": sum(tracks[tid]["live_count"] for tid in ids_sorted),
+        "score": scoring.group_score([tracks[tid]["score"] for tid in ids_sorted]),
     }
 
 
@@ -727,7 +737,7 @@ def cross_buckets(conn):
             continue
         bucket = [tid for comp in components for tid in comp]
         items.append(_make_cross_item(conn, base, bucket, tracks, reviewed_pairs, song_members))
-    return sorted(items, key=lambda it: (-it["impact"], -len(it["track_ids"]), it["base"]))
+    return _order(items)
 
 
 # -- Pending tier review (spec E §4.5/§4.6) -----------------------------
@@ -925,7 +935,7 @@ def ad_hoc_group(conn, track_ids):
         "track_ids": ids_sorted,
         "tracks": {tid: _display_fields(tracks[tid]) for tid in ids_sorted},
         "labels": labels,
-        "impact": sum(tracks[tid]["live_count"] for tid in ids_sorted),
+        "score": scoring.group_score([tracks[tid]["score"] for tid in ids_sorted]),
         "pinned_track_id": _pinned_track_id(ids_sorted, tracks),
         "reviewed": None,
         "cross_artist": False,

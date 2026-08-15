@@ -242,8 +242,10 @@ def mark_reviewed(conn, track_ids):
 
 
 def representative(conn, group_id):
-    """The pinned track for a group, or the computed default: most live
-    memberships -> oldest added_at -> lowest track_id."""
+    """The pinned track for a group, or the computed default: highest score
+    (docs/specs/scoring-H.md §11.3) -> oldest added_at -> lowest track_id.
+    Reads the `score` table directly by raw SQL rather than importing
+    scoring.py, which imports this module for ensure_track_groups()."""
     row = conn.execute(
         "SELECT tier, representative_track_id FROM canonical_group WHERE id = ?", (group_id,)
     ).fetchone()
@@ -256,17 +258,17 @@ def representative(conn, group_id):
     members = conn.execute(
         f"""
         SELECT tg.track_id,
-               (SELECT COUNT(*) FROM membership m
-                WHERE m.track_id = tg.track_id AND m.removed_at IS NULL) AS live_count,
+               COALESCE(sc.all_time, 0.0) AS score,
                (SELECT MIN(added_at) FROM membership m WHERE m.track_id = tg.track_id) AS oldest_added
         FROM track_group tg
+        LEFT JOIN score sc ON sc.tier = 'track' AND sc.group_id = tg.track_id
         WHERE tg.{column} = ?
         """,
         (group_id,),
     ).fetchall()
     if not members:
         return None
-    best = min(members, key=lambda r: (-r["live_count"], r["oldest_added"] or "9999", r["track_id"]))
+    best = min(members, key=lambda r: (-r["score"], r["oldest_added"] or "9999", r["track_id"]))
     return best["track_id"]
 
 
@@ -420,24 +422,17 @@ def artist_credits_for_tracks(conn, track_ids):
 
 
 def song_group_rows(conn, query="", include_singletons=False):
-    """Song-tier groups for the /dev/canonical browser -- id, size and playlist
-    impact only -- ordered by impact (summed live memberships) descending.
+    """Song-tier groups for the /dev/canonical browser -- id and size only,
+    unordered. The caller ranks by score (docs/specs/scoring-H.md §11.1) --
+    that needs scoring.py, which imports this module for ensure_track_groups(),
+    so the ranking can't live here without a cycle.
 
-    Deliberately unhydrated. The listing renders a capped slice, and filling in
-    a representative track_display for all 944 groups cost 307ms of that page's
-    800ms only to discard 894 of them. The impact this orders by comes from the
-    aggregate below (39ms), so the ordering never needs the hydration. Pass the
-    slice you actually render to hydrate_song_groups()."""
+    Deliberately unhydrated regardless: the listing renders a capped slice, and
+    filling in a representative track_display for every group cost 307ms of
+    that page's 800ms only to discard most of them. Pass the slice you
+    actually render to hydrate_song_groups()."""
     rows = conn.execute(
-        """
-        SELECT tg.song_id, COUNT(*) AS track_count,
-               COALESCE(SUM(
-                   (SELECT COUNT(*) FROM membership m
-                    WHERE m.track_id = tg.track_id AND m.removed_at IS NULL)
-               ), 0) AS impact
-        FROM track_group tg
-        GROUP BY tg.song_id
-        """
+        "SELECT tg.song_id, COUNT(*) AS track_count FROM track_group tg GROUP BY tg.song_id"
     ).fetchall()
 
     like = f"%{query}%" if query else None
@@ -461,14 +456,7 @@ def song_group_rows(conn, query="", include_singletons=False):
             ).fetchone()
             if not match:
                 continue
-        results.append(
-            {
-                "song_id": song_id,
-                "track_count": row["track_count"],
-                "impact": row["impact"],
-            }
-        )
-    results.sort(key=lambda r: (-r["impact"], r["song_id"]))
+        results.append({"song_id": song_id, "track_count": row["track_count"]})
     return results
 
 

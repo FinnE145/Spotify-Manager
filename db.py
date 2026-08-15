@@ -390,6 +390,23 @@ CREATE TABLE IF NOT EXISTS wanted_uri (
     source       TEXT NOT NULL,
     requested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+-- Materialized scores (docs/specs/scoring-H.md), version/recording/release/
+-- track only -- song, album, artist, playlist and arbitrary collections
+-- aggregate at query time from these (§9.1). group_id is TEXT for both:
+-- track tier stores a track_id verbatim, the other three tiers store
+-- str(canonical_group.id) -- callers CAST(group_id AS INTEGER) when joining
+-- against canonical_group. all_time/recent are display-space numbers (the
+-- post-transform 0-100ish figure, §8) -- "score" means that number
+-- everywhere outside scoring.py itself. Wholesale-replaced by
+-- scoring.recompute(), never upserted row by row (§9.2).
+CREATE TABLE IF NOT EXISTS score (
+    tier       TEXT NOT NULL CHECK (tier IN ('version', 'recording', 'release', 'track')),
+    group_id   TEXT NOT NULL,
+    all_time   REAL NOT NULL,
+    recent     REAL NOT NULL,
+    PRIMARY KEY (tier, group_id)
+);
 """
 
 # Rebuilt whenever the definition here changes (see _ensure_views) rather than

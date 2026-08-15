@@ -17,6 +17,7 @@ per public call.
 
 import canonical
 import canonical_detect
+import scoring
 
 _NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
 
@@ -128,6 +129,7 @@ def run(conn):
         (result["groups_closed"], result["tracks_affected"], run_id),
     )
     conn.commit()
+    scoring.recompute(conn)
     result["run_id"] = run_id
     return result
 
@@ -173,4 +175,5 @@ def undo(conn):
 
     conn.execute(f"UPDATE auto_group_run SET undone_at = {_NOW} WHERE id = ?", (run_id,))
     conn.commit()
+    scoring.recompute(conn)
     return {"run_id": run_id}

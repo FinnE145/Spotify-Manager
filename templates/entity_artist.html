@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, generation_strip %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, generation_strip, score_display %}
 
 {% block title %}Symr — {{ artist.name }}{% endblock %}
 
@@ -14,6 +14,7 @@
         &middot; {{ album_count }} album{{ "s" if album_count != 1 }}
         {% if artist.external_url %} &middot; <a href="{{ artist.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}
       </p>
+      {% if score %}<p class="meta">{{ score_display(score.all_time, score.recent) }}</p>{% endif %}
       {% if merged_ids %}
       <p class="meta">
         Merged id{{ "s" if merged_ids|length != 1 }}: {{ merged_ids|join(", ") }}

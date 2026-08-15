@@ -8,6 +8,7 @@ Read-only w.r.t. Spotify -- no calls here."""
 from collections import defaultdict
 
 import canonical_detect
+import scoring
 
 
 def _pair_key(a, b):
@@ -48,15 +49,11 @@ def _alias_group(conn, artist_id):
 
 
 def _canonical_of(conn, artist_ids):
-    """The id with the most track credits; ties broken by id ascending, so
-    the choice is stable across runs."""
-    counts = {
-        r["artist_id"]: r["n"]
-        for r in conn.execute(
-            "SELECT artist_id, COUNT(*) AS n FROM track_artist GROUP BY artist_id"
-        )
-    }
-    return sorted(artist_ids, key=lambda a: (-counts.get(a, 0), a))[0]
+    """The id with the highest all_time score (docs/specs/scoring-H.md
+    §11.3); ties broken by id ascending, so the choice is stable across
+    runs."""
+    scores = scoring.artist_scores(conn, list(artist_ids))
+    return sorted(artist_ids, key=lambda a: (-scores.get(a, {}).get("all_time", 0.0), a))[0]
 
 
 def mark_same(conn, artist_id_a, artist_id_b):
@@ -77,6 +74,7 @@ def mark_same(conn, artist_id_a, artist_id_b):
     )
     _mark_reviewed(conn, artist_id_a, artist_id_b)
     conn.commit()
+    scoring.recompute(conn)
 
 
 def mark_not_same(conn, artist_id_a, artist_id_b):
@@ -115,6 +113,7 @@ def unmerge(conn, artist_id):
             "DELETE FROM reviewed_artist_pair WHERE artist_id_a = ? AND artist_id_b = ?", (a, b)
         )
     conn.commit()
+    scoring.recompute(conn)
 
 
 # -- Candidate detection -------------------------------------------------
@@ -188,7 +187,15 @@ def candidate_pairs(conn):
                         "b": {**rows[b], "sample_tracks": _sample_tracks(conn, b)},
                     }
                 )
-    pairs.sort(key=lambda p: (p["a"]["name"].casefold(), p["a"]["artist_id"]))
+    # Scored as one 2-artist collection rather than comparing two separate
+    # numbers (docs/specs/scoring-H.md §11.1) -- the combiner doesn't know or
+    # care whether it's combining one artist or several, and "the pair's
+    # score" is the score of everything either one credits.
+    for p in pairs:
+        p["score"] = scoring.artist_group_score(
+            conn, [p["a"]["artist_id"], p["b"]["artist_id"]]
+        )["all_time"]
+    pairs.sort(key=lambda p: (-p["score"], p["a"]["name"].casefold(), p["a"]["artist_id"]))
     return pairs
 
 
