@@ -363,10 +363,10 @@ Deferred. The full inventory is carried in `feature_ideas.md` under *Listening a
 
 **Adoption stagger belongs here, not in scoring.** Moved out of B during B's planning. Distinct add-days ÷ tracks per artist — did an artist arrive gradually or as one discography dump? The original analysis found bulk-added artists survive slightly worse: real, but small. The reason it can't go anywhere near H is that it exists to **discover a mechanism** that drives liking and souring — so feeding it into a score would make the score predict itself. As a descriptive report about how listening actually works, it's interesting; as a scoring input, it's circular.
 
-## M — Cross-artist grouping fix + album backfill
+## M — Grouping-review fixes + album backfill
 
-**Not specced.** Own `/symr-plan` session. Two things in one step because the first is a
-prerequisite for the second.
+**Not specced.** Own `/symr-plan` session. Three things in one step: two review-UI defects
+that both silently produce *wrong groups*, and the backfill that M1 in particular gates.
 
 ### M1 — the `mark_reviewed` bug
 
@@ -390,6 +390,28 @@ title.
 split ISRCs / 9 tracks. Fix direction: mark only the pairs the queue actually asked about
 (newcomer vs existing group members), not pairs internal to the newcomers — and check every
 other `mark_reviewed` caller for the same over-reach.
+
+### M1b — the viewer's selection never clears
+
+`/dev/canonical`'s search results carry checkboxes and a "Group selected" button, backed by
+a `sessionStorage` key (`canonical_viewer_selection`, `static/js/canonical_viewer.js`). That
+key is only ever read and written — **nothing clears it after the selection is used.**
+`canonical_review.js` never touches it either.
+
+So handing a selection to the ad-hoc review queue and applying it leaves those track ids
+still selected for the life of the tab. The next search-and-select silently carries them
+along, and "Group selected" merges the old tracks into the new group. Found 2026-08-14 while
+cleaning up split ISRCs: three already-grouped tracks were dragged into an unrelated
+two-track merge.
+
+The persistence is deliberate and *is* wanted for gathering tracks across several searches —
+it has no completion event, which is the actual defect. The count beside the button does
+show the carried-over total on page load, but it sits below the search results and is easy
+to miss. Manual "Clear selection" is the workaround.
+
+Fix direction: clear the key when "Group selected" hands off (simplest; costs the selection
+if you back out of the review screen), or have `canonical_review.js` clear it on a
+successful ad-hoc apply (more correct, couples the two pages). Either is a couple of lines.
 
 ### M2 — album-tracklist backfill
 
