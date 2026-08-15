@@ -109,13 +109,20 @@ def score_all(rows, prm):
         synth = {k: statistics.median([v[k] for v in mem]) for k in ('R', 'M', 'T')}
         base[b] = raw(synth, prm)
     out = {}
+    k = prm['K_SHRINK']
     for vid, v in rows.items():
-        pull = min(prm['K_SHRINK'] / (v['W'] + prm['K_SHRINK']), prm['SHRINK_MAX'])
+        # k == 0 disables shrinkage outright (the recent horizon, §7.1b) --
+        # guarded rather than computed, since 0/(0+0) is undefined for a
+        # version with no evidence, which is most of the recent window.
+        pull = 0.0 if k <= 0 else min(k / (v['W'] + k), prm['SHRINK_MAX'])
         out[vid] = v['raw'] + pull * (base[v['bucket']] - v['raw'])
     return out, base
 
 
 def combine(scores, p, floor, weights=None):
+    """Weighted power mean (§5.1). `weights` is u_i -- collection membership
+    weight, used for FEATURED_WEIGHT (§5.3). w_i (the tail weight) is derived
+    from the scores themselves."""
     if not scores:
         return 0.0
     smax = max(scores) or 1.0
@@ -128,6 +135,70 @@ def combine(scores, p, floor, weights=None):
 
 def display(s, prm):
     return prm['SCALE'] * (max(s, 0.0) ** prm['GAMMA'])
+
+
+def horizons(conn, prm):
+    """Both horizons, with the recent one blended toward all_time (§7.1a).
+
+    The recent horizon uses the SAME shrinkage parameters as all_time. Its
+    bucket baselines come out at 0.000 because the median version has no
+    activity in a 90-day window -- that is correct, not broken: shrinkage
+    toward an honestly-zero typical value degenerates to a scaling. See
+    §7.1b."""
+    a_rows = fetch(conn, False, prm)
+    r_rows = fetch(conn, True, prm)
+    a_sc, a_base = score_all(a_rows, prm)
+    r_sc, r_base = score_all(r_rows, prm)
+    lam = prm['RECENT_ALLTIME_BLEND']
+    blended = {v: (1 - lam) * r_sc.get(v, 0.0) + lam * a_sc.get(v, 0.0) for v in a_sc}
+    return {'all_time': a_sc, 'recent': blended,
+            'rows': a_rows, 'baselines': {'all_time': a_base, 'recent': r_base}}
+
+
+def subtier_score(version_score, own_score, prm):
+    """§6 -- a recording/release/track blends heavily toward its version."""
+    w = prm['SUBTIER_W']
+    return (1 - w) * version_score + w * own_score
+
+
+def artist_score(conn, artist_id, sc, prm):
+    """§5.3 -- a version reaching an artist only through a featured credit
+    carries FEATURED_WEIGHT rather than 1.0."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT tg.version_id,
+               MIN(CASE WHEN r.role = 'primary' THEN 0 ELSE 1 END) AS featured_only
+        FROM track_group tg
+        JOIN track_artist_role r ON r.track_id = tg.track_id
+        WHERE r.artist_id = ?
+        GROUP BY tg.version_id
+        """,
+        (artist_id,),
+    ).fetchall()
+    scores, weights = [], []
+    for r in rows:
+        if r['version_id'] not in sc:
+            continue
+        scores.append(sc[r['version_id']])
+        weights.append(prm['FEATURED_WEIGHT'] if r['featured_only'] else 1.0)
+    return combine(scores, prm['P_AGG'], prm['TAIL_FLOOR'], weights)
+
+
+def album_score(conn, album_id, sc, prm):
+    """§5.4 -- padded with (total_tracks - known) zero-scoring members."""
+    row = conn.execute(
+        "SELECT total_tracks, (SELECT COUNT(*) FROM track t WHERE t.album_id = ?) AS have "
+        "FROM album WHERE album_id = ?",
+        (album_id, album_id),
+    ).fetchone()
+    versions = [r[0] for r in conn.execute(
+        "SELECT DISTINCT tg.version_id FROM track_group tg "
+        "JOIN track t ON t.track_id = tg.track_id WHERE t.album_id = ?", (album_id,))]
+    scores = [sc[v] for v in versions if v in sc]
+    if not scores:
+        return 0.0
+    pad = max((row['total_tracks'] or 0) - (row['have'] or 0), 0)
+    return combine(scores + [0.0] * pad, prm['P_AGG'], prm['TAIL_FLOOR'])
 
 
 # ---------------------------------------------------------------- validation set
@@ -189,3 +260,36 @@ if __name__ == '__main__':
     for q in (10, 25, 50, 75, 90, 99):
         v = vals[int(len(vals) * q / 100)]
         print(f'  p{q:<3} {v:.4f}   {display(v,P):5.1f}')
+
+    # ---- both horizons, blended (§7.1a / §7.1b) ----
+    H = horizons(conn, P)
+    a, r = H['all_time'], H['recent']
+    print()
+    print('recent horizon: baselines ' + ' '.join(f'{k}={v:.4f}' for k, v in H['baselines']['recent'].items())
+          + '   (zero is correct -- see §7.1b)')
+    print(f'{"artist":16}{"all_time":>10}{"recent":>9}{"drop":>8}')
+    for nm in ('half•alive', 'Schur', 'Mother Mother', 'Balu Brigada', 'Noah Kahan', 'The Weeknd'):
+        row = conn.execute("SELECT artist_id FROM artist WHERE name = ? LIMIT 1", (nm,)).fetchone()
+        if row is None:
+            continue
+        at, rc = artist_score(conn, row[0], a, P), artist_score(conn, row[0], r, P)
+        print(f'{nm:16}{display(at,P):>10.1f}{display(rc,P):>9.1f}{display(at,P)-display(rc,P):>+8.1f}')
+
+    # ---- album padding (§5.4) ----
+    print()
+    print('albums, padded vs unpadded:')
+    for name in ('Supernatural', 'The Attractions Of Youth', 'O My Heart', 'Very Good Bad Thing', 'El Camino'):
+        row = conn.execute(
+            "SELECT album_id, name, total_tracks, (SELECT COUNT(*) FROM track t WHERE t.album_id=a.album_id) have "
+            "FROM album a WHERE a.name LIKE ? AND a.total_tracks >= 4 ORDER BY have DESC LIMIT 1",
+            (f'%{name}%',)).fetchone()
+        if row is None:
+            continue
+        versions = [x[0] for x in conn.execute(
+            "SELECT DISTINCT tg.version_id FROM track_group tg JOIN track t ON t.track_id=tg.track_id "
+            "WHERE t.album_id = ?", (row['album_id'],))]
+        raw_scores = [a[v] for v in versions if v in a]
+        unpadded = combine(raw_scores, P['P_AGG'], P['TAIL_FLOOR'])
+        print(f"  {row['name'][:34]:34} {row['have']:3}/{row['total_tracks']:<3} "
+              f"padded {display(album_score(conn, row['album_id'], a, P), P):5.1f}   "
+              f"unpadded {display(unpadded, P):5.1f}")

@@ -39,8 +39,12 @@ migration-shaped (a full recompute) rather than live-update-shaped, and that is 
 **The tuning was done in the planning session, not deferred to implementation.** Every
 parameter in §10 is settled, with its derivation recorded. The working prototype that
 produced them is kept at `docs/scoring/tuning_prototype.py` — it implements every stage of
-§4–§8 and is the executable reference for this spec. An implementation that disagrees with
-it is wrong, or the prototype is, and the difference must be resolved deliberately.
+§4–§8, including both horizons, the blend, `FEATURED_WEIGHT`, `SUBTIER_W` and album
+padding, and is the executable reference for this spec. An implementation that disagrees
+with it is wrong, or the prototype is, and the difference must be resolved deliberately.
+
+Running it prints the validation-set ordering, both horizons over the artist set, and the
+padded-vs-unpadded album comparison — the three checks that back §2.7, §2.9 and §5.4.
 
 Charts made during tuning were throwaway analysis, so **the project's charting-library
 choice stays deferred to F/G** — nothing here picks one.
@@ -298,10 +302,10 @@ as low as 0.40 without losing anything real.
 |---|---:|---:|---:|---|
 | half•alive | 73.3 | 47.7 | +25.6 | all-time favourite |
 | Schur | 66.2 | **50.1** | **+16.1** | new-ish, currently into |
-| Mother Mother | 67.7 | 33.1 | +34.5 | — |
+| Mother Mother | 67.9 | 33.2 | +34.7 | — |
 | Noah Kahan | 57.9 | **22.8** | **+35.1** | "used to like, now don't at all" |
 | Balu Brigada | 54.4 | 26.3 | +28.1 | soured through over-suggestion |
-| The Weeknd | 48.2 | 18.7 | +29.6 | disliked throughout |
+| The Weeknd | 46.5 | 18.0 | +28.5 | disliked throughout |
 
 Noah Kahan shows the largest drop of any artist tested, landing beside The Weeknd on recent
 while staying respectable on all_time — exactly the souring signature the split exists to
@@ -384,15 +388,31 @@ Per version group `v`, aggregated over its member tracks:
 |---|---|
 | `W` | weighted plays (§4.2) |
 | `E` | exposure in days (§4.3) |
-| `R` | play rate, `W / E` (§4.3) |
+| `R` | play rate **in plays per 30 days**, `30·W / E` (§4.3) |
 | `M` | live membership count across member tracks |
-| `T` | tenure — longest consecutive run of generations (`generations.tenures`) |
+| `T` | the number of distinct generations the version has ever been present in — `generations.tenures()`'s **`total_generations`**, *not* its `tenure` field (§4.1a) |
 
 `M` counts memberships with `removed_at IS NULL` (§0.3). Note `M` is intrinsically
 cumulative: Finn rarely removes tracks or deletes playlists, so memberships accrue and
 almost never decay. That is fine — good and meaningful songs are more likely to be added
 to any given playlist, so it is a real signal — but it means `M` must never be read as a
 *rate* or compared against plays (§4.6).
+
+### 4.1a Which tenure number `T` is
+
+`generations.tenures()` returns two counts per group and they are not the same thing:
+`tenure` is the **longest consecutive run** of generations, `total_generations` is the
+**count of distinct generations** ever present in. They differ only for groups with a gap
+— 22 of ~8,950 version groups (§0.3).
+
+**`T` is `total_generations`.** Two reasons:
+
+1. It is what produced every number in §10.1 and §12 — the prototype computes
+   `COUNT(DISTINCT gp.ordinal)`. Using `tenure` would make the implementation disagree with
+   the executable reference (§12).
+2. `tenure` quietly re-introduces the comeback penalty §0.3 struck. A group present in two
+   non-consecutive generations scores `tenure = 1` — the same as a group present once —
+   which punishes exactly the arbitrary snub §0.3 says must not be encoded.
 
 ### 4.2 Play weight
 
@@ -417,8 +437,22 @@ dividing by zero.
 opportunity is the earlier of its first play and its earliest `added_at`. A version cannot
 have been listened to before it existed in either sense.
 
-`R = W / max(E, MIN_EXPOSURE_DAYS)` — the floor prevents a version first seen yesterday
-from posting an unbounded rate off one play.
+A version with *neither* a play nor an `added_at` has no first opportunity at all; its `E`
+is `MIN_EXPOSURE_DAYS`. This never matters numerically — no plays means `W = 0` means
+`R = 0` at any `E` — but it keeps the formula total.
+
+```
+R = 30 · W / max(E, MIN_EXPOSURE_DAYS)
+```
+
+The floor prevents a version first seen yesterday from posting an unbounded rate off one
+play.
+
+**`R` is plays per 30 days, not per day.** The ×30 is load-bearing and easy to drop: it is
+what puts `R` on the scale `K_RATE = 0.5` is a half-value *for* (§10.1 records the
+distribution as R30 — p50 0.047, p75 0.343, p90 0.96). Implementing `R = W / E` instead
+makes every rate 30× too small, collapses `g(R, K_RATE)` toward zero for the whole library,
+and fails §12's acceptance test.
 
 Rate rather than raw count is what stops new material being punished for not having
 accumulated plays yet. It is the first half of the age-normalization; shrinkage is the
@@ -502,6 +536,13 @@ The buckets, which are exhaustive and mutually exclusive:
 | **A** | `M = 0` — in no playlist at all |
 | **B** | `M > 0` and `T = 0` — in a playlist, never in a current-favs |
 | **C** | `T > 0` — has been in a current-favs generation |
+
+**Buckets are assigned from all-time `M` and `T` on both horizons**, never from the
+windowed values. A version's bucket says what kind of thing it *is* — chosen, curated, or
+never chosen — and that does not change because a 90-day window is in front of it. Assigning
+from windowed inputs would put almost the whole library in bucket A on `recent` (only 3.1%
+have a new membership in the window, §7.1a), shrinking curated and never-chosen material
+toward the same target and destroying the separation the buckets exist for.
 
 They exist because a new song added to a generation playlist is a completely different
 proposition from a new song played once with no memberships, and they should not be pulled
@@ -700,15 +741,40 @@ visible:
 |---|---|---|
 | Plays counted | all | within the window |
 | Memberships counted | all live | those **added** within the window |
-| Tenure | full | generations overlapping the window |
+| Tenure | full | generations that **began** within the window |
 | Exposure `E` | since first opportunity | clamped to the window |
 
 Memberships count by `added_at` inside the window because membership is cumulative — a
 3-year-old add sitting in a stale playlist is not a recent signal, and "live during the
 window" would be nearly every membership ever, which varies not at all.
 
-`all_time` uses shrinkage as specified. `recent` uses little or none — recency is the
-point, and heavy shrinkage would erase exactly what it is meant to surface.
+**Tenure counts generations that began within the window, not generations that overlap it**
+— the same cumulative-signal argument. A generation's start is its earliest live `added_at`,
+which is exactly `generations.generation_spans()`'s `started_at`. The distinction is not
+academic: measured at the 90-day window on 2026-08-14, *began within* gives generations
+{35, 36, 37} while *overlaps* gives {34, 35, 36, 37} — one extra generation on a scale whose
+observed maximum is 10.
+
+### 7.1b Both horizons use the same shrinkage
+
+**`recent` uses the identical `K_SHRINK = 3.0` / `SHRINK_MAX = 0.5` as `all_time`.** There
+is no recent-specific shrink parameter.
+
+(An earlier draft of this section said `recent` should use "little or none". That was
+written before tuning and never settled; every recorded figure in §2.9 and §7.1a was
+produced with the same parameters as `all_time`, and this is the reconciliation.)
+
+**Its bucket baselines all come out at 0.000, and that is correct, not broken.** Baselines
+are the median inputs of each bucket (§4.5), and inside a 90-day window the median version
+has no plays, no new memberships and no tenure — because 86% of the library is inactive
+(§7.1a). So the honest typical value really is zero, and shrinkage toward it degenerates to
+a scaling by `1 − pull`, i.e. between 1× and 2× down. Anyone seeing `A=0.0000 B=0.0000
+C=0.0000` in the prototype output should recognise it as expected.
+
+Disabling shrinkage on `recent` was measured and **rejected**: it lifts half•alive from
+47.7 to 55.0 and Schur from 50.1 to 53.7, flipping them, which puts the all-time favourite
+above the artist Finn identifies as his most current — the wrong answer for a score whose
+entire job is "what should I listen to now".
 
 ### 7.1a The recent horizon is blended with all_time
 
@@ -787,8 +853,15 @@ Requirements on the displayed number:
   push everything else down.
 - **Floored at 0.** Negative scores are not worth having: for something to sit far below
   "never heard it" Finn would have to have heard it a lot to specifically dislike it, and
-  heavy listening is itself a positive signal. In practice the negative band would be so
-  low-magnitude against the positive range that clamping costs nothing.
+  heavy listening is itself a positive signal. **As designed the clamp never fires** — every
+  term of `raw` is non-negative, and shrinkage moves `raw` toward a non-negative baseline, so
+  no score can go below 0. Keep the `max(s, 0)` anyway, as a guard against a future term that
+  can go negative; do not read its presence as evidence that negatives occur today.
+- **The bottom of the *displayed* range is not 0, it is ~11.** A version with no plays, no
+  memberships and no tenure has `raw = 0` and shrinks halfway to bucket A's baseline of
+  0.024, landing at 0.012 → **11.0 displayed** (§12's p10 is 11.7). That is the intended
+  behaviour, not a bug: §4.6 requires absence of evidence to be a partial score rather than
+  a zero.
 - **Not percentile-normalized against the current library.** An absolute scale means a
   score means the same thing across recomputes and across time; a relative one reshuffles
   everything on every rebuild.
@@ -966,11 +1039,22 @@ artist, playlist. A shared macro in `templates/_macros.html`, alongside K's `pla
 
 ### 11.5 Absorb `entities.play_stats`
 
-K's per-entity play read (total / past 30 days / past 7 days over a track set, resolved
-through `played_uri_track`) is deliberately simple and duplicates part of what §4.2
-computes. H's bulk play aggregation absorbs it so there are not two read paths that can
-disagree. `play_stats`'s staleness behaviour must survive: a window whose start predates
-`MAX(play.ts)` renders `—` rather than a lying `0`.
+K's per-entity play read returns **raw play counts** over total / past-30d / past-7d. H
+materializes **scores** over all_time and a 90-day window, from **weighted** plays. Those
+are different quantities over different windows, so "absorb" cannot mean H's table serves
+`play_stats` — there is nothing for it to be absorbed into, and storing raw counts in the
+score table would couple two unrelated things.
+
+**What it does mean:** `play_stats` stays its own query returning its own numbers, but
+shares H's **play-resolution and track-set expansion** — the join through
+`played_uri_track` and the mapping from an entity to its track ids. That is the only place
+the two can genuinely disagree, and disagreeing there would mean one of them counts plays
+for a track the other doesn't. The differing windows and weighting are deliberate and
+should stay.
+
+**The staleness rule is non-negotiable and survives unchanged:** a window whose start
+predates `MAX(play.ts)` renders `—`, never a lying `0`. That behaviour belongs to
+`play_stats` and is independent of anything here.
 
 ---
 
@@ -981,24 +1065,34 @@ Tuning is **done** (§0.2). `docs/scoring/tuning_prototype.py` implements every 
 reference: run it, and the implementation must reproduce its numbers.
 
 The check that matters, and the one verification step that cannot be skipped: **the eleven
-validation collections in §2.7 must come out in the order recorded there**, at 2 inversions
-of 47. If the real implementation disagrees with the prototype, one of them is wrong and
+validation collections in §2.7 must come out in the order recorded there, at 2 inversions
+of 47.** If the real implementation disagrees with the prototype, one of them is wrong and
 the difference must be resolved deliberately rather than by re-tuning until the numbers
 look nice.
 
-Reference output at the settled parameters, `GAMMA = 0.5`:
+**The acceptance test is the ordering and the inversion count — not the exact scores.**
+Scores drift as grouping is curated: merging two version groups changes which tracks pool
+together, so every collection containing them moves slightly. Several figures below already
+shifted by ~0.1 during the split-ISRC cleanup on 2026-08-14. Treat them as a reference
+snapshot, not as fixtures.
+
+Reference output at the settled parameters, `GAMMA = 0.5`, on the DB as of 2026-08-14:
 
 | display | collection | | display | collection |
 |---:|---|---|---:|---|
-| 87.0 | My playlist #134 | | 60.6 | Phoebe Bridgers |
-| 81.8 | My playlist #149 | | 48.2 | The Weeknd |
+| 87.0 | My playlist #134 | | 59.6 | Phoebe Bridgers |
+| 81.8 | My playlist #149 | | 46.5 | The Weeknd |
 | 78.8 | v37.2.1 | | 45.6 | 1984 (noah) |
-| 73.3 | half•alive | | 44.6 | k-poop |
+| 73.3 | half•alive | | 44.7 | k-poop |
 | 69.1 | Indie Rock Mix | | 32.5 | taking my airpods out asap |
 | 66.2 | Schur | | | |
 
-Version-score percentiles as displayed: p10 = 11.7, p25 = 14.4, p50 = 22.3, p75 = 48.8,
+Version-score percentiles as displayed: p10 = 11.7, p25 = 14.4, p50 = 22.3, p75 = 48.9,
 p90 = 74.9, p99 = 84.3.
+
+Phoebe Bridgers and The Weeknd sit ~1–2 points below earlier drafts of this table because
+`FEATURED_WEIGHT` is now actually applied (§5.3); they are the only two collections here
+with featured-only credits. The inversion count is unchanged at 2/47.
 
 Bucket baselines: **A = 0.024, B = 0.074, C = 0.530**. Bucket-A resolution: 3,680 distinct
 scores across 5,412 versions (68%).
@@ -1027,8 +1121,8 @@ frozen, and is not part of this spec.
 ## 14. Verification
 
 - Every version, recording, release and track has a score for both horizons.
-- A version with no plays and no memberships scores at the floor, not below it, and not
-  NULL.
+- A version with no plays, no memberships and no tenure scores **≈11 displayed** (0.012
+  normalized — half of bucket A's 0.024 baseline, §8), not 0 and not NULL.
 - A version with memberships and no plays scores meaningfully above zero and below an
   otherwise-identical version that has plays (§4.6).
 - No ordering site listed in §11.2 has changed order.
