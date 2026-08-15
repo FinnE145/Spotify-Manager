@@ -942,7 +942,11 @@ codebase:
 | `artist_alias` | `artists.py` | merge / unmerge |
 | `generation` | `generations.py` | confirm-generation |
 
-Plus a manual **"recompute now"** button on `/dev`.
+Plus a manual **"recompute now"** button. Built as its own `/dev/scoring` page rather than a
+box on `/dev`, because the button needs somewhere to report back to: it shows the per-tier
+materialized counts and the last run's outcome/duration, and updates both in place against
+`POST /api/scoring/recompute`. On `/dev` it was a form-POST-and-redirect with no feedback,
+so two clicks a second apart were indistinguishable.
 
 **Two write paths are not jobs, and this is why the backstop is mandatory rather than
 belt-and-braces politeness:**
@@ -962,6 +966,34 @@ The backstop, on read:
 
 This cannot be bypassed by a write path nobody remembered, which is the property the
 explicit trigger list can never have on its own.
+
+**Two exceptions, both found in the verify pass, both about not doing the same second of
+work twice.** Each one is a *deferral*, never a suppression — the rule they share is that
+neither advances the remembered `(data_version, fingerprint)` pair past anything a
+recompute hasn't actually covered, so the worst either can do is cause one redundant
+recompute, and neither can skip a real change:
+
+- **A completed recompute tells the backstop what it accounted for.** Otherwise the very
+  next request sees the writes that triggered the recompute and redoes the whole thing:
+  measured at 1208 ms for an explicitly-triggered recompute followed by 1184 ms for the
+  request behind it, i.e. every canonical review action paying ~2.4 s instead of ~1.2 s.
+  The pair is captured **before** the recompute reads its inputs and published only on
+  success. Capturing it first is what makes it safe: anything committed while the recompute
+  runs leaves the real fingerprint ahead of the published one, so the next check still sees
+  a difference. Capturing it afterwards would record that change as already-handled and
+  lose it.
+- **The check is skipped entirely while `jobs.active()`.** All three jobs commit
+  continuously as they run (per playlist, per batch, per chunk) while their page polls
+  status every second, so checking here recomputes the whole library on every poll and
+  fights the job for SQLite's single writer — measured at 1210 ms per poll, for the whole
+  duration of a pull, all of it thrown away since every job ends with a recompute of its
+  own on the success path and both failure paths. Nothing is remembered while deferring, so
+  the first request after the slot is released compares against the same pre-job state and
+  recomputes if the job's own recompute never happened (it raised, the process died
+  mid-run, a future job forgets to call it). Verified by killing a job mid-run with its
+  writes committed and no recompute: the next request recomputed. Staleness is bounded by
+  the job, which is the one window in which scores would be computed from a half-updated
+  library anyway.
 
 **Step 1 requires a dedicated long-lived connection, and will silently not work without
 one.** `PRAGMA data_version` is only defined *relative to the connection it is invoked on*:
@@ -1104,8 +1136,12 @@ the contents of one album or one playlist that keep their native order.
   exists to make this tie-breaking meaningful.
 - **`artists._canonical_choice()`** (`artists.py:59`) — picks which artist id wins a merge,
   currently by raw track count. Becomes score-weighted.
-- **Round-trip work-list ordering** (`roundtrip._WORK_LIST_SQL`, currently by play count) —
-  resolve the uris that matter most first.
+- ~~**Round-trip work-list ordering** (`roundtrip._WORK_LIST_SQL`, currently by play
+  count)~~ — **struck during implementation, left ordering by play count.** The work list is
+  defined by `played_uri_track` *not* resolving (`x.track_id IS NULL`), so every uri on it
+  has no track row and therefore no score, by construction — there is nothing to order by
+  until the uri resolves, at which point it leaves the list. Play count already is "resolve
+  the uris that matter most first" here.
 
 ### 11.4 Rendering
 
@@ -1217,8 +1253,8 @@ frozen, and is not part of this spec.
 - No ordering site listed in §11.2 has changed order.
 - `impact` no longer appears in any ordering path.
 - Score-ordered `representative()` still yields the pinned track where one is pinned.
-- Recompute from a cold `/dev` button completes in the expected order of magnitude (§2.11),
-  and a second run with no intervening writes changes nothing.
+- Recompute from a cold `/dev/scoring` button completes in the expected order of magnitude
+  (§2.11), and a second run with no intervening writes changes nothing.
 - Editing a parameter and recomputing changes scores; editing a parameter *without*
   recomputing is caught by the §9.3 backstop on the next page load.
 - Both horizons render on all eight entity page types.

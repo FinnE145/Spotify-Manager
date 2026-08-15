@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 
 import canonical
 import generations
+import jobs
 from config import DB_PATH
 
 # ============================================================================
@@ -397,12 +398,25 @@ def recompute(conn):
     (ensure_fresh()) below for any path that isn't. Records its own outcome
     for /dev/scoring via recompute_status() either way -- a failure is
     re-raised afterward, so the status is an extra receipt, never the only
-    place the error surfaces."""
+    place the error surfaces.
+
+    On success it also tells the backstop what it just accounted for, so an
+    explicitly-triggered recompute doesn't leave the *next* request seeing
+    the writes that triggered it and redoing the whole thing."""
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     t0 = time.monotonic()
     try:
         canonical.ensure_track_groups(conn)
         conn.commit()
+
+        # What the backstop would see right now, captured BEFORE this
+        # recompute reads its inputs and published only if it succeeds
+        # (_mark_seen below). Taking it first is what makes it safe: anything
+        # committed while the recompute runs leaves the real fingerprint
+        # ahead of the published one, so the next ensure_fresh() sees a
+        # difference and recomputes again. Taking it afterwards would record
+        # that change as already-accounted-for and lose it.
+        observed = _observe()
 
         now = datetime.now(timezone.utc)
         recent_ordinals = _recent_ordinals(conn, now)
@@ -430,6 +444,7 @@ def recompute(conn):
         _record_recompute(started_at, t0, "error", str(e), None)
         raise
     else:
+        _mark_seen(observed)
         _record_recompute(started_at, t0, "ok", None, tier_counts(conn))
 
 
@@ -509,6 +524,31 @@ def _checker():
     return _checker_conn
 
 
+def _observe():
+    """(data_version, fingerprint) read through the checker connection --
+    the pair ensure_fresh() compares against. ~87ms, dominated by the nine
+    COUNT(*)s."""
+    with _backstop_lock:
+        checker = _checker()
+        return (
+            checker.execute("PRAGMA data_version").fetchone()[0],
+            tuple(
+                checker.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in _FINGERPRINT_TABLES
+            ),
+        )
+
+
+def _mark_seen(observed):
+    """Record an _observe() pair as accounted for by a completed recompute.
+    Only ever moves the remembered state to something a recompute has
+    actually covered, so the worst it can do is under-claim and cause one
+    redundant recompute -- never over-claim and skip a real change."""
+    global _last_data_version, _last_fingerprint
+    with _backstop_lock:
+        _last_data_version, _last_fingerprint = observed
+
+
 def ensure_fresh(conn):
     """The read-time backstop (§9.3). Cheap on every call (a ~0.03ms PRAGMA)
     unless some other connection has committed anything at all since the
@@ -520,23 +560,46 @@ def ensure_fresh(conn):
     GET is the one it's mandatory for, not belt-and-braces politeness (see
     the module map's note on this). `conn` is used for the recompute itself
     if one is needed; it is never the checker connection."""
-    global _last_data_version, _last_fingerprint
+    # While a job holds the slot, defer -- do NOT check, and do not remember
+    # anything. All three jobs commit continuously as they run (per playlist,
+    # per batch, per chunk) while their page polls status every second, so
+    # checking here would recompute the whole library on every poll and fight
+    # the job for SQLite's single writer -- all of it thrown away, since every
+    # job ends with a recompute of its own on the success path and both
+    # failure paths.
+    #
+    # This defers the check; it never skips it. Nothing below runs, so the
+    # remembered state stays exactly where it was before the job started: the
+    # first request after the slot is released compares against that same
+    # older state, and recomputes if the job's own recompute never happened
+    # (it raised, the process died mid-run, a future job forgets to call it).
+    # Staleness is bounded by the job, which is the one window in which scores
+    # would be computed from a half-updated library anyway.
+    if jobs.active():
+        return False
+
     needs_recompute = False
+    observed = None
     with _backstop_lock:
         checker = _checker()
         version = checker.execute("PRAGMA data_version").fetchone()[0]
         if version != _last_data_version:
-            _last_data_version = version
             fingerprint = tuple(
                 checker.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in _FINGERPRINT_TABLES
             )
-            if fingerprint != _last_fingerprint:
-                _last_fingerprint = fingerprint
-                needs_recompute = True
+            observed = (version, fingerprint)
+            needs_recompute = fingerprint != _last_fingerprint
 
     if needs_recompute:
+        # recompute() publishes its own _observe() pair, which supersedes
+        # this one -- so nothing is recorded here on the path that recomputes.
         recompute(conn)
+    elif observed is not None:
+        # Something committed, but no scoring input moved (a canvas card, a
+        # pin, an exclude toggle). Remember the new data_version so the next
+        # request is back to the 0.03ms path instead of re-paying the 87ms.
+        _mark_seen(observed)
     return needs_recompute
 
 
