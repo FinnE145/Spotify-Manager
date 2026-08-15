@@ -420,6 +420,28 @@ Fix direction: clear the key when "Group selected" hands off (simplest; costs th
 if you back out of the review screen), or have `canonical_review.js` clear it on a
 successful ad-hoc apply (more correct, couples the two pages). Either is a couple of lines.
 
+### M1c — album names not linked in the canonical listings
+
+K's sweep (`docs/specs/entity-pages-K.md`) missed two spots. `templates/canonical.html`
+renders the album as bare text while the track and artists on the same line are linked:
+
+- **`:217`** — the search-results table (`<td>{{ t.album_name or "" }}</td>`)
+- **`:28`** — the group listing's track line
+
+One-line fix each: `track_display` already selects `album_id` (`canonical.py`) and
+`entity_link` is already imported into that template, so it's
+`entity_link('album', t.album_id, t.album_name)` with a guard for tracks whose album is
+null. No read-path change needed.
+
+**Latent, same area:** 11 sites build entity links with `url_for` directly rather than
+through the `entity_link` macro — `canonical.html:24,215`, `snapshot.html:76,102,130,131`,
+`generations.html:41`. They emit correct URLs today, so nothing is broken, but this is
+precisely the page-to-page drift `entity_link` exists to prevent. **Four other bypasses are
+legitimate and must stay** — `entity_playlist.html:27,42,44` and `generations.html:40` pass
+`generation=1` / `tier=` query params, which `entity_link` has no way to express. Either
+teach the macro to take extra params or leave those four alone deliberately; don't
+"normalise" them by accident.
+
 ### M2 — album-tracklist backfill
 
 Symr holds **9,949 of 55,852 tracks (17.8%)** of the full catalogue of every album it has
