@@ -210,30 +210,41 @@ def collections(conn):
           'WHERE m.playlist_id=? AND m.removed_at IS NULL')
     AR = ('SELECT DISTINCT tg.version_id FROM track_group tg JOIN resolved_track_artist rta '
           'ON rta.track_id=tg.track_id WHERE rta.artist_id=?')
-    return [('My playlist #134', PL, '7mWfK1TSXu6wD7qCV5WsaJ', 'TOP'),
-            ('half•alive', AR, '7sOR7gk6XUlGnxj3p9F54k', 'TOP'),
-            ('v37.2.1', PL, ids['v37'], 'HIGH'),
-            ('My playlist #149', PL, '2vEu5Q0uJDBxgdNU7V9SoK', 'HIGH'),
-            ('Indie Rock Mix', PL, '1T5ntM6oTognvuwWAad2rD', 'MID'),
-            ('Schur', AR, ids['schur'], 'MID'),
-            ('Phoebe Bridgers', AR, '1r1uxoy19fzMxunt3ONAkG', 'MID'),
-            ('The Weeknd', AR, ids['wknd'], 'LOW'),
-            ('1984 (noah)', PL, '474CNZAHx7kDPetrvDBGqC', 'LOW'),
-            ('k-poop', PL, '0qDdsg0DcSNcJOHyxsSdGO', 'LOW'),
-            ('airpods', PL, '4mvmZRmDxdLLiSRhLYlQwH', 'BOTTOM')]
+    return [('My playlist #134', 'playlist', PL, '7mWfK1TSXu6wD7qCV5WsaJ', 'TOP'),
+            ('half•alive', 'artist', AR, '7sOR7gk6XUlGnxj3p9F54k', 'TOP'),
+            ('v37.2.1', 'playlist', PL, ids['v37'], 'HIGH'),
+            ('My playlist #149', 'playlist', PL, '2vEu5Q0uJDBxgdNU7V9SoK', 'HIGH'),
+            ('Indie Rock Mix', 'playlist', PL, '1T5ntM6oTognvuwWAad2rD', 'MID'),
+            ('Schur', 'artist', AR, ids['schur'], 'MID'),
+            ('Phoebe Bridgers', 'artist', AR, '1r1uxoy19fzMxunt3ONAkG', 'MID'),
+            ('The Weeknd', 'artist', AR, ids['wknd'], 'LOW'),
+            ('1984 (noah)', 'playlist', PL, '474CNZAHx7kDPetrvDBGqC', 'LOW'),
+            ('k-poop', 'playlist', PL, '0qDdsg0DcSNcJOHyxsSdGO', 'LOW'),
+            ('airpods', 'playlist', PL, '4mvmZRmDxdLLiSRhLYlQwH', 'BOTTOM')]
 
 
 TIER = {'TOP': 0, 'HIGH': 1, 'MID': 2, 'LOW': 3, 'BOTTOM': 4}
 
 
+def collection_score(conn, kind, pid, versions, sc, prm):
+    """One collection's score. Artists go through artist_score() so their
+    featured-only credits carry FEATURED_WEIGHT (§5.3) -- combining them flat
+    here instead is what made this file print 60.6/48.2 for Phoebe Bridgers /
+    The Weeknd while the spec's §12 recorded the correct 59.6/46.5."""
+    if kind == 'artist':
+        return artist_score(conn, pid, sc, prm)
+    return combine([sc[v] for v in versions if v in sc], prm['P_AGG'], prm['TAIL_FLOOR'])
+
+
 def evaluate(conn, prm, rows=None, members=None):
     rows = rows if rows is not None else fetch(conn, False, prm)
     sc, base = score_all(rows, prm)
+    cols = collections(conn)
     if members is None:
-        members = {nm: [r[0] for r in conn.execute(q, (pid,))] for nm, q, pid, _ in collections(conn)}
-    tiers = {nm: t for nm, _, _, t in collections(conn)}
-    comp = {nm: combine([sc[v] for v in vs if v in sc], prm['P_AGG'], prm['TAIL_FLOOR'])
-            for nm, vs in members.items()}
+        members = {nm: [r[0] for r in conn.execute(q, (pid,))] for nm, _, q, pid, _ in cols}
+    tiers = {nm: t for nm, _, _, _, t in cols}
+    comp = {nm: collection_score(conn, kind, pid, members[nm], sc, prm)
+            for nm, kind, _, pid, _ in cols}
     order = sorted(comp.items(), key=lambda kv: -kv[1])
     inv = pairs = 0
     for i in range(len(order)):

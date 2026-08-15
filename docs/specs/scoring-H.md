@@ -46,6 +46,19 @@ with it is wrong, or the prototype is, and the difference must be resolved delib
 Running it prints the validation-set ordering, both horizons over the artist set, and the
 padded-vs-unpadded album comparison — the three checks that back §2.7, §2.9 and §5.4.
 
+**Two things it implements but does not check**, so nobody reads more assurance into a clean
+run than is there:
+
+- `subtier_score()` (§6) is defined and never called. There is nothing to call it *with*
+  until the real sub-tier scores exist, and §10.1 already records `SUBTIER_W` as the one
+  parameter set on principle rather than measured.
+- The album stage prints the per-album padded-vs-unpadded pair, which is what §5.4's worked
+  examples quote (O My Heart 79.8 → 69.4, Very Good Bad Thing 71.3 → 62.0, both reproduced
+  exactly). It does **not** compute §5.4's headline correlation against Finn's canvas
+  fractions (+0.854 padded vs +0.530 unpadded) — that came from throwaway analysis and the
+  fractions are not in the DB. Treat those two numbers as recorded history, not as something
+  a run re-verifies.
+
 Charts made during tuning were throwaway analysis, so **the project's charting-library
 choice stays deferred to F/G** — nothing here picks one.
 
@@ -125,6 +138,14 @@ The invariant that constrains all of it: **absence of plays is never negative ev
 
 Measured **2026-08-14** against the real `symr.db`. Don't re-derive these; don't trust a
 number that contradicts them without re-measuring.
+
+**These are a snapshot of a live, drifting database.** Curation moves them continuously —
+grouping a pair merges two version groups into one, a pull adds tracks, and §2.10's seven
+deleted `reviewed_pair` rows re-opened groupings that have since changed. A later reader
+finding version groups at 8,945 rather than 8,950, or bucket A at 5,406 rather than 5,434,
+is seeing normal drift of a few tens of rows, **not** a bug and not grounds for re-measuring
+the whole section. Only a discrepancy of a different order of magnitude means something
+broke.
 
 ### 2.1 Library state
 
@@ -488,7 +509,7 @@ each one legible: `K_MEM = 4` says "four memberships is a middling membership sc
 **On the weights, one trap worth recording.** Fitting `W_RATE`/`W_MEM`/`W_TEN` against the
 validation set (§2.7) drives `W_RATE` to **0**, because that set is mostly playlists and
 playlist tiers are defined by membership — textbook target leakage. Taking it would be
-catastrophic: with `W_RATE = 0`, all 5,412 bucket-A versions have `M = T = 0` and collapse
+catastrophic: with `W_RATE = 0`, all 5,434 bucket-A versions have `M = T = 0` and collapse
 to **one identical score**, making 60% of the library a single undifferentiated blob, which
 the tier metric cannot see. The weights are therefore set structurally, not by fitting:
 rate must carry enough to resolve the never-added majority (68% distinct at `W_RATE = 0.40`),
@@ -755,30 +776,9 @@ academic: measured at the 90-day window on 2026-08-14, *began within* gives gene
 {35, 36, 37} while *overlaps* gives {34, 35, 36, 37} — one extra generation on a scale whose
 observed maximum is 10.
 
-### 7.1b Both horizons use the same shrinkage
-
-**`recent` uses the identical `K_SHRINK = 3.0` / `SHRINK_MAX = 0.5` as `all_time`.** There
-is no recent-specific shrink parameter.
-
-(An earlier draft of this section said `recent` should use "little or none". That was
-written before tuning and never settled; every recorded figure in §2.9 and §7.1a was
-produced with the same parameters as `all_time`, and this is the reconciliation.)
-
-**Its bucket baselines all come out at 0.000, and that is correct, not broken.** Baselines
-are the median inputs of each bucket (§4.5), and inside a 90-day window the median version
-has no plays, no new memberships and no tenure — because 86% of the library is inactive
-(§7.1a). So the honest typical value really is zero, and shrinkage toward it degenerates to
-a scaling by `1 − pull`, i.e. between 1× and 2× down. Anyone seeing `A=0.0000 B=0.0000
-C=0.0000` in the prototype output should recognise it as expected.
-
-Disabling shrinkage on `recent` was measured and **rejected**: it lifts half•alive from
-47.7 to 55.0 and Schur from 50.1 to 53.7, flipping them, which puts the all-time favourite
-above the artist Finn identifies as his most current — the wrong answer for a score whose
-entire job is "what should I listen to now".
-
 ### 7.1a The recent horizon is blended with all_time
 
-A pure 90-day window leaves **7,697 of 8,954 versions (86%) scoring exactly 0** — only
+A pure 90-day window leaves **7,697 of 8,950 versions (86%) scoring exactly 0** — only
 13.7% have a play in the window and 3.1% a new membership. That is not wrong (zero *is* the
 honest recent activity of a song untouched for three months) but it produces one enormous
 tie with no internal order, and renders as a flat 0 on most entity pages.
@@ -801,11 +801,32 @@ multiply-add on two numbers already in hand), whereas decay requires re-deriving
 play aggregation with per-play weights; and tenure does not decay cleanly, since generations
 are discrete and irregular (22–151 days), so a half-life over generation *age* runs straight
 into §2.5's finding that generations are not proportional to time. The window sidesteps that
-because "generations overlapping the window" is unambiguous.
+because "generations that began within the window" is unambiguous.
 
 **Known consequence:** this makes the two horizons correlated by construction. That is
 wanted here — it is what gives old favourites their edge — but they are no longer
 independent views of the library.
+
+### 7.1b Both horizons use the same shrinkage
+
+**`recent` uses the identical `K_SHRINK = 3.0` / `SHRINK_MAX = 0.5` as `all_time`.** There
+is no recent-specific shrink parameter.
+
+(An earlier draft of this section said `recent` should use "little or none". That was
+written before tuning and never settled; every recorded figure in §2.9 and §7.1a was
+produced with the same parameters as `all_time`, and this is the reconciliation.)
+
+**Its bucket baselines all come out at 0.000, and that is correct, not broken.** Baselines
+are the median inputs of each bucket (§4.5), and inside a 90-day window the median version
+has no plays, no new memberships and no tenure — because 86% of the library is inactive
+(§7.1a). So the honest typical value really is zero, and shrinkage toward it degenerates to
+a scaling by `1 − pull`, i.e. between 1× and 2× down. Anyone seeing `A=0.0000 B=0.0000
+C=0.0000` in the prototype output should recognise it as expected.
+
+Disabling shrinkage on `recent` was measured and **rejected**: it lifts half•alive from
+47.7 to 55.0 and Schur from 50.1 to 53.7, flipping them, which puts the all-time favourite
+above the artist Finn identifies as his most current — the wrong answer for a score whose
+entire job is "what should I listen to now".
 
 ### 7.2 The window
 
@@ -900,6 +921,12 @@ A whole-library pass is about a second (§2.11). Targeted per-row updates would 
 and cost exactly the robustness that matters here — every targeted path is a path someone
 forgets. **Recompute everything, every time.**
 
+**Recompute replaces the table wholesale** — clear it and re-insert, in one transaction,
+rather than upserting row by row. Grouping changes destroy group ids (merging two version
+groups leaves one of them referenced by nothing), and an upsert would leave those rows
+behind forever as scores for entities that no longer exist. Clearing is also what makes a
+recompute idempotent, which §14 tests.
+
 ### 9.3 Triggers, and the backstop that makes them unnecessary to get right
 
 Every job that mutates an input ends by recomputing. Traced against every write site in the
@@ -935,6 +962,37 @@ The backstop, on read:
 
 This cannot be bypassed by a write path nobody remembered, which is the property the
 explicit trigger list can never have on its own.
+
+**Step 1 requires a dedicated long-lived connection, and will silently not work without
+one.** `PRAGMA data_version` is only defined *relative to the connection it is invoked on*:
+two reads of it are comparable only when both happen on the same connection, and it never
+moves for that connection's own writes. `db.get_db()` builds a **fresh connection per
+request** ([db.py:563](../../db.py), closed at teardown), so comparing its value across two
+page loads compares two unrelated numbers — SQLite documents that as meaningless, and it
+would fail open or closed unpredictably rather than erroring.
+
+So the check owns **one module-level connection in the scoring module**, opened once per
+process, used for nothing but this pragma, `check_same_thread=False`, guarded by a module
+lock (the same single-lock idiom `jobs.py` already uses), and left in autocommit so it never
+pins the WAL.
+
+That is not a workaround — it is what makes the backstop work as designed. Because the
+checker connection is never the writer, every real writer (per-request `get_db()`
+connections, job threads' `connect()`) is "another connection" from its point of view, so
+its commits *are* visible. That includes `ensure_track_groups()` writing on a request's own
+connection — the exact path this backstop exists for, and the one a per-request connection
+could never have seen.
+
+The rejected alternative, for the record: a version counter persisted in `meta` that every
+writer bumps. It reintroduces precisely what the backstop exists to eliminate — a write path
+someone forgets to instrument.
+
+**The fingerprint's table list** is the union of the trigger table above: `play`,
+`membership`, `track`, `track_uri_alias`, `track_group`, `canonical_group`, `reviewed_pair`,
+`artist_alias`, `generation` — nine, not the eight §2.11 says. `reviewed_pair` cannot move a
+score on its own (it records that a pair was judged, not how tracks group); it stays in the
+list because it is written in the same breath as `track_group` and an occasional redundant
+recompute costs a second.
 
 ---
 
@@ -995,7 +1053,7 @@ Score replaces the current ordering at each of these:
 | site | today |
 |---|---|
 | `/dev/canonical` viewer listing (`canonical.song_group_rows`) | `impact` |
-| Canonical review queue and cross-artist buckets (3 sites in `canonical_detect.py`) | `impact` |
+| Canonical review queue and cross-artist buckets (`canonical_detect.py`, see below) | `impact` |
 | Entity **group** page member-track list (`app.py:157`) | name |
 | Artist page track list (`app.py:412`) | name |
 | Artist page album list (`app.py:418`) | name |
@@ -1011,6 +1069,23 @@ they currently return the alphabetically-first N rather than the best N. L
 
 **`impact` is retired** once these land. It was the summed live-membership count, used as
 a stand-in for exactly this score.
+
+Retiring it is three distinct jobs, and the second and third are easy to miss:
+
+1. **The ordering key.** In `canonical_detect.py` this is *one* key written twice — the
+   helper `_order()` ([canonical_detect.py:530](../../canonical_detect.py), five callers)
+   and a byte-identical inline `sorted(...)` at
+   [canonical_detect.py:730](../../canonical_detect.py). **Fold the inline one into
+   `_order()` first**, so switching to score is a one-line change in one place instead of
+   two that can silently drift apart. `canonical.song_group_rows` is the other site.
+2. **The `impact` value itself**, still computed in `canonical_detect.py` at three places
+   (`sum(tracks[tid]["live_count"] …)`) and selected in `song_group_rows`'s aggregate. Drop
+   these once nothing sorts on them.
+3. **The rendered text.** `impact` is *user-visible* in three templates —
+   `canonical.html`'s leaf-meta line, `_canonical_cross.html`'s group heading, and
+   `_macros.html`'s `listing_cap_note` ("Showing the top N of M by impact"). These must
+   change with it, using §11.4's macro rather than a hand-rolled number, or the pages will
+   keep claiming an ordering they no longer use.
 
 ### 11.2 Order that must NOT change
 
@@ -1036,6 +1111,20 @@ the contents of one album or one playlist that keep their native order.
 
 Both horizons render on every entity page: group pages (all four tiers), track, album,
 artist, playlist. A shared macro in `templates/_macros.html`, alongside K's `play_stats`.
+
+**One macro is the whole design system for this.** There is no separate styling exercise:
+because every site renders through the same macro, a score looks the same everywhere by
+construction, which is the only consistency worth having here (`entity_link` earns its keep
+the same way). It takes both horizons and renders the ones it is given:
+
+- **Entity pages** — `score 73 · recent 48`.
+- **Listings**, wherever `impact N` appears today — `score 73`. One number, because the
+  rows are dense and all-time is the sort key there.
+
+Both spelled out in words rather than a bare number or a symbol: the figure is unbounded and
+on no familiar scale, so an unlabelled `73` beside a track name reads as a play count, a
+duration or a percentage. This is the `Live#` lesson — a compact label nobody can decode is
+worse than a slightly longer one that needs no explanation.
 
 ### 11.5 Absorb `entities.play_stats`
 
@@ -1095,7 +1184,7 @@ Phoebe Bridgers and The Weeknd sit ~1–2 points below earlier drafts of this ta
 with featured-only credits. The inversion count is unchanged at 2/47.
 
 Bucket baselines: **A = 0.024, B = 0.074, C = 0.530**. Bucket-A resolution: 3,680 distinct
-scores across 5,412 versions (68%).
+scores across 5,434 versions (68%).
 
 **The prototype is kept, not deleted**, matching the convention every `scripts/` one-off
 follows. It is the only evidence for *why* the parameters are what they are, which is
