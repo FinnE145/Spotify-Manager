@@ -386,10 +386,17 @@ memberships on the other. "Love Stuck" survived only because no other artist sha
 title.
 
 **Measured 2026-08-14:** 10 of 775 multi-track ISRCs split across version groups, 21 tracks
-(0.2%). Seven `reviewed_pair` rows were cleared and re-reviewed by hand that day, leaving 4
-split ISRCs / 9 tracks. Fix direction: mark only the pairs the queue actually asked about
-(newcomer vs existing group members), not pairs internal to the newcomers — and check every
-other `mark_reviewed` caller for the same over-reach.
+(0.2%). Seven `reviewed_pair` rows were cleared and re-reviewed by hand that day. Fix
+direction: mark only the pairs the queue actually asked about (newcomer vs existing group
+members), not pairs internal to the newcomers — and check every other `mark_reviewed`
+caller for the same over-reach.
+
+**Not every split ISRC is a defect — ISRC alone is not a safe merge key.** `QZ8GX1702008`
+is held by *both* "Blanks" (Night Cap, 3:23) and "Secrets" (George Barnett, 3:36) — two
+unrelated songs on different albums, an upstream distributor collision. E's auto-group rule
+(same ISRC **and** identical normalized title **and** duration within 2s) correctly refused
+it; any single one of those guards alone would have merged them. Measured collision rate
+~1 in 775. So of the 10 splits, 9 were real and 1 was correct behaviour.
 
 ### M1b — the viewer's selection never clears
 
