@@ -516,6 +516,39 @@ def _cross_component_reviewed(reviewed_pairs, components):
     return True
 
 
+def cross_component_pairs(conn, track_ids):
+    """Every unordered pair from track_ids whose two tracks fall in
+    *different* artist-overlap components -- the exact set of pairs
+    _cross_component_reviewed checks, and so the exact set that needs
+    writing to settle a cross-artist bucket (spec M §1.2). Nothing else:
+    within-component pairs are the main queue's job.
+
+    Shares _group_by_rule with _bucket_components rather than
+    re-implementing the union-find -- if the two ever disagreed about what a
+    component is, a bucket could fail to settle and resurface forever.
+
+    Reads artists.artist_sets(conn) directly instead of going through
+    _fetch_tracks (~350ms, whole-library): that's where _fetch_tracks gets
+    artist_ids from anyway, so this is cheaper and exactly equivalent.
+    """
+    ids = sorted(set(track_ids))
+    artist_sets = artists.artist_sets(conn)
+    empty = {"artist_ids": set(), "primary_ids": set(), "featured_ids": set()}
+
+    def artist_ids(tid):
+        return artist_sets.get(tid, empty)["artist_ids"]
+
+    components = _group_by_rule(ids, lambda a, b: bool(artist_ids(a) & artist_ids(b)))
+    component_of = {tid: i for i, comp in enumerate(components) for tid in comp}
+
+    return [
+        _pair_key(ids[i], ids[j])
+        for i in range(len(ids))
+        for j in range(i + 1, len(ids))
+        if component_of[ids[i]] != component_of[ids[j]]
+    ]
+
+
 # -- Candidate groups ---------------------------------------------------
 
 

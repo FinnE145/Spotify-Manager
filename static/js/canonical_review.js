@@ -3,6 +3,11 @@
     return fetch(path, options).then((r) => r.json());
   }
 
+  // Written by static/js/canonical_viewer.js -- cleared here, once, on a
+  // successful ad-hoc apply (spec M §1b). Backing out of the review screen
+  // must not cost the selection, so nothing clears it before then.
+  const VIEWER_SELECTION_KEY = "canonical_viewer_selection";
+
   const TIERS = ["song", "version", "recording", "release"]; // coarsest -> finest
   const TIER_ABBR = { song: "S", version: "V", recording: "R", release: "L" };
   const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777"];
@@ -281,6 +286,11 @@
       if (result.error) {
         showError(result.detail || result.error);
         return;
+      }
+      // Ad-hoc only (?tracks=): a main- or pending-queue session didn't come
+      // from a viewer selection and has nothing to complete.
+      if (queryParams().has("tracks")) {
+        sessionStorage.removeItem(VIEWER_SELECTION_KEY);
       }
       committedCount += 1;
       committedKeys.add(item.key);

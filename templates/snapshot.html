@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, generation_confirm_banner %}
+{% from "_macros.html" import datetime_span, generation_confirm_banner, entity_link %}
 
 {% block title %}Symr — Snapshot{% endblock %}
 
@@ -73,7 +73,7 @@
         {% for p in playlists %}
         <tr class="{{ 'unfollowed' if p.unfollowed_at }}" {% if p.last_pull_error %}data-uncapturable="1"{% endif %}>
           <td>{% if p.image_url %}<img class="cover" src="{{ p.image_url }}" alt="">{% endif %}</td>
-          <td><a href="{{ url_for('playlist_page', playlist_id=p.playlist_id) }}">{{ p.name }}</a></td>
+          <td>{{ entity_link('playlist', p.playlist_id, p.name) }}</td>
           <td>{{ p.owner or "" }}</td>
           <td>{{ p.track_count if p.track_count is not none else "" }}</td>
           <td>{{ datetime_span(p.last_changed_at) }}</td>
@@ -99,7 +99,7 @@
       <ul>
         {% for t in track_matches %}
         <li>
-          <a href="{{ url_for('track_page', track_id=t.track_id) }}">{{ t.name }}</a>
+          {{ entity_link('track', t.track_id, t.name) }}
           — {{ t.artists }} ({{ t.appearances }} playlist{{ "s" if t.appearances != 1 else "" }})
         </li>
         {% endfor %}
@@ -127,8 +127,8 @@
         <tr>
           <td>{{ datetime_span(c.event_at) }}</td>
           <td>{{ c.kind }}</td>
-          <td><a href="{{ url_for('track_page', track_id=c.track_id) }}">{{ c.track_name }}</a> — {{ c.artists }}</td>
-          <td><a href="{{ url_for('playlist_page', playlist_id=c.playlist_id) }}">{{ c.playlist_name }}</a></td>
+          <td>{{ entity_link('track', c.track_id, c.track_name) }} — {{ c.artists }}</td>
+          <td>{{ entity_link('playlist', c.playlist_id, c.playlist_name) }}</td>
         </tr>
         {% endfor %}
       </tbody>

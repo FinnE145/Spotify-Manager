@@ -225,20 +225,27 @@ def apply_partition(conn, labels, cleanup=True):
     return {"tracks": tracks, "dragged_in": sorted(dragged_in)}
 
 
+def mark_reviewed_pairs(conn, pairs):
+    """Inserts each given (track_id_a, track_id_b) pair into reviewed_pair,
+    refreshing decided_at on conflict. The pair-level writer -- callers that
+    mean "every pair in this bucket" go through mark_reviewed() below;
+    callers that mean something narrower (e.g. cross-component pairs only,
+    see canonical_detect.cross_component_pairs) call this directly."""
+    for a, b in pairs:
+        conn.execute(
+            """
+            INSERT INTO reviewed_pair (track_id_a, track_id_b, decided_at)
+            VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            ON CONFLICT(track_id_a, track_id_b) DO UPDATE SET decided_at = excluded.decided_at
+            """,
+            (a, b),
+        )
+
+
 def mark_reviewed(conn, track_ids):
-    """Inserts every unordered pair from track_ids into reviewed_pair,
-    refreshing decided_at on conflict."""
+    """Inserts every unordered pair from track_ids into reviewed_pair."""
     ids = sorted(set(track_ids))
-    for i, a in enumerate(ids):
-        for b in ids[i + 1 :]:
-            conn.execute(
-                """
-                INSERT INTO reviewed_pair (track_id_a, track_id_b, decided_at)
-                VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-                ON CONFLICT(track_id_a, track_id_b) DO UPDATE SET decided_at = excluded.decided_at
-                """,
-                (a, b),
-            )
+    mark_reviewed_pairs(conn, [(ids[i], ids[j]) for i in range(len(ids)) for j in range(i + 1, len(ids))])
 
 
 def representative(conn, group_id):

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, generation_confirm_banner %}
+{% from "_macros.html" import datetime_span, generation_confirm_banner, entity_link %}
 
 {% block title %}Symr — Generations{% endblock %}
 
@@ -37,8 +37,8 @@
       <tbody>
         {% for g in gens %}
         <tr>
-          <td><a href="{{ url_for('playlist_page', playlist_id=g.playlist_id, generation=1) }}">Generation {{ g.ordinal }}</a></td>
-          <td><a href="{{ url_for('playlist_page', playlist_id=g.playlist_id) }}">{{ g.name }}</a></td>
+          <td>{{ entity_link('playlist', g.playlist_id, 'Generation ' ~ g.ordinal, {'generation': 1}) }}</td>
+          <td>{{ entity_link('playlist', g.playlist_id, g.name) }}</td>
           <td>{{ datetime_span(g.started_at) }} &ndash; {{ datetime_span(g.ended_at) if g.ended_at else "ongoing" }}</td>
           <td>{{ g.group_count }}</td>
           <td>{{ g.carried_in }} carried / {{ g.new_in }} new</td>

@@ -44,18 +44,26 @@
 
 {# One way to link every entity kind, so it can't drift page to page. song/
    version/recording/release all take a group_id; the rest take their own
-   named id, matching each route's own URL parameter. #}
-{% macro entity_link(kind, id, text) -%}
+   named id, matching each route's own URL parameter.
+
+   params is an optional mapping splatted into url_for -- e.g.
+   entity_link('playlist', p.id, p.name, {'generation': 1}) -- for the
+   handful of sites that need a query param the plain three-arg form can't
+   express. css_class is likewise optional, for the couple of sites (the
+   entity_playlist.html tier toggles) that need an active-state class on the
+   <a> itself; every branch always emits the attribute, empty or not, same as
+   those sites did before they went through this macro. #}
+{% macro entity_link(kind, id, text, params={}, css_class='') -%}
 {%- if kind == 'track' -%}
-<a href="{{ url_for('track_page', track_id=id) }}">{{ text }}</a>
+<a href="{{ url_for('track_page', track_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
 {%- elif kind == 'album' -%}
-<a href="{{ url_for('album_page', album_id=id) }}">{{ text }}</a>
+<a href="{{ url_for('album_page', album_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
 {%- elif kind == 'artist' -%}
-<a href="{{ url_for('artist_page', artist_id=id) }}">{{ text }}</a>
+<a href="{{ url_for('artist_page', artist_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
 {%- elif kind == 'playlist' -%}
-<a href="{{ url_for('playlist_page', playlist_id=id) }}">{{ text }}</a>
+<a href="{{ url_for('playlist_page', playlist_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
 {%- else -%}
-<a href="{{ url_for(kind ~ '_page', group_id=id) }}">{{ text }}</a>
+<a href="{{ url_for(kind ~ '_page', group_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
 {%- endif -%}
 {%- endmacro %}
 

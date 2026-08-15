@@ -25,7 +25,7 @@
       {% if generation %}
       <p class="meta">
         Generation {{ generation.ordinal }}
-        &middot; <a href="{{ url_for('playlist_page', playlist_id=playlist.playlist_id, generation=1) }}">View generation details &rarr;</a>
+        &middot; {{ entity_link('playlist', playlist.playlist_id, 'View generation details &rarr;'|safe, {'generation': 1}) }}
       </p>
       {% endif %}
     </div>
@@ -40,9 +40,9 @@
       &middot; {{ gen_view.survived_out if gen_view.survived_out is not none else "—" }} survived into the next generation
     </p>
     <p class="toggle-links">
-      <a href="{{ url_for('playlist_page', playlist_id=playlist.playlist_id, generation=1, tier='version') }}" class="{{ 'active' if gen_view.tier == 'version' }}">Version</a>
+      {{ entity_link('playlist', playlist.playlist_id, 'Version', {'generation': 1, 'tier': 'version'}, 'active' if gen_view.tier == 'version' else '') }}
       &middot;
-      <a href="{{ url_for('playlist_page', playlist_id=playlist.playlist_id, generation=1, tier='song') }}" class="{{ 'active' if gen_view.tier == 'song' }}">Song</a>
+      {{ entity_link('playlist', playlist.playlist_id, 'Song', {'generation': 1, 'tier': 'song'}, 'active' if gen_view.tier == 'song' else '') }}
       <span class="meta">&mdash; tier</span>
     </p>
 

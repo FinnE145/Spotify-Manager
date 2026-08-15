@@ -977,10 +977,13 @@ def create_app():
                     (track_id,),
                 )
 
-        # Every pair in the bucket, assigned or not -- "none of these are
-        # related" is a decision, and it's what stops the bucket resurfacing
-        # until another newcomer arrives.
-        canonical.mark_reviewed(conn, track_ids)
+        # Cross-component pairs only, not every pair in the bucket -- that's
+        # the exact set _cross_component_reviewed checks, so it's what stops
+        # the bucket resurfacing until another newcomer arrives. A
+        # within-component pair (same-artist tracks) is the main queue's
+        # job: marking it here would suppress it from ever being asked there
+        # (spec M §1).
+        canonical.mark_reviewed_pairs(conn, canonical_detect.cross_component_pairs(conn, track_ids))
         conn.commit()
         scoring.recompute(conn)
         return jsonify({"ok": True})
