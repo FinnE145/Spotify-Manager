@@ -74,8 +74,8 @@ def summary_counts(conn):
             "SELECT COUNT(*) FROM membership WHERE removed_at IS NULL"
         ).fetchone()[0],
         "backfill_pending": backfill_pending(conn),
-        "last_full_pull_at": _get_meta(conn, "last_full_pull_at"),
-        "last_refresh_at": _get_meta(conn, "last_refresh_at"),
+        "last_full_pull_at": db.get_meta(conn, "last_full_pull_at"),
+        "last_refresh_at": db.get_meta(conn, "last_refresh_at"),
     }
 
 
@@ -164,7 +164,7 @@ def _run_pull(force_all):
                 conn.rollback()
                 _record_failure(conn, LIKED_PLAYLIST_ID, "Liked Songs", e)
 
-        _set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", jobs.now_iso())
+        db.set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", jobs.now_iso())
         canonical.ensure_track_groups(conn)
         conn.commit()
         scoring.recompute(conn)
@@ -767,19 +767,3 @@ def _pull_liked_songs(conn, sp):
     _ensure_liked_playlist_row(conn, owner_name)
     items = _fetch_liked_items(sp)
     _apply_playlist_items(conn, LIKED_PLAYLIST_ID, items)
-
-
-# -- Meta key/value store -------------------------------------------------
-
-
-def _set_meta(conn, key, value):
-    conn.execute(
-        "INSERT INTO meta (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
-
-
-def _get_meta(conn, key):
-    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else None

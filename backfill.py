@@ -1,0 +1,262 @@
+"""Album backfill (docs/specs/grouping-fixes-backfill-M.md §4): a fourth
+background job, alongside snapshot / history_import / roundtrip. It fetches
+tracklists for unsettled albums in the most recent N generations and queues
+their unowned uris into the round-trip's existing work list -- an ingest
+route, nothing more. No chaining into the round-trip or auto-group.
+
+Nothing here is checkpointed (§4.2): "settled" and "handled" are derived
+fresh from track/wanted_uri/generation_presence every time, so clearing the
+backfill queue is a free, complete undo, and re-clicking a button after a
+partial run simply picks up wherever it left off."""
+
+import json
+from collections import defaultdict
+
+import canonical
+import db
+import entities
+import generations
+import jobs
+from jobs import RateLimited
+from spotify_client import get_spotify_client
+
+_status = jobs.JobStatus(
+    "backfill",
+    phase=None,  # "working" | "done" | "stopped" | "error"
+    generations=None,  # which button was clicked (2 or 7); survives into the terminal state
+    ordinals=None,  # the ordinals actually chosen, for display
+    albums_total=0,
+    albums_done=0,
+    current_album=None,
+    uris_queued=0,
+    requests=0,
+    started_at=None,
+    finished_at=None,
+    error=None,
+    retry_at=None,
+    outcome=None,  # "completed" | "stopped" | "rate_limited" | "error"
+)
+
+
+def get_status():
+    status = _status.get()
+    status["stopping"] = status["running"] and jobs.stop_requested()
+    return status
+
+
+def start(n_generations):
+    return jobs.try_start("backfill", _run, n_generations)
+
+
+# -- The derived model (§4.2) -------------------------------------------
+
+
+def _settled_map(conn):
+    """album_id -> settled, where settled means missing(A) <= 0:
+    total_tracks - owned(A) - queued(A), and queued(A) only counts
+    wanted_uri rows for A that are still unresolved. Three cheap aggregates,
+    combined in Python rather than a per-album correlated query."""
+    owned = {
+        r["album_id"]: r["n"]
+        for r in conn.execute(
+            "SELECT album_id, COUNT(*) AS n FROM track "
+            "WHERE album_id IS NOT NULL GROUP BY album_id"
+        )
+    }
+    queued = {
+        r["album_id"]: r["n"]
+        for r in conn.execute(
+            "SELECT w.album_id AS album_id, COUNT(*) AS n FROM wanted_uri w "
+            "LEFT JOIN played_uri_track x ON x.uri = w.uri "
+            "WHERE w.album_id IS NOT NULL AND x.track_id IS NULL "
+            "GROUP BY w.album_id"
+        )
+    }
+    settled = {}
+    for row in conn.execute("SELECT album_id, total_tracks FROM album"):
+        missing = (row["total_tracks"] or 0) - owned.get(row["album_id"], 0) - queued.get(
+            row["album_id"], 0
+        )
+        settled[row["album_id"]] = missing <= 0
+    return settled
+
+
+def _unhandled_ordinals_desc(conn, settled):
+    """Generation ordinals, descending, that are NOT handled: at least one
+    album with a track present in that generation is unsettled. An ordinal
+    with no album-bearing tracks at all is vacuously handled and excluded."""
+    by_ordinal = defaultdict(set)
+    for row in conn.execute(
+        "SELECT DISTINCT gp.ordinal, t.album_id FROM generation_presence gp "
+        "JOIN track t ON t.track_id = gp.track_id WHERE t.album_id IS NOT NULL"
+    ):
+        by_ordinal[row["ordinal"]].add(row["album_id"])
+
+    all_ordinals = [
+        row["ordinal"]
+        for row in conn.execute("SELECT ordinal FROM generation ORDER BY ordinal DESC")
+    ]
+    return [
+        o for o in all_ordinals if not all(settled.get(aid, False) for aid in by_ordinal.get(o, ()))
+    ]
+
+
+def _albums_for_ordinals(conn, ordinals):
+    if not ordinals:
+        return set()
+    placeholders = ",".join("?" for _ in ordinals)
+    return {
+        row["album_id"]
+        for row in conn.execute(
+            f"SELECT DISTINCT t.album_id FROM generation_presence gp "
+            f"JOIN track t ON t.track_id = gp.track_id "
+            f"WHERE gp.ordinal IN ({placeholders}) AND t.album_id IS NOT NULL",
+            ordinals,
+        )
+    }
+
+
+def _requests_estimate(conn, album_ids):
+    """1 request per album that needs a first fetch (tracklist_pulled_at IS
+    NULL), plus one more per extra 50 tracks past the first page (§0.3). An
+    unsettled album that was already fetched -- its queue was cleared --
+    costs nothing, since the tracklist is already stored."""
+    if not album_ids:
+        return 0
+    placeholders = ",".join("?" for _ in album_ids)
+    total = 0
+    for row in conn.execute(
+        f"SELECT total_tracks FROM album WHERE album_id IN ({placeholders}) "
+        f"AND tracklist_pulled_at IS NULL",
+        list(album_ids),
+    ):
+        total += max(1, -(-(row["total_tracks"] or 0) // 50))  # ceil(total_tracks / 50)
+    return total
+
+
+def _format_ordinal_range(ordinals):
+    if not ordinals:
+        return ""
+    return ", ".join(f"{a}" if a == b else f"{a}–{b}" for a, b in generations.runs(ordinals))
+
+
+def work_list(conn, n_generations):
+    """Everything the Add-button preview and the job's real run both need,
+    computed identically so the two can never disagree: the chosen
+    generation ordinals (descending, skipping handled ones, capped at
+    n_generations), the unsettled albums with a track present in any of
+    them, and the request estimate. Pure -- no Spotify calls, nothing
+    written but the ensure_track_groups() every generation_presence reader
+    needs."""
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    settled = _settled_map(conn)
+    chosen = _unhandled_ordinals_desc(conn, settled)[:n_generations]
+    album_ids = _albums_for_ordinals(conn, chosen)
+    unsettled = sorted(a for a in album_ids if not settled.get(a, False))
+
+    return {
+        "ordinals": sorted(chosen),
+        "albums": unsettled,
+        "requests_estimate": _requests_estimate(conn, unsettled),
+    }
+
+
+def preview(conn, n_generations):
+    """Display shape of work_list() for the Add buttons: no Spotify calls,
+    computed fresh on every /dev/roundtrip page load (spec M §4.6)."""
+    wl = work_list(conn, n_generations)
+    return {
+        "generations": n_generations,
+        "album_count": len(wl["albums"]),
+        "requests_estimate": wl["requests_estimate"],
+        "range_label": _format_ordinal_range(wl["ordinals"]),
+    }
+
+
+# -- The run -------------------------------------------------
+
+
+def _fetch_full_tracklist(conn, sp, album_id):
+    """The backfill's own tracklist fetch: unlike entities.fetch_album_tracklist,
+    pages past Spotify's 50-item first page (§4.5), and every request counts
+    against this job's own status via jobs.call. Failures propagate --
+    _run's per-album try/except is what catches them."""
+    album = jobs.call(_status, sp.album, album_id)
+    page = album.get("tracks") or {}
+    items = list(page.get("items") or [])
+    while page.get("next"):
+        page = jobs.call(_status, sp.next, page)
+        items.extend(page.get("items") or [])
+    conn.execute(
+        "UPDATE album SET tracklist_json = ?, tracklist_pulled_at = ? WHERE album_id = ?",
+        (json.dumps(items, separators=(",", ":")), jobs.now_iso(), album_id),
+    )
+
+
+def _run(n_generations):
+    conn = db.connect()
+    sp = get_spotify_client()
+    try:
+        _status.reset(phase="working", started_at=jobs.now_iso(), generations=n_generations)
+        if sp is None:
+            raise RuntimeError("not_authenticated")
+
+        wl = work_list(conn, n_generations)
+        albums = wl["albums"]
+        _status.set(albums_total=len(albums), ordinals=wl["ordinals"])
+        _status.log(
+            f"Backfill started — {len(albums)} album(s) across generations "
+            f"{_format_ordinal_range(wl['ordinals']) or 'none'}, ~{wl['requests_estimate']} requests."
+        )
+
+        stopped = False
+        for i, album_id in enumerate(albums, start=1):
+            if jobs.stop_requested():
+                _status.log(f"Stop requested — stopping cleanly before album {i}/{len(albums)}.")
+                stopped = True
+                break
+            _status.set(current_album=album_id)
+            try:
+                row = conn.execute(
+                    "SELECT tracklist_pulled_at FROM album WHERE album_id = ?", (album_id,)
+                ).fetchone()
+                if row and row["tracklist_pulled_at"] is None:
+                    _fetch_full_tracklist(conn, sp, album_id)
+                queued = entities.queue_wanted_uris(conn, album_id, source="backfill")
+                _status.add(uris_queued=queued)
+            except RateLimited:
+                conn.rollback()
+                raise
+            except Exception as e:
+                conn.rollback()
+                _status.log(f"{album_id} — failed: {e}")
+            _status.set(albums_done=i)
+
+        _status.set(current_album=None)
+        if stopped:
+            _status.set(phase="stopped", outcome="stopped", finished_at=jobs.now_iso())
+        else:
+            _status.set(phase="done", outcome="completed", finished_at=jobs.now_iso())
+        s = _status.get()
+        _status.log(
+            f"{'Stopped' if stopped else 'Finished'} — {s['albums_done']}/{len(albums)} album(s), "
+            f"{s['uris_queued']} uri(s) queued, {s['requests']} requests spent."
+        )
+    except RateLimited as e:
+        conn.rollback()
+        _status.set(
+            phase="error", current_album=None, outcome="rate_limited",
+            error=str(e), retry_at=e.retry_at, finished_at=jobs.now_iso(),
+        )
+        _status.log(f"Rate limited — retry after {e.retry_at}. Run stopped.")
+    except Exception as e:
+        conn.rollback()
+        _status.set(
+            phase="error", current_album=None, outcome="error", error=str(e),
+            finished_at=jobs.now_iso(),
+        )
+        _status.log(f"Error — {e}")
+    finally:
+        conn.close()

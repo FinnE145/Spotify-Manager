@@ -5,6 +5,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, ses
 from werkzeug.exceptions import HTTPException
 
 import artists
+import backfill
 import canonical
 import canonical_autogroup
 import canonical_detect
@@ -269,6 +270,11 @@ def create_app():
         if album["tracklist_pulled_at"] is None:
             entities.fetch_album_tracklist(conn, album_id)
             album = _load()
+        # Every view, not just the first (spec M §4.4/§0.5): cheap (zero
+        # Spotify calls, reads the tracklist already stored) and it's what
+        # makes clearing the backfill/album-page queue a real undo -- a
+        # cleared uri comes back the moment this page is revisited.
+        entities.queue_wanted_uris(conn, album_id, source="album")
 
         artist_rows = conn.execute(
             "SELECT COALESCE(aa.canonical_artist_id, ab.artist_id) AS artist_id, ar.name "
@@ -734,6 +740,10 @@ def create_app():
             review_rows=roundtrip.manual_alias_rows(conn),
             state_labels=roundtrip.STATE_LABELS,
             loader_name=roundtrip.LOADER_NAME,
+            # Server-rendered, no Spotify calls (spec M §4.6) -- the numbers
+            # beside the Add buttons are the whole budget control, no
+            # preview-then-confirm step.
+            backfill_previews=[backfill.preview(conn, 7), backfill.preview(conn, 2)],
         )
 
     @app.route("/dev/canonical", endpoint="dev_canonical")
@@ -1405,6 +1415,64 @@ def create_app():
         conn = db.get_db()
         roundtrip.clear_failures(conn)
         return jsonify({"ok": True})
+
+    # -- Round-trip queue (spec M §4.6) --------------------------------
+
+    _WANTED_SOURCES = ("album", "backfill")
+
+    @app.route("/api/roundtrip/wanted/clear", methods=["POST"])
+    def clear_wanted_uris():
+        # Closed set, not a raw client-supplied string: the two rows' Clear
+        # buttons are the only callers, and each comes back for free (the
+        # album page's next view, or re-clicking Add) so this needs no
+        # confirm step.
+        body = request.get_json()
+        source = body.get("source")
+        if source not in _WANTED_SOURCES:
+            abort(400, description=f"source must be one of {_WANTED_SOURCES}")
+        conn = db.get_db()
+        conn.execute("DELETE FROM wanted_uri WHERE source = ?", (source,))
+        conn.commit()
+        return jsonify({"ok": True})
+
+    @app.route("/api/roundtrip/listening/mute", methods=["POST"])
+    def mute_roundtrip_listening():
+        # Muting can't delete rows to undo -- there's nothing to delete, arm
+        # 1 is a live query over play -- so it's a meta flag instead
+        # (_WORK_LIST_SQL reads it as a correlated subquery).
+        body = request.get_json()
+        conn = db.get_db()
+        db.set_meta(conn, "roundtrip_listening_muted", "1" if body.get("muted") else "0")
+        conn.commit()
+        return jsonify({"ok": True})
+
+    # -- Album backfill (spec M §4.5) ----------------------------------
+
+    _BACKFILL_GENERATION_COUNTS = (2, 7)
+
+    @app.route("/api/backfill/start", methods=["POST"])
+    def start_backfill_job():
+        if get_spotify_client() is None:
+            return jsonify({"error": "not_authenticated"}), 401
+        body = request.get_json()
+        n = body.get("generations")
+        if n not in _BACKFILL_GENERATION_COUNTS:
+            abort(400, description=f"generations must be one of {_BACKFILL_GENERATION_COUNTS}")
+        if not backfill.start(n):
+            return jsonify({"error": "already_running", "detail": jobs.active()}), 409
+        return jsonify({"started": True})
+
+    @app.route("/api/backfill/stop", methods=["POST"])
+    def stop_backfill_job():
+        # Cooperative, like every other job's stop: finishes the current
+        # album, commits, then ends in the stopped-early state.
+        return jsonify({"stopping": jobs.request_stop("backfill")})
+
+    @app.route("/api/backfill/status")
+    def backfill_status():
+        status = backfill.get_status()
+        status["active_job"] = jobs.active()
+        return jsonify(status)
 
     # -- Artists ------------------------------------------------------
 

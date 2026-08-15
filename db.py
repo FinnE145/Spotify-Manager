@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 import sqlite3
 
@@ -382,12 +383,17 @@ CREATE TABLE IF NOT EXISTS generation (
 );
 
 -- Uris seen on an album tracklist with no track row of their own
--- (docs/specs/entity-pages-K.md §6), merged into the round-trip's existing
--- work list rather than a second queue. `source` exists so a later source
--- is additive rather than a migration; only 'album' is written for now.
+-- (docs/specs/entity-pages-K.md §6, docs/specs/grouping-fixes-backfill-M.md
+-- §4), merged into the round-trip's existing work list rather than a second
+-- queue. `source` is 'album' (queued from browsing the album page) or
+-- 'backfill' (queued by the album-backfill job). `album_id` is nullable --
+-- a future source need not have one. Inserts stay INSERT OR IGNORE, so
+-- whichever route queues a uri first keeps its source/album_id even if the
+-- other route later meets the same uri.
 CREATE TABLE IF NOT EXISTS wanted_uri (
     uri          TEXT PRIMARY KEY,
     source       TEXT NOT NULL,
+    album_id     TEXT,
     requested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
@@ -679,6 +685,24 @@ def _migrate(conn):
         if column not in artist_columns:
             conn.execute(ddl)
 
+    wanted_uri_columns = {row[1] for row in conn.execute("PRAGMA table_info(wanted_uri)")}
+    if "album_id" not in wanted_uri_columns:
+        conn.execute("ALTER TABLE wanted_uri ADD COLUMN album_id TEXT")
+        # One-time backfill from the tracklists already stored (9 albums, 37
+        # wanted_uri rows when this migration was written) -- matched by uri,
+        # the only thing both sides share. This connection has no row_factory
+        # (see init_db()), so rows are plain tuples here, not sqlite3.Row.
+        for album_id, tracklist_json in conn.execute(
+            "SELECT album_id, tracklist_json FROM album WHERE tracklist_json IS NOT NULL"
+        ):
+            for item in json.loads(tracklist_json):
+                uri = item.get("uri")
+                if uri:
+                    conn.execute(
+                        "UPDATE wanted_uri SET album_id = ? WHERE uri = ? AND album_id IS NULL",
+                        (album_id, uri),
+                    )
+
     # These two were briefly written as naive UTC ("2026-07-30 13:34:51"),
     # which the front-end parsed as local time and rendered hours off. Rewrite
     # them in the ISO-8601-with-Z form everything else uses. Idempotent: rows
@@ -688,3 +712,19 @@ def _migrate(conn):
             f"UPDATE {table} SET {column} = replace({column}, ' ', 'T') || 'Z' "
             f"WHERE {column} IS NOT NULL AND {column} NOT LIKE '%Z'"
         )
+
+
+# -- Meta key/value store -------------------------------------------------
+
+
+def set_meta(conn, key, value):
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def get_meta(conn, key):
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None

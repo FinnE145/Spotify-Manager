@@ -27,11 +27,6 @@
       &middot; ~<span data-field="requests_estimate">{{ counts.requests_estimate }}</span> requests
     </p>
     <p class="meta">
-      of which <span data-field="wanted_uris">{{ "{:,}".format(counts.wanted_uris) }}</span>
-      URI<span data-plural-for="wanted_uris">{{ "" if counts.wanted_uris == 1 else "s" }}</span>
-      wanted by an album tracklist rather than played
-    </p>
-    <p class="meta">
       <span data-field="resolved_tracks">{{ "{:,}".format(counts.resolved_tracks) }}</span>
       track<span data-plural-for="resolved_tracks">{{ "" if counts.resolved_tracks == 1 else "s" }}</span>
       known but in no playlist
@@ -50,6 +45,75 @@
       <p id="roundtrip-progress-label" class="meta" hidden></p>
       <p id="roundtrip-requests" class="meta" hidden><span data-field="requests">0</span> requests</p>
     </div>
+  </section>
+
+  <section class="panel" id="backfill-panel">
+    <h2>Round-trip queue</h2>
+    <table class="data-table">
+      <tbody>
+        <tr>
+          <td>
+            <span data-field="listening_uris">{{ "{:,}".format(counts.listening_uris) }}</span>
+            listening track<span data-plural-for="listening_uris">{{ "" if counts.listening_uris == 1 else "s" }}</span>
+            <span id="listening-excluded-note" class="muted" {{ 'hidden' if not counts.listening_muted }}>(excluded)</span>
+          </td>
+          <td>
+            <button id="listening-clear-btn" type="button" {{ 'hidden' if counts.listening_muted }}>Clear</button>
+            <button id="listening-readd-btn" type="button" {{ 'hidden' if not counts.listening_muted }}>Re-add</button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span data-field="album_page_uris">{{ "{:,}".format(counts.album_page_uris) }}</span>
+            album page track<span data-plural-for="album_page_uris">{{ "" if counts.album_page_uris == 1 else "s" }}</span>
+          </td>
+          <td><button type="button" data-wanted-clear="album" {{ 'disabled' if not counts.album_page_uris }}>Clear</button></td>
+        </tr>
+        <tr>
+          <td>
+            <span data-field="album_backfill_uris">{{ "{:,}".format(counts.album_backfill_uris) }}</span>
+            album backfill track<span data-plural-for="album_backfill_uris">{{ "" if counts.album_backfill_uris == 1 else "s" }}</span>
+          </td>
+          <td><button type="button" data-wanted-clear="backfill" {{ 'disabled' if not counts.album_backfill_uris }}>Clear</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="meta">
+      Every clear is one click, no confirm step -- each comes back for free: the listening row
+      by Re-add, the other two by revisiting the album page or clicking Add again.
+    </p>
+
+    <h2>Album backfill</h2>
+    <p class="meta">
+      Fetches tracklists for albums Symr only partly owns, in the most recent generations, and
+      queues the rest into the round-trip queue above. Costs are estimated with no Spotify calls;
+      seeing them is the whole budget control before clicking Add.
+    </p>
+    <table class="data-table">
+      <tbody>
+        {% for p in backfill_previews %}
+        <tr>
+          <td>
+            Next {{ p.generations }} generation{{ "s" if p.generations != 1 }}{% if p.range_label %} ({{ p.range_label }}){% endif %}:
+            {{ p.album_count }} album{{ "s" if p.album_count != 1 }}, ~{{ p.requests_estimate }} request{{ "s" if p.requests_estimate != 1 }}
+          </td>
+          <td><button type="button" data-backfill-add="{{ p.generations }}" data-empty="{{ '1' if not p.album_count else '0' }}" {{ 'disabled' if not p.album_count }}>Add</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button id="backfill-stop-btn" type="button" disabled>Stop</button>
+    <p id="backfill-busy-note" class="meta" hidden></p>
+    <p id="backfill-error" class="error" hidden></p>
+
+    <div id="backfill-progress" class="progress-bar" hidden>
+      <div id="backfill-progress-fill" class="progress-bar-fill"></div>
+    </div>
+    <div class="progress-meta">
+      <p id="backfill-progress-label" class="meta" hidden></p>
+    </div>
+    <ol id="backfill-log" class="event-log"></ol>
+    <p id="backfill-log-empty" class="empty">Nothing yet — the feed fills in as a run goes.</p>
   </section>
 
   <section class="panel">

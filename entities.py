@@ -73,10 +73,13 @@ def playlists_for_tracks(conn, track_ids):
 
 def fetch_album_tracklist(conn, album_id):
     """One request to GET /v1/albums/{id} on first view (tracklist_pulled_at
-    IS NULL only -- never re-fetched automatically): stores the tracklist and
-    queues any track uri with no track row of its own for the round-trip.
-    Any failure -- no client, 429, network, 404 -- is swallowed; the page
-    always renders from what the DB already has."""
+    IS NULL only -- never re-fetched automatically): stores the tracklist as
+    returned, capped at Spotify's own 50-item first page. Any failure -- no
+    client, 429, network, 404 -- is swallowed; the page always renders from
+    what the DB already has.
+
+    Queuing wanted_uri rows is queue_wanted_uris()'s job, not this one's --
+    a caller runs both (docs/specs/grouping-fixes-backfill-M.md §4.4)."""
     sp = get_spotify_client()
     if sp is None:
         return
@@ -90,24 +93,46 @@ def fetch_album_tracklist(conn, album_id):
         "UPDATE album SET tracklist_json = ?, tracklist_pulled_at = ? WHERE album_id = ?",
         (json.dumps(items, separators=(",", ":")), jobs.now_iso(), album_id),
     )
+    conn.commit()
+
+
+def queue_wanted_uris(conn, album_id, source):
+    """Queues a wanted_uri row for every item in the *stored* tracklist_json
+    with no track row of its own, stamped with album_id and source. Zero
+    Spotify requests, so it's cheap enough to run on every album-page view
+    rather than only the first -- which is what closes the re-add gap where
+    clearing a queued uri and revisiting the page used to queue nothing back
+    (§0.5). INSERT OR IGNORE, so a uri already queued (by either source)
+    keeps whichever source/album_id it was first queued with.
+
+    Returns how many rows it actually inserted."""
+    row = conn.execute(
+        "SELECT tracklist_json FROM album WHERE album_id = ?", (album_id,)
+    ).fetchone()
+    if row is None or not row["tracklist_json"]:
+        return 0
+    items = json.loads(row["tracklist_json"])
 
     item_ids = [item["id"] for item in items if item.get("id")]
     owned = set()
     if item_ids:
         placeholders = ",".join("?" for _ in item_ids)
         owned = {
-            row["track_id"]
-            for row in conn.execute(
+            r["track_id"]
+            for r in conn.execute(
                 f"SELECT track_id FROM track WHERE track_id IN ({placeholders})", item_ids
             )
         }
+    queued = 0
     for item in items:
         if item.get("id") and item["id"] not in owned and item.get("uri"):
-            conn.execute(
-                "INSERT OR IGNORE INTO wanted_uri (uri, source) VALUES (?, 'album')",
-                (item["uri"],),
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO wanted_uri (uri, source, album_id) VALUES (?, ?, ?)",
+                (item["uri"], source, album_id),
             )
+            queued += cur.rowcount
     conn.commit()
+    return queued
 
 
 def fetch_artist_image(conn, artist_id):

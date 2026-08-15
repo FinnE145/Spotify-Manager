@@ -137,9 +137,17 @@ def counts(conn):
         ).fetchone()[0],
         "aliases": conn.execute("SELECT COUNT(*) FROM track_uri_alias").fetchone()[0],
         "failed_uris": conn.execute("SELECT COUNT(*) FROM roundtrip_failed_uri").fetchone()[0],
-        # This run's share of remaining_uris that came from an album
-        # tracklist rather than a play.
-        "wanted_uris": conn.execute(_WANTED_REMAINING_SQL).fetchone()[0],
+        # The three-way partition of the queue (spec M §4.6): listening,
+        # album-page and album-backfill sum to remaining_uris with no
+        # double-counting, except when listening is muted -- it still
+        # reports the real count so the row can show what muting excludes
+        # rather than dropping to zero.
+        "listening_uris": conn.execute(_LISTENING_REMAINING_SQL).fetchone()[0],
+        "listening_muted": db.get_meta(conn, "roundtrip_listening_muted") == "1",
+        "album_page_uris": conn.execute(_WANTED_REMAINING_BY_SOURCE_SQL, ("album",)).fetchone()[0],
+        "album_backfill_uris": conn.execute(
+            _WANTED_REMAINING_BY_SOURCE_SQL, ("backfill",)
+        ).fetchone()[0],
         # Worth one more look: recorded as not-returned and still unresolved.
         "reconcilable": len(_reconcile_list(conn)),
         "review_uris": conn.execute(
@@ -282,6 +290,11 @@ def clear_failures(conn):
 # in the same one. A wanted uri has no plays by definition, so plays=0 sorts
 # it after every play-derived uri without a special case; the NOT IN against
 # `play` keeps a uri that's both wanted and played from appearing twice.
+#
+# The first arm's extra NOT EXISTS is the listening-queue mute (spec M §4.6):
+# a meta flag, checked as a subquery rather than a Python branch so this stays
+# one string. It only ever excludes arm 1 -- an album-page/backfill uri has no
+# "listening" identity to mute.
 _WORK_LIST_SQL = """
 SELECT spotify_track_uri, plays FROM (
     SELECT p.spotify_track_uri AS spotify_track_uri, COUNT(*) AS plays
@@ -289,6 +302,9 @@ SELECT spotify_track_uri, plays FROM (
     LEFT JOIN played_uri_track x ON x.uri = p.spotify_track_uri
     WHERE x.track_id IS NULL
       AND p.spotify_track_uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
+      AND NOT EXISTS (
+          SELECT 1 FROM meta WHERE key = 'roundtrip_listening_muted' AND value = '1'
+      )
     GROUP BY p.spotify_track_uri
 
     UNION ALL
@@ -303,14 +319,30 @@ SELECT spotify_track_uri, plays FROM (
 ORDER BY plays DESC, spotify_track_uri ASC
 """
 
-# The wanted arm's own contribution, for counts() to report separately so
-# /dev/roundtrip can show what a run is about to do.
-_WANTED_REMAINING_SQL = """
+# The listening arm's own contribution, *without* the mute filter -- counts()
+# uses this so the queue box always shows what muting would exclude, rather
+# than a count that silently drops to zero.
+_LISTENING_REMAINING_SQL = """
+SELECT COUNT(*) FROM (
+    SELECT p.spotify_track_uri
+    FROM play p
+    LEFT JOIN played_uri_track x ON x.uri = p.spotify_track_uri
+    WHERE x.track_id IS NULL
+      AND p.spotify_track_uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
+    GROUP BY p.spotify_track_uri
+)
+"""
+
+# The wanted arm's own contribution, split by source (album-page vs backfill,
+# spec M §4.6) so /dev/roundtrip can show what a run is about to do and clear
+# each queue independently.
+_WANTED_REMAINING_BY_SOURCE_SQL = """
 SELECT COUNT(*) FROM wanted_uri w
 LEFT JOIN played_uri_track x ON x.uri = w.uri
 WHERE x.track_id IS NULL
   AND w.uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
   AND w.uri NOT IN (SELECT spotify_track_uri FROM play)
+  AND w.source = ?
 """
 
 

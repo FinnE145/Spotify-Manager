@@ -14,6 +14,21 @@
   const logEl = document.getElementById("roundtrip-log");
   const logEmptyEl = document.getElementById("roundtrip-log-empty");
 
+  // ---------- round-trip queue box (spec M §4.6) ----------
+  const listeningExcludedNote = document.getElementById("listening-excluded-note");
+  const listeningClearBtn = document.getElementById("listening-clear-btn");
+  const listeningReaddBtn = document.getElementById("listening-readd-btn");
+
+  // ---------- album backfill ----------
+  const backfillStopBtn = document.getElementById("backfill-stop-btn");
+  const backfillBusyNote = document.getElementById("backfill-busy-note");
+  const backfillError = document.getElementById("backfill-error");
+  const backfillProgressEl = document.getElementById("backfill-progress");
+  const backfillProgressFill = document.getElementById("backfill-progress-fill");
+  const backfillProgressLabel = document.getElementById("backfill-progress-label");
+  const backfillLogEl = document.getElementById("backfill-log");
+  const backfillLogEmptyEl = document.getElementById("backfill-log-empty");
+
   const COUNT_FIELDS = [
     "remaining_uris",
     "batches",
@@ -21,7 +36,9 @@
     "resolved_tracks",
     "aliases",
     "failed_uris",
-    "wanted_uris",
+    "listening_uris",
+    "album_page_uris",
+    "album_backfill_uris",
     "reconcilable",
     "review_uris",
     "requests",
@@ -31,11 +48,14 @@
     snapshot: "a snapshot pull",
     history_import: "a play-history import",
     roundtrip: "a round-trip",
+    backfill: "an album backfill",
   };
 
   // Whether this page has actually watched a run, so a finished_at left over
-  // from an earlier run doesn't announce itself on a fresh page load.
+  // from an earlier run doesn't announce itself on a fresh page load. One
+  // flag per job, since either can be the one that's running.
   let sawRunning = false;
+  let sawBackfillRunning = false;
 
   function api(path, options) {
     return fetch(path, options).then((r) => r.json());
@@ -66,6 +86,16 @@
     }
     progressEl.hidden = !status.running;
     requestsEl.hidden = !status.running;
+  }
+
+  function setQueueControls(status) {
+    listeningExcludedNote.hidden = !status.listening_muted;
+    listeningClearBtn.hidden = status.listening_muted;
+    listeningReaddBtn.hidden = !status.listening_muted;
+    document.querySelectorAll("[data-wanted-clear]").forEach((btn) => {
+      const field = btn.dataset.wantedClear === "album" ? "album_page_uris" : "album_backfill_uris";
+      btn.disabled = !status[field];
+    });
   }
 
   function phaseLabel(status) {
@@ -169,14 +199,110 @@
     progressLabel.appendChild(reloadLink);
   }
 
+  // ---------- album backfill status (spec M §4.5/§4.6) ----------
+  // Driven from the same poll loop as the round-trip itself -- see poll()
+  // below -- rather than a second setTimeout chain, so the two can never
+  // drift out of step.
+
+  function backfillPhaseLabel(status) {
+    let label = `${status.albums_done}/${status.albums_total} albums`;
+    if (status.current_album) label += ` — ${status.current_album}`;
+    return `${label} · ${status.uris_queued} uri(s) queued, ${status.requests} requests spent`;
+  }
+
+  function renderBackfillLog(entries) {
+    const following =
+      backfillLogEl.scrollHeight - backfillLogEl.scrollTop - backfillLogEl.clientHeight < 24;
+    backfillLogEl.textContent = "";
+    entries.forEach((entry) => {
+      const li = document.createElement("li");
+      const ts = makeDateSpan(entry.ts);
+      ts.className = "event-log-ts";
+      li.appendChild(ts);
+      li.appendChild(document.createTextNode(entry.message));
+      backfillLogEl.appendChild(li);
+    });
+    backfillLogEmptyEl.hidden = entries.length > 0;
+    if (following) backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
+  }
+
+  function showBackfillDone(status) {
+    backfillProgressLabel.hidden = false;
+    backfillProgressLabel.textContent = "";
+    backfillError.hidden = true;
+    const totals =
+      `${status.albums_done}/${status.albums_total} album(s), ` +
+      `${status.uris_queued} uri(s) queued, ${status.requests} requests spent`;
+
+    const summary = document.createElement("span");
+    if (status.outcome === "rate_limited") {
+      summary.textContent = `Rate limited after ${totals} — retry `;
+      backfillProgressLabel.appendChild(summary);
+      if (status.retry_at) backfillProgressLabel.appendChild(makeDateSpan(status.retry_at));
+    } else if (status.outcome === "error") {
+      summary.textContent = `Run failed after ${totals}: ${status.error}`;
+      backfillProgressLabel.appendChild(summary);
+    } else if (status.outcome === "stopped") {
+      summary.textContent = `Stopped — ${totals}.`;
+      backfillProgressLabel.appendChild(summary);
+    } else {
+      summary.textContent = `Finished — ${totals}.`;
+      backfillProgressLabel.appendChild(summary);
+    }
+
+    const reloadLink = document.createElement("a");
+    reloadLink.href = "#";
+    reloadLink.textContent = " Reload to see the fresh queue and Add-button estimates";
+    reloadLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      window.location.reload();
+    });
+    backfillProgressLabel.appendChild(reloadLink);
+  }
+
+  function handleBackfillStatus(status) {
+    const otherJob = status.active_job && status.active_job !== "backfill";
+    document.querySelectorAll("[data-backfill-add]").forEach((btn) => {
+      // dataset.empty is the server-rendered "0 albums in scope" fact, which
+      // stays true until a reload re-derives it -- active_job is the only
+      // part of this that's meant to change live.
+      btn.disabled = Boolean(status.active_job) || btn.dataset.empty === "1";
+    });
+    backfillStopBtn.disabled = !status.running || status.stopping;
+    backfillStopBtn.textContent = status.stopping ? "Stopping…" : "Stop";
+    backfillBusyNote.hidden = !otherJob;
+    if (otherJob) {
+      backfillBusyNote.textContent = `${JOB_NAMES[status.active_job] || status.active_job} is running — one job at a time.`;
+    }
+    backfillProgressEl.hidden = !status.running;
+    renderBackfillLog(status.log || []);
+
+    if (status.running) {
+      sawBackfillRunning = true;
+      backfillProgressLabel.hidden = false;
+      backfillProgressLabel.textContent = backfillPhaseLabel(status);
+      const pct = status.albums_total
+        ? Math.round((status.albums_done / status.albums_total) * 100)
+        : 0;
+      backfillProgressFill.style.width = `${pct}%`;
+    } else if (status.finished_at && sawBackfillRunning) {
+      showBackfillDone(status);
+      sawBackfillRunning = false;
+    }
+  }
+
   function poll() {
-    api("/api/roundtrip/status")
-      .then((status) => {
+    // One loop drives both the round-trip's own status and the backfill
+    // job's -- a second independent setTimeout chain would be two things to
+    // keep in step, and only one job can ever be active at a time anyway.
+    Promise.all([api("/api/roundtrip/status"), api("/api/backfill/status")])
+      .then(([status, backfillStatus]) => {
         COUNT_FIELDS.forEach((name) => setField(name, status[name]));
         renderLog(status.log || []);
 
         if (status.running) sawRunning = true;
         setControls(status);
+        setQueueControls(status);
 
         if (status.running) {
           progressLabel.hidden = false;
@@ -190,8 +316,10 @@
           sawRunning = false;
         }
 
-        // Keep polling while another job holds the slot, so the start button
-        // comes back on its own once it finishes.
+        handleBackfillStatus(backfillStatus);
+
+        // Keep polling while another job holds the slot, so buttons come
+        // back on their own once it finishes.
         if (status.active_job) setTimeout(poll, 1000);
       })
       .catch(() => {
@@ -225,6 +353,77 @@
   reconcileBtn.addEventListener("click", () =>
     startRun("/api/roundtrip/reconcile", reconcileBtn)
   );
+
+  // ---------- round-trip queue box ----------
+  // Every clear/mute fires on one click, no confirm step (spec M §4.6) --
+  // each is reversible for free, so a two-step confirm would be friction for
+  // nothing. Re-polls once on success so the counts update without a reload.
+
+  document.querySelectorAll("[data-wanted-clear]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      api("/api/roundtrip/wanted/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: btn.dataset.wantedClear }),
+      })
+        .then(() => poll())
+        .catch(() => {
+          btn.disabled = false;
+        });
+    });
+  });
+
+  function setListeningMuted(muted, button) {
+    button.disabled = true;
+    api("/api/roundtrip/listening/mute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ muted }),
+    })
+      .then(() => poll())
+      .catch(() => {
+        button.disabled = false;
+      });
+  }
+
+  listeningClearBtn.addEventListener("click", () => setListeningMuted(true, listeningClearBtn));
+  listeningReaddBtn.addEventListener("click", () => setListeningMuted(false, listeningReaddBtn));
+
+  // ---------- album backfill ----------
+
+  document.querySelectorAll("[data-backfill-add]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      backfillError.hidden = true;
+      btn.disabled = true;
+      api("/api/backfill/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generations: parseInt(btn.dataset.backfillAdd, 10) }),
+      })
+        .then((data) => {
+          if (data.error) {
+            backfillError.hidden = false;
+            backfillError.textContent = data.detail ? `${data.error} (${data.detail})` : data.error;
+            btn.disabled = false;
+            return;
+          }
+          sawBackfillRunning = true;
+          poll();
+        })
+        .catch((e) => {
+          backfillError.hidden = false;
+          backfillError.textContent = `Request failed: ${e}. The dev server may have restarted — try again.`;
+          btn.disabled = false;
+        });
+    });
+  });
+
+  backfillStopBtn.addEventListener("click", () => {
+    backfillStopBtn.disabled = true;
+    backfillStopBtn.textContent = "Stopping…";
+    api("/api/backfill/stop", { method: "POST" }).catch(() => {});
+  });
 
   // ---------- manual aliases ----------
 
@@ -291,7 +490,8 @@
       });
   });
 
-  // Pick up a run already going (a page reload mid-run), and learn on load
-  // whether another job is currently blocking the start button.
+  // Pick up a run already going (a page reload mid-run, round-trip or
+  // backfill), and learn on load whether another job is currently blocking
+  // the start/Add buttons.
   poll();
 })();
