@@ -678,16 +678,28 @@ def create_app():
 
     @app.route("/dev")
     def dev_index():
-        conn = db.get_db()
-        score_count = conn.execute("SELECT COUNT(*) FROM score").fetchone()[0]
-        return render_template("dev.html", active="dev", score_count=score_count)
+        return render_template("dev.html", active="dev")
 
-    @app.route("/dev/recompute", methods=["POST"], endpoint="dev_recompute")
-    def dev_recompute():
+    @app.route("/dev/scoring", endpoint="dev_scoring")
+    def dev_scoring_index():
+        conn = db.get_db()
+        return render_template(
+            "scoring.html",
+            active="dev_scoring",
+            tier_counts=scoring.tier_counts(conn),
+            recompute_status=scoring.recompute_status(),
+        )
+
+    @app.route("/api/scoring/recompute", methods=["POST"])
+    def api_scoring_recompute():
         # Synchronous (~1s, §2.11) -- no job slot, no background thread, same
-        # as every other scoring.recompute() call site.
-        scoring.recompute(db.get_db())
-        return redirect(url_for("dev_index"))
+        # as every other scoring.recompute() call site. A failure propagates
+        # to the global exception handler, which renders it as the same
+        # {"error", "detail"} JSON shape every other /api/* failure uses;
+        # scoring.js reads either that or this success shape off the response.
+        conn = db.get_db()
+        scoring.recompute(conn)
+        return jsonify({"tier_counts": scoring.tier_counts(conn), "status": scoring.recompute_status()})
 
     @app.route("/dev/artists", endpoint="dev_artists")
     def artists_index():

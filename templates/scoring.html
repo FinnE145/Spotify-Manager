@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span %}
+
+{% block title %}Symr — Scoring{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Scoring</h1>
+  <p class="meta">
+    Materialized version/recording/release/track scores (docs/specs/scoring-H.md).
+    Song, album, artist, playlist and arbitrary collections aggregate from these at query time
+    and are never materialized themselves.
+  </p>
+
+  <section class="panel">
+    <h2>Materialized counts</h2>
+    <table class="data-table">
+      <thead><tr><th>Tier</th><th>Scores</th></tr></thead>
+      <tbody>
+        {% for tier in ('version', 'recording', 'release', 'track') %}
+        <tr>
+          <td>{{ tier|capitalize }}</td>
+          <td data-tier-count="{{ tier }}">{{ tier_counts[tier] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Last recompute</h2>
+    <p id="recompute-status">
+      {% if recompute_status.finished_at %}
+      {% if recompute_status.outcome == 'ok' %}Succeeded{% else %}<span class="error">Failed</span>{% endif %}
+      &middot; {{ datetime_span(recompute_status.finished_at) }}
+      &middot; took {{ recompute_status.duration_seconds }}s
+      {% else %}
+      No recompute has run yet this process — the read-time backstop
+      (docs/specs/scoring-H.md §9.3) runs one on the very next page load regardless.
+      {% endif %}
+    </p>
+    <p id="recompute-error" class="error" {% if not recompute_status.error %}hidden{% endif %}>{{ recompute_status.error or "" }}</p>
+    <button id="recompute-btn" type="button">Recompute scores</button>
+  </section>
+</main>
+<script src="{{ url_for('static', filename='js/scoring.js') }}"></script>
+{% endblock %}

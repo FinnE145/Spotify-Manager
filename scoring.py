@@ -23,6 +23,7 @@ roundtrip.py."""
 import sqlite3
 import statistics
 import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -37,7 +38,7 @@ from config import DB_PATH
 # one of them invalidates every row already in the `score` table, because two
 # rows would then reflect two different algorithms. After editing a value,
 # call recompute() immediately (or use the "Recompute scores" button on
-# /dev) -- if you forget, the §9.3 read-time backstop will eventually
+# /dev/scoring) -- if you forget, the §9.3 read-time backstop will eventually
 # catch the drift and recompute on its own, but only after paying its
 # fingerprint check on some later request.
 # ============================================================================
@@ -393,30 +394,87 @@ def recompute(conn):
 
     Called explicitly at the end of every job/write path that touches a
     scoring input, and as a catch-all by the read-time backstop
-    (ensure_fresh()) below for any path that isn't."""
-    canonical.ensure_track_groups(conn)
-    conn.commit()
+    (ensure_fresh()) below for any path that isn't. Records its own outcome
+    for /dev/scoring via recompute_status() either way -- a failure is
+    re-raised afterward, so the status is an extra receipt, never the only
+    place the error surfaces."""
+    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t0 = time.monotonic()
+    try:
+        canonical.ensure_track_groups(conn)
+        conn.commit()
 
-    now = datetime.now(timezone.utc)
-    recent_ordinals = _recent_ordinals(conn, now)
-    version_all, version_recent = _version_horizons(conn, now, recent_ordinals)
+        now = datetime.now(timezone.utc)
+        recent_ordinals = _recent_ordinals(conn, now)
+        version_all, version_recent = _version_horizons(conn, now, recent_ordinals)
 
-    rows = [
-        ("version", str(vid), _display(version_all[vid]), _display(version_recent.get(vid, 0.0)))
-        for vid in version_all
-    ]
-    for tier in ("recording", "release", "track"):
-        sub_all, sub_recent = _subtier_scores(conn, tier, now, recent_ordinals, version_all, version_recent)
-        rows.extend(
-            (tier, str(gid), _display(sub_all[gid]), _display(sub_recent.get(gid, 0.0)))
-            for gid in sub_all
+        rows = [
+            ("version", str(vid), _display(version_all[vid]), _display(version_recent.get(vid, 0.0)))
+            for vid in version_all
+        ]
+        for tier in ("recording", "release", "track"):
+            sub_all, sub_recent = _subtier_scores(
+                conn, tier, now, recent_ordinals, version_all, version_recent
+            )
+            rows.extend(
+                (tier, str(gid), _display(sub_all[gid]), _display(sub_recent.get(gid, 0.0)))
+                for gid in sub_all
+            )
+
+        conn.execute("DELETE FROM score")
+        conn.executemany(
+            "INSERT INTO score (tier, group_id, all_time, recent) VALUES (?, ?, ?, ?)", rows
         )
+        conn.commit()
+    except Exception as e:
+        _record_recompute(started_at, t0, "error", str(e), None)
+        raise
+    else:
+        _record_recompute(started_at, t0, "ok", None, tier_counts(conn))
 
-    conn.execute("DELETE FROM score")
-    conn.executemany(
-        "INSERT INTO score (tier, group_id, all_time, recent) VALUES (?, ?, ?, ?)", rows
-    )
-    conn.commit()
+
+def tier_counts(conn):
+    """{tier: count} of materialized scores, for each of the four stored
+    tiers (§9.1) -- what /dev/scoring shows."""
+    counts = {
+        row["tier"]: row["c"]
+        for row in conn.execute("SELECT tier, COUNT(*) AS c FROM score GROUP BY tier")
+    }
+    return {tier: counts.get(tier, 0) for tier in ("version", "recording", "release", "track")}
+
+
+_status_lock = threading.Lock()
+_recompute_status = {
+    "started_at": None,
+    "finished_at": None,
+    "duration_seconds": None,
+    "outcome": None,  # "ok" | "error"
+    "error": None,
+    "counts": None,
+}
+
+
+def recompute_status():
+    """The most recent recompute() call's outcome, in this process --
+    purely in-memory, like jobs.JobStatus, so it reads as "no run yet" right
+    after a restart. That's brief in practice: the §9.3 backstop recomputes
+    on the very first request after any restart, so by the time anyone loads
+    /dev/scoring there has almost always already been one."""
+    with _status_lock:
+        return dict(_recompute_status)
+
+
+def _record_recompute(started_at, t0, outcome, error, counts):
+    global _recompute_status
+    with _status_lock:
+        _recompute_status = {
+            "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "duration_seconds": round(time.monotonic() - t0, 2),
+            "outcome": outcome,
+            "error": error,
+            "counts": counts,
+        }
 
 
 # ---------------------------------------------------------------- backstop (§9.3)
