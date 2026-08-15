@@ -74,7 +74,7 @@ def mark_same(conn, artist_id_a, artist_id_b):
     )
     _mark_reviewed(conn, artist_id_a, artist_id_b)
     conn.commit()
-    scoring.recompute(conn)
+    scoring.request_recompute()
 
 
 def mark_not_same(conn, artist_id_a, artist_id_b):
@@ -113,7 +113,7 @@ def unmerge(conn, artist_id):
             "DELETE FROM reviewed_artist_pair WHERE artist_id_a = ? AND artist_id_b = ?", (a, b)
         )
     conn.commit()
-    scoring.recompute(conn)
+    scoring.request_recompute()
 
 
 # -- Candidate detection -------------------------------------------------

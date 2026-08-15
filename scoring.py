@@ -28,6 +28,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import canonical
+import db
 import generations
 import jobs
 from config import DB_PATH
@@ -405,6 +406,10 @@ def recompute(conn):
     the writes that triggered it and redoing the whole thing."""
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     t0 = time.monotonic()
+    # None until _observe() below succeeds -- a failure inside
+    # ensure_track_groups() happens before that, so the except branch below
+    # must handle "no fingerprint was ever read this run" (§6.2).
+    observed = None
     try:
         canonical.ensure_track_groups(conn)
         conn.commit()
@@ -441,6 +446,13 @@ def recompute(conn):
         )
         conn.commit()
     except Exception as e:
+        if observed is not None:
+            # A repeatable failure: arm auto-retry suppression (§6.2) so
+            # ensure_fresh() stops re-triggering a doomed recompute on every
+            # request. _mark_seen() on the next success clears this.
+            global _failed_fingerprint
+            with _backstop_lock:
+                _failed_fingerprint = observed[1]
         _record_recompute(started_at, t0, "error", str(e), None)
         raise
     else:
@@ -492,6 +504,70 @@ def _record_recompute(started_at, t0, outcome, error, counts):
         }
 
 
+# ---------------------------------------------------------------- async recompute worker (§3)
+
+_worker_lock = threading.Lock()
+_worker_pending = False   # a recompute has been asked for and not yet started
+_worker_alive = False     # a worker thread exists right now
+
+
+def request_recompute():
+    """Marks a recompute as wanted and returns immediately. Callers never
+    wait, never get a result, and never see an exception from the recompute
+    itself (§3.1).
+
+    `_worker_alive` is set to True *before* the thread is spawned,
+    deliberately: it closes the window in which ensure_fresh() (§5.2) could
+    see "no worker running" and act on a change the worker is about to
+    cover."""
+    global _worker_pending, _worker_alive
+    with _worker_lock:
+        _worker_pending = True
+        if _worker_alive:
+            return
+        _worker_alive = True
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _worker():
+    """The coalescing loop (§3.4). Commits landing during a ~1.5s recompute
+    all set `_worker_pending`, and are absorbed by one extra pass -- so
+    holding Enter through ten queue items costs two or three recomputes, not
+    ten.
+
+    Exits without recomputing while a job holds the slot (§3.6), dropping
+    `_worker_pending` -- nothing is lost, because every job ends with its own
+    recompute() on the success path and both failure paths, the same
+    property ensure_fresh() already relies on for its own deferral.
+
+    Uses a normal standalone db.connect(), opened once per worker run and
+    closed in the finally -- never _checker(), which is autocommit and
+    read-only by contract and must never be the connection that recomputes."""
+    global _worker_pending, _worker_alive
+    conn = db.connect()
+    try:
+        while True:
+            with _worker_lock:
+                if not _worker_pending or jobs.active():
+                    _worker_pending = False
+                    _worker_alive = False
+                    return
+                _worker_pending = False
+            try:
+                recompute(conn)
+            except Exception:
+                # recompute() has already recorded the failure via
+                # _record_recompute() and armed _failed_fingerprint (§6.2).
+                # Stopping here rather than looping is what stops a
+                # deterministic failure spinning.
+                with _worker_lock:
+                    _worker_pending = False
+                    _worker_alive = False
+                return
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------- backstop (§9.3)
 
 # The union of every table a trigger above writes. reviewed_pair can't move a
@@ -507,6 +583,8 @@ _backstop_lock = threading.Lock()
 _checker_conn = None
 _last_data_version = None
 _last_fingerprint = None
+_failed_fingerprint = None  # set by recompute()'s error path (§6.2); cleared
+                             # by _mark_seen() on the next success
 
 
 def _checker():
@@ -543,23 +621,30 @@ def _mark_seen(observed):
     """Record an _observe() pair as accounted for by a completed recompute.
     Only ever moves the remembered state to something a recompute has
     actually covered, so the worst it can do is under-claim and cause one
-    redundant recompute -- never over-claim and skip a real change."""
-    global _last_data_version, _last_fingerprint
+    redundant recompute -- never over-claim and skip a real change.
+
+    Any success -- background or the manual button -- re-arms auto-retry by
+    clearing `_failed_fingerprint` (§6.2)."""
+    global _last_data_version, _last_fingerprint, _failed_fingerprint
     with _backstop_lock:
         _last_data_version, _last_fingerprint = observed
+        _failed_fingerprint = None
 
 
-def ensure_fresh(conn):
-    """The read-time backstop (§9.3). Cheap on every call (a ~0.03ms PRAGMA)
-    unless some other connection has committed anything at all since the
-    last check, in which case it pays an ~87ms fingerprint read, and only
-    recomputes if the fingerprint actually moved.
+def ensure_fresh():
+    """The read-time backstop (§9.3/§5). Cheap on every call (a ~0.03ms
+    PRAGMA) unless some other connection has committed anything at all since
+    the last check, in which case it pays an ~87ms fingerprint read, and only
+    enqueues a recompute if the fingerprint actually moved.
 
     This exists for write paths nobody remembered to instrument explicitly
     -- canonical.ensure_track_groups() inserting track_group rows on a plain
     GET is the one it's mandatory for, not belt-and-braces politeness (see
-    the module map's note on this). `conn` is used for the recompute itself
-    if one is needed; it is never the checker connection."""
+    the module map's note on this). It never recomputes inline (§5.1) -- on
+    a moved fingerprint it calls request_recompute() and returns, so it
+    cannot keep a freshness guarantee anyway: a page loaded right after an
+    edit shows scores one edit stale regardless, and is correct on the next
+    load."""
     # While a job holds the slot, defer -- do NOT check, and do not remember
     # anything. All three jobs commit continuously as they run (per playlist,
     # per batch, per chunk) while their page polls status every second, so
@@ -578,6 +663,18 @@ def ensure_fresh(conn):
     if jobs.active():
         return False
 
+    # Likewise defer while the worker is alive (§5.2), under the same
+    # discipline: remember nothing, so the next check compares against the
+    # same older state. request_recompute() below is idempotent -- calling it
+    # again while the worker runs would only set _worker_pending, which is
+    # already true -- but _last_data_version/_last_fingerprint can't move
+    # until the worker's own recompute() finishes, so without this every
+    # request in that ~1.5s window would still pay the ~87ms fingerprint
+    # read for nothing.
+    with _worker_lock:
+        if _worker_alive:
+            return False
+
     needs_recompute = False
     observed = None
     with _backstop_lock:
@@ -588,13 +685,21 @@ def ensure_fresh(conn):
                 checker.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in _FINGERPRINT_TABLES
             )
-            observed = (version, fingerprint)
-            needs_recompute = fingerprint != _last_fingerprint
+            if fingerprint == _failed_fingerprint:
+                # A repeatable failure (§6.2): don't auto-retry the exact
+                # fingerprint that already failed. Neither enqueue nor mark
+                # seen, so _last_data_version stays behind and the next
+                # request re-pays this same 87ms check rather than going
+                # quiet about a broken recompute.
+                pass
+            else:
+                observed = (version, fingerprint)
+                needs_recompute = fingerprint != _last_fingerprint
 
     if needs_recompute:
         # recompute() publishes its own _observe() pair, which supersedes
         # this one -- so nothing is recorded here on the path that recomputes.
-        recompute(conn)
+        request_recompute()
     elif observed is not None:
         # Something committed, but no scoring input moved (a canvas card, a
         # pin, an exclude toggle). Remember the new data_version so the next

@@ -19,7 +19,7 @@
 {%- if pending %}
 <div class="generation-confirm">
   <p><code>{{ pending.name }}</code> looks like a new generation {{ pending.ordinal }}. Add it?</p>
-  <form method="post" action="{{ url_for('dev_generations_confirm') }}" class="inline-form">
+  <form id="generation-confirm-form" method="post" action="{{ url_for('dev_generations_confirm') }}" class="inline-form">
     <input type="hidden" name="playlist_id" value="{{ pending.playlist_id }}">
     <input type="hidden" name="return_to" value="{{ return_to }}">
     <button type="submit" name="decision" value="yes">Yes</button>

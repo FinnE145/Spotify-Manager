@@ -5,6 +5,7 @@
   <title>{% block title %}Symr{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="{{ url_for('static', filename='js/format.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/generation_confirm.js') }}"></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <nav id="navbar">
@@ -26,6 +27,13 @@
          title="Dev" aria-label="Dev">⚙</a>
     </div>
   </nav>
+
+  {% if scoring_failed %}
+  <div class="scoring-banner">
+    Background score recompute is failing: {{ scoring_error }} &middot;
+    <a href="{{ url_for('dev_scoring') }}">/dev/scoring</a>
+  </div>
+  {% endif %}
 
   {% block content %}{% endblock %}
 </body>

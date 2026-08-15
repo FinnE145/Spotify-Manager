@@ -101,6 +101,16 @@ body.immersive {
   font-size: 13px;
 }
 
+/* docs/specs/async-recompute-N.md §7.1: sits between the navbar and
+   {% block content %} in base.html, outside .page, so it needs its own rule
+   rather than .page .error -- same color, own placement. */
+.scoring-banner {
+  padding: 6px 16px;
+  color: #b00020;
+  background: #fdecea;
+  font-size: 13px;
+}
+
 /* -- Snapshot ------------------------------------------------------ */
 
 .checkbox-label {

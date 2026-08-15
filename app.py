@@ -63,8 +63,22 @@ def create_app():
     def refresh_scores():
         if request.endpoint in _PUBLIC_ENDPOINTS:
             return None
-        scoring.ensure_fresh(db.get_db())
+        scoring.ensure_fresh()
         return None
+
+    # docs/specs/async-recompute-N.md §7.1: a background recompute failure has
+    # no request to 500 -- this is its visible signal. Reads an in-memory dict
+    # copy under a lock (scoring.recompute_status()), so it costs nothing per
+    # request. base.html renders the banner only when scoring_failed is set;
+    # the next successful recompute overwrites the status and the banner
+    # clears itself.
+    @app.context_processor
+    def inject_scoring_status():
+        status = scoring.recompute_status()
+        return {
+            "scoring_failed": status["outcome"] == "error",
+            "scoring_error": status["error"],
+        }
 
     # -- Error handling -------------------------------------------------
 
@@ -698,10 +712,13 @@ def create_app():
 
     @app.route("/api/scoring/recompute", methods=["POST"])
     def api_scoring_recompute():
-        # Synchronous (~1s, §2.11) -- no job slot, no background thread, same
-        # as every other scoring.recompute() call site. A failure propagates
-        # to the global exception handler, which renders it as the same
-        # {"error", "detail"} JSON shape every other /api/* failure uses;
+        # The one deliberately synchronous recompute (docs/specs/
+        # async-recompute-N.md §4.3): its response carries the fresh tier
+        # counts and outcome scoring.js renders in place, and it's the manual
+        # retry after a background failure, so it must call recompute()
+        # directly rather than scoring.request_recompute(). A failure
+        # propagates to the global exception handler, which renders it as the
+        # same {"error", "detail"} JSON shape every other /api/* failure uses;
         # scoring.js reads either that or this success shape off the response.
         conn = db.get_db()
         scoring.recompute(conn)
@@ -995,7 +1012,7 @@ def create_app():
         # (spec M §1).
         canonical.mark_reviewed_pairs(conn, canonical_detect.cross_component_pairs(conn, track_ids))
         conn.commit()
-        scoring.recompute(conn)
+        scoring.request_recompute()
         return jsonify({"ok": True})
 
     @app.route("/api/canonical/queue")
@@ -1050,7 +1067,7 @@ def create_app():
         for track_id in track_ids:
             conn.execute("DELETE FROM pending_tier_review WHERE track_id = ?", (track_id,))
         conn.commit()
-        scoring.recompute(conn)
+        scoring.request_recompute()
         return jsonify(result)
 
     @app.route("/api/canonical/autogroup/preview")
@@ -1083,7 +1100,7 @@ def create_app():
         except ValueError as e:
             abort(400, description=str(e))
         conn.commit()
-        scoring.recompute(conn)
+        scoring.request_recompute()
         return jsonify({"ok": True})
 
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
