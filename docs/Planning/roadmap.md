@@ -123,9 +123,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
       DONE                      DONE                DONE                DONE
   ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls) ──► F/G ──► L (better search)
+      DONE
 ```
 
-**A, I, C, D, E, B, K and H have landed.** Their sections below are marked, and each points
+**A, I, C, D, E, B, K, H and M have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
@@ -400,10 +401,40 @@ Deferred. The full inventory is carried in `feature_ideas.md` under *Listening a
 
 **Adoption stagger belongs here, not in scoring.** Moved out of B during B's planning. Distinct add-days ÷ tracks per artist — did an artist arrive gradually or as one discography dump? The original analysis found bulk-added artists survive slightly worse: real, but small. The reason it can't go anywhere near H is that it exists to **discover a mechanism** that drives liking and souring — so feeding it into a score would make the score predict itself. As a descriptive report about how listening actually works, it's interesting; as a scoring input, it's circular.
 
-## M — Grouping-review fixes + album backfill
+## M — Grouping-review fixes + album backfill ✅ DONE
 
-**Not specced.** Own `/symr-plan` session. Three things in one step: two review-UI defects
-that both silently produce *wrong groups*, and the backfill that M1 in particular gates.
+**Shipped 2026-08-15 → `docs/specs/grouping-fixes-backfill-M.md`, which is authoritative for
+what actually landed. Read the spec, not this section.** Four things, not the three below:
+planning split the review-UI defects into M1 (the `mark_reviewed` over-reach), M1b (the
+viewer selection) and M1c (the missing album links), then M2 for the backfill.
+
+**What this section got wrong**, all corrected in the spec's §0:
+
+- **M1's fix is narrower than "the pairs the queue asked about"** — it is exactly the
+  **cross-component** pairs, the only ones `_cross_component_reviewed` checks, which makes it
+  both the minimal fix and an exact match for what settles a bucket. Verified over all 741
+  real multi-component buckets: components always agree with `_bucket_components`, every
+  bucket settles, and no within-component pair ever leaks in.
+- **No repair script, and none was safe.** Nine of the ten split ISRCs were already fixed by
+  hand; the tenth (`QZ8GX1702008`) is the upstream distributor collision and *should* stay
+  split. The 95 within-component reviewed-and-ungrouped pairs share no ISRC, so none would
+  auto-group even if un-decided. `reset_misgrouped_pairs.py` was deliberately **not** followed
+  as a precedent.
+- **M1b took the second option** — `canonical_review.js` clears the key on a successful ad-hoc
+  apply — because backing out of the review screen must not cost the selection.
+- **The cost table below is superseded**: ~208 requests for the last 7 generations was really
+  **~178**, because an album Symr already holds in full needs no request at all.
+- **M2's shape changed completely.** No budget parameter, no resumability machinery, no
+  chaining into the round-trip or auto-group. It is one thing — an extra way to put uris into
+  the round-trip's existing queue — and everything is derived, so clearing the queue is a free
+  and complete undo.
+
+**Measured on the real run, 2026-08-15** (last 7 generations, ordinals 31–37): albums with a
+stored tracklist went **9 → 186** and **1,465 uris were queued**, against the spec's
+prediction of 176 albums and 1,465 missing tracks. The round-trip then resolved all 1,465 in
+**33 requests**, taking the library from **9,953 to 11,418 tracks**. Generations 31–37 are now
+handled, so the buttons have moved on to **24–30 (200 albums, ~199 requests)** and **29–30
+(60 albums, ~60 requests)**.
 
 ### M1 — the `mark_reviewed` bug
 
