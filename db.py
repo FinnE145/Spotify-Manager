@@ -715,6 +715,12 @@ def _migrate(conn):
 
 
 # -- Meta key/value store -------------------------------------------------
+#
+# For app/job connections only -- get_meta() indexes by column name, so it
+# needs the sqlite3.Row factory that get_db()/connect() set and init_db()
+# deliberately does not. That is why _ensure_views() above still reads
+# `views_hash` with its own query rather than calling get_meta(): it runs on
+# the init_db() connection, where a row is a plain tuple.
 
 
 def set_meta(conn, key, value):

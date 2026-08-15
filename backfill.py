@@ -140,19 +140,12 @@ def _format_ordinal_range(ordinals):
     return ", ".join(f"{a}" if a == b else f"{a}–{b}" for a, b in generations.runs(ordinals))
 
 
-def work_list(conn, n_generations):
-    """Everything the Add-button preview and the job's real run both need,
-    computed identically so the two can never disagree: the chosen
-    generation ordinals (descending, skipping handled ones, capped at
-    n_generations), the unsettled albums with a track present in any of
-    them, and the request estimate. Pure -- no Spotify calls, nothing
-    written but the ensure_track_groups() every generation_presence reader
-    needs."""
-    canonical.ensure_track_groups(conn)
-    conn.commit()
-
-    settled = _settled_map(conn)
-    chosen = _unhandled_ordinals_desc(conn, settled)[:n_generations]
+def _derive(conn, n_generations, settled, unhandled):
+    """The work list itself, off an already-computed settled map and
+    unhandled-ordinal list. Split out so previews() can derive both buttons
+    from one pass over them (§4.6) -- the two differ only in how many
+    ordinals they take."""
+    chosen = unhandled[:n_generations]
     album_ids = _albums_for_ordinals(conn, chosen)
     unsettled = sorted(a for a in album_ids if not settled.get(a, False))
 
@@ -163,16 +156,47 @@ def work_list(conn, n_generations):
     }
 
 
-def preview(conn, n_generations):
-    """Display shape of work_list() for the Add buttons: no Spotify calls,
-    computed fresh on every /dev/roundtrip page load (spec M §4.6)."""
-    wl = work_list(conn, n_generations)
-    return {
-        "generations": n_generations,
-        "album_count": len(wl["albums"]),
-        "requests_estimate": wl["requests_estimate"],
-        "range_label": _format_ordinal_range(wl["ordinals"]),
-    }
+def _refresh(conn):
+    """The one write either entry point makes: every generation_presence
+    reader needs track groups to be current first."""
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+
+def work_list(conn, n_generations):
+    """Everything the Add-button preview and the job's real run both need,
+    computed identically so the two can never disagree: the chosen
+    generation ordinals (descending, skipping handled ones, capped at
+    n_generations), the unsettled albums with a track present in any of
+    them, and the request estimate. Pure -- no Spotify calls, nothing
+    written but _refresh()'s track groups."""
+    _refresh(conn)
+    settled = _settled_map(conn)
+    return _derive(conn, n_generations, settled, _unhandled_ordinals_desc(conn, settled))
+
+
+def previews(conn, counts=(7, 2)):
+    """Display shape of work_list() for the Add buttons, one row per button,
+    computed fresh on every /dev/roundtrip page load (spec M §4.6). Both
+    buttons share a single _refresh() / _settled_map() /
+    _unhandled_ordinals_desc() pass: they are identical for every button, so
+    doing them per button was a second track-group check and a second commit
+    on a plain page load."""
+    _refresh(conn)
+    settled = _settled_map(conn)
+    unhandled = _unhandled_ordinals_desc(conn, settled)
+    rows = []
+    for n in counts:
+        wl = _derive(conn, n, settled, unhandled)
+        rows.append(
+            {
+                "generations": n,
+                "album_count": len(wl["albums"]),
+                "requests_estimate": wl["requests_estimate"],
+                "range_label": _format_ordinal_range(wl["ordinals"]),
+            }
+        )
+    return rows
 
 
 # -- The run -------------------------------------------------

@@ -51,20 +51,19 @@
    handful of sites that need a query param the plain three-arg form can't
    express. css_class is likewise optional, for the couple of sites (the
    entity_playlist.html tier toggles) that need an active-state class on the
-   <a> itself; every branch always emits the attribute, empty or not, same as
-   those sites did before they went through this macro. #}
+   <a> itself; it is omitted entirely when empty, so every other site's output
+   stays exactly what it was before it went through this macro.
+
+   The branches pick the href and nothing else -- there is one <a> below, so
+   the class attribute is emitted in one place rather than five. #}
 {% macro entity_link(kind, id, text, params={}, css_class='') -%}
-{%- if kind == 'track' -%}
-<a href="{{ url_for('track_page', track_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
-{%- elif kind == 'album' -%}
-<a href="{{ url_for('album_page', album_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
-{%- elif kind == 'artist' -%}
-<a href="{{ url_for('artist_page', artist_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
-{%- elif kind == 'playlist' -%}
-<a href="{{ url_for('playlist_page', playlist_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
-{%- else -%}
-<a href="{{ url_for(kind ~ '_page', group_id=id, **params) }}" class="{{ css_class }}">{{ text }}</a>
+{%- if kind == 'track' -%}{% set href = url_for('track_page', track_id=id, **params) %}
+{%- elif kind == 'album' -%}{% set href = url_for('album_page', album_id=id, **params) %}
+{%- elif kind == 'artist' -%}{% set href = url_for('artist_page', artist_id=id, **params) %}
+{%- elif kind == 'playlist' -%}{% set href = url_for('playlist_page', playlist_id=id, **params) %}
+{%- else -%}{% set href = url_for(kind ~ '_page', group_id=id, **params) %}
 {%- endif -%}
+<a href="{{ href }}"{% if css_class %} class="{{ css_class }}"{% endif %}>{{ text }}</a>
 {%- endmacro %}
 
 {# A track's credited artists as individual links, comma-joined -- credits is

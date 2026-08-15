@@ -743,7 +743,7 @@ def create_app():
             # Server-rendered, no Spotify calls (spec M §4.6) -- the numbers
             # beside the Add buttons are the whole budget control, no
             # preview-then-confirm step.
-            backfill_previews=[backfill.preview(conn, 7), backfill.preview(conn, 2)],
+            backfill_previews=backfill.previews(conn),
         )
 
     @app.route("/dev/canonical", endpoint="dev_canonical")

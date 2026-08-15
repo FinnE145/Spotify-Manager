@@ -17,7 +17,7 @@ from spotipy.exceptions import SpotifyException
 
 # The one lock and the one job slot.
 _lock = threading.Lock()
-_active = None  # None | "snapshot" | "history_import" | "roundtrip"
+_active = None  # None | "snapshot" | "history_import" | "roundtrip" | "backfill"
 _stop_requested = False
 
 # Entries kept in a JobStatus event log. Old entries drop off the front, so
