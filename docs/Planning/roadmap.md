@@ -122,7 +122,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
       DONE                      DONE                DONE                DONE
-  ──► M (grouping fix + album backfill) ──► J (partial pulls) ──► F/G ──► L (better search)
+  ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls) ──► F/G ──► L (better search)
 ```
 
 **A, I, C, D, E, B, K and H have landed.** Their sections below are marked, and each points
@@ -139,6 +139,10 @@ grows — M is not a prerequisite for scoring, it just raises the ceiling.
 
 New steps that aren't part of the listening-data chain slot into this order
 explicitly when they're added — don't leave them dangling off the end.
+
+**N sits right after M by priority, not dependency.** Finn asked for it next while M was
+still in flight; it has no technical dependency on M, J, or anything else here, so a later
+session is free to resequence it if something else becomes more urgent first.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
@@ -502,6 +506,47 @@ is not, and wants J (resumable pulls) to exist first.
 
 **M1 must land before M2 runs at any scale**, since every backfilled track with a common
 title is exactly the shape that triggers the bug.
+
+## N — Async score recompute
+
+**Not specced.** Own `/symr-plan` session. Surfaced 2026-08-15, mid-M-implement, when Finn
+noticed a half-second-plus delay after every Enter/Next in the grouping review queue.
+
+**Measured 2026-08-15:** `scoring.recompute()` costs **1.35–1.50s** on the current library
+(H's spec recorded ~1.2s; the library has grown since — `scoring.py` itself is untouched by
+M, confirmed by an empty diff, so this isn't a regression from that step). The delay is H's
+design working as specced: recompute runs **synchronously inside the request** at all **20**
+of its call sites across the codebase (`docs/specs/scoring-H.md` §9.2: "called at the end of
+every write path that touches a scoring input"). Only two of the twenty are felt on every
+keystroke — `/api/canonical/apply` and `/api/canonical/cross/apply`, the review queue's commit
+endpoints. The rest are one-off clicks (pin representative, generation confirm, the manual
+"Recompute scores" button, auto-group run/undo, `/dev/artists`' mark-same/unmerge — same
+per-decision shape as the review queue, just a shorter, less-frequently-worked queue) or
+already amortized over a multi-second-to-minute background job (snapshot, round-trip, history
+import), where an extra 1.5s is comparatively invisible.
+
+**Why it's whole-library, and why that's not a quick fix.** Two structural reasons, not an
+oversight: shrinkage pulls every version's raw score toward its bucket's **median** input
+(§4.5), and a median doesn't update incrementally the way a sum or count does — a targeted
+recompute would need either a stale baseline or a rescan of the bucket anyway. And a single
+grouping edit's blast radius is bigger than the tracks in the request: merges/splits shift
+membership/tenure/play counts for every version involved, `apply_partition` can drag in tracks
+outside the edited item, and each affected version cascades into its recording/release/track
+blend (§6). Making this incremental is a real redesign of scoring's core, not a tweak — and
+not what this step is for.
+
+**Direction: stop blocking the response on it, don't touch the math.** Nothing the review
+queue does right after a commit needs the freshly-recomputed score visible — the felt cost is
+entirely "the request is waiting on work nobody's about to look at."
+
+**What the spec session has to decide:**
+- Fire recompute in a background thread right after commit, vs. dropping the explicit call
+  from the hot endpoints entirely and trusting the existing read-time backstop
+  (`ensure_fresh()`, §9.3) to catch it on whichever later request actually needs a score.
+- If backgrounded: whether rapid-fire commits (holding Enter through a queue) should coalesce
+  into one recompute or just fire redundant overlapping ones — recompute isn't a `jobs.py` job
+  today, so none of that module's single-job-slot machinery covers it.
+- Scope: just the two canonical-queue endpoints, or `/dev/artists`' mark-same/unmerge too?
 
 ## L — Better search
 
