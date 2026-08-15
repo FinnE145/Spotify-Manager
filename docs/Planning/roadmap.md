@@ -27,6 +27,13 @@ Re-measured 2026-08-03.
 | Memberships missing `added_at` | **0** |
 | Last full pull | 2026-08-03 |
 
+> **Superseded for anything current — re-measured 2026-08-14 during H's planning.** The
+> library has grown to **9,949 tracks / 6,214 albums / 4,108 artists / 153 playlists / 37
+> generations**, plays run to 2026-08-06 and **100% of them now resolve** to a track (D's
+> foreign-uri problem is closed). Only 3,633 tracks have a live membership — 6,297 were
+> played and never added. The full current figures live in `docs/specs/scoring-H.md` §2;
+> the 2026-08-03 table above is kept as the record of what was true then.
+
 **Canonical grouping is complete for the current library.** 288 candidate groups have been produced and *all* reviewed (`candidate_groups()` and `cross_artist_groups()` both return 0). That yielded 106 multi-track version groups covering 221 tracks, and 461 reviewed pairs. The low coverage is not an unworked queue — it's the true answer for the tracks Symr can currently see.
 
 **A full snapshot pull cost 232 requests** as measured in July: 3 for the playlist list (150/50), 222 for playlist items (`ceil(track_count/100)` summed over 143 playlists), 7 wasted on the playlists that 403. A's exclude flag has since landed and removes the wasted 7. Not re-measured in August — the item-page count drifts with the library.
@@ -114,13 +121,21 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
    DONE              DONE                              DONE           DONE
 
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
-      DONE                      DONE                DONE                ↑ NEXT
-  ──► J (partial pulls) ──► F/G ──► L (better search)
+      DONE                      DONE                DONE                SPECCED
+  ──► M (grouping fix + album backfill) ──► J (partial pulls) ──► F/G ──► L (better search)
 ```
 
 **A, I, C, D, E, B and K have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
+
+**H is specced but not built** → `docs/specs/scoring-H.md`. Unusually, its *parameters are
+already settled* — tuning happened during the planning session against the real DB, and
+`docs/scoring/tuning_prototype.py` is the executable reference. Implementation reproduces
+it; it does not re-tune.
+
+**M sits after H** because H is correct without it and improves automatically as coverage
+grows — M is not a prerequisite for scoring, it just raises the ceiling.
 
 New steps that aren't part of the listening-data chain slot into this order
 explicitly when they're added — don't leave them dangling off the end.
@@ -276,9 +291,17 @@ A general song ranking that feeds album and artist rankings by aggregation. Moti
 
 - **Two horizons — old and new.** Internally likely one model with a recency-weight parameter, but presented and used as two distinct scores (library-wide retrospective vs. current recommendation context), with the knowledge that the line can move.
 - Short horizon leans on recency-weighted plays and current-version membership; long horizon on tenure, comeback behaviour, and post-year-one share.
-- **Calibrate against ATG** — it's the only real ground truth in the library.
+- ~~**Calibrate against ATG** — it's the only real ground truth in the library.~~
+  **Reversed during H's planning.** ATG is a **holdout, not a calibration target**: it's a
+  personal favourites list, so an algorithm that reproduces it is either overfit or the
+  playlist isn't genuine — agreement proves nothing either way. The algorithm was designed
+  against no target and validated instead against an eleven-collection set whose tiers Finn
+  stated in advance (spec §2.7). ATG is looked at once, afterwards, unbiased.
 
-> ⚠️ **ATG must be corrected before it is used as ground truth.** It currently has missing essentials and a fair amount of over-adding. The convention is right; the contents aren't. Any scoring or validation work waits on that cleanup.
+> ⚠️ ~~**ATG must be corrected before it is used as ground truth.**~~ **No longer a blocker.**
+> ATG's uncleaned state does not gate H, because H never reads it. The cleanup is still
+> worth doing on its own merits, but nothing waits on it. (The ATG *convention* is right;
+> the contents aren't.)
 
 **`impact` is a placeholder for the score.** It is currently the summed live-membership count (and before step E, a broken one — see that spec's §0.1), used as the review queue's ordering. When H lands, replace it there.
 
@@ -339,6 +362,62 @@ evidence of where the ceiling actually sits.
 Deferred. The full inventory is carried in `feature_ideas.md` under *Listening analytics*; revisit which items are actually worth building once A–D have landed and the data is real. G additionally waits on the Power BI prototype step and the still-open charting-library choice.
 
 **Adoption stagger belongs here, not in scoring.** Moved out of B during B's planning. Distinct add-days ÷ tracks per artist — did an artist arrive gradually or as one discography dump? The original analysis found bulk-added artists survive slightly worse: real, but small. The reason it can't go anywhere near H is that it exists to **discover a mechanism** that drives liking and souring — so feeding it into a score would make the score predict itself. As a descriptive report about how listening actually works, it's interesting; as a scoring input, it's circular.
+
+## M — Cross-artist grouping fix + album backfill
+
+**Not specced.** Own `/symr-plan` session. Two things in one step because the first is a
+prerequisite for the second.
+
+### M1 — the `mark_reviewed` bug
+
+`/api/canonical/cross/apply` (`app.py`) ends with `canonical.mark_reviewed(conn, track_ids)`
+over the **whole bucket**, and `mark_reviewed` (`canonical.py`) inserts *every unordered
+pair* in it. But the cross-artist queue only ever asks "does this newcomer belong to that
+existing song group?" — never "are these two tracks the same recording?". So answering a
+bucket (including with the one-keypress default) marks same-artist pairs inside it as
+decided, permanently suppressing them from the main queue where the deterministic same-ISRC
+rule would have grouped them.
+
+Confirmed instance: Mother Mother's "Free" and "Family" each appear on both *No Culture
+(Deluxe)* and *No Culture* with identical ISRC, title and duration. Both buckets also
+contained a same-titled track by another artist, making them cross-artist; both same-artist
+pairs were silently marked and left ungrouped, stranding the plays on one row and the
+memberships on the other. "Love Stuck" survived only because no other artist shares that
+title.
+
+**Measured 2026-08-14:** 10 of 775 multi-track ISRCs split across version groups, 21 tracks
+(0.2%). Seven `reviewed_pair` rows were cleared and re-reviewed by hand that day, leaving 4
+split ISRCs / 9 tracks. Fix direction: mark only the pairs the queue actually asked about
+(newcomer vs existing group members), not pairs internal to the newcomers — and check every
+other `mark_reviewed` caller for the same over-reach.
+
+### M2 — album-tracklist backfill
+
+Symr holds **9,949 of 55,852 tracks (17.8%)** of the full catalogue of every album it has
+touched. Filling that in is what makes album scores fully truthful, because H pads an album
+with its untouched tracks (`docs/specs/scoring-H.md` §5.4) and a backfilled track joins its
+twin's version group by ISRC, inheriting that score.
+
+**Measured 2026-08-14.** Cost is dominated by tracklist fetches (~1 request per album,
+regardless of size), not the round-trip:
+
+| scope | albums | missing tracks | requests |
+|---|---:|---:|---:|
+| everything | 6,214 | 45,903 | ~5,007 |
+| any track in a generation | 1,403 | 7,342 | ~997 |
+| **any track in the last 7 generations** | 312 | 1,465 | **~208** |
+| top 10% of albums by plays | 621 | 3,420 | ~474 |
+
+Ongoing upkeep: median **82 new albums and ~92 requests per month** over the last 12 months.
+55 albums exceed 50 tracks and need tracklist paging.
+
+**The binding constraint is grouping review, not quota.** A full backfill takes the library
+from 9,949 to 55,852 tracks — 5.6× — and every one needs grouping. E's queue was painful at
+810 candidates. The last-7-generations slice is a 15% increase and comfortable; the full one
+is not, and wants J (resumable pulls) to exist first.
+
+**M1 must land before M2 runs at any scale**, since every backfilled track with a common
+title is exactly the shape that triggers the bug.
 
 ## L — Better search
 
