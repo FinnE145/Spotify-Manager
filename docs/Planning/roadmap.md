@@ -125,8 +125,13 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls)
       DONE                                  DONE                          DONE
 
-  ──► P (codebase health) ──► O (request budgets) ──► F/G ──► L (better search)
+  ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
+  ──► O (request budgets) ──► F/G ──► L (better search)
 ```
+
+**P is three parts on one branch, not a normal step.** It is specced, but its entry point
+(`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
+read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
 **A, I, C, D, E, B, K, H, M, N and J have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
@@ -609,13 +614,33 @@ ISRC + normalized title + duration and never touches one. That is what makes a b
 
 ## P — Codebase health
 
-**Not specced. Findings already recorded → `docs/Planning/codebase_health_P.md`.** Read that
-first; it is a dated findings record from a bird's-eye review at the end of J's planning, and
-everything measured in it should be trusted or re-measured deliberately, never re-derived by
-accident. It is explicitly *not* implementation-ready — its §8 lists what a plan session still
-has to decide, starting with whether all four findings even belong in one step.
+**Specced, and unusually shaped → `docs/specs/codebase-health-P.md`.** That file is the entry
+point, but it is a standing **approach document, not a contract** — read its §0 first, because
+every other file in `docs/specs/` is a complete fully-decided spec and this one deliberately is
+not. The per-part instructions live in `docs/codebase-health/<part>.md` and are written one at a
+time, as the previous part's findings come in.
 
-The four, in the order they'd bite:
+**Findings record → `docs/Planning/codebase_health_P.md`.** A dated bird's-eye review from the end
+of J's planning; everything measured in it should be trusted or re-measured deliberately, never
+re-derived by accident. Its §8 listed six things a plan session had to decide — all six are
+answered in `codebase-health-P.md` §9.
+
+**Three parts, one branch (`feat/codebase-health-P`), each merged into `main` as it lands:**
+
+- **P1 — spec audit.** All 17 specs (6,381 lines) cross-referenced against the code; every
+  difference classified and ruled on by Finn. **This part was added during planning and is not in
+  the pre-spec.** It exists because tests written from code encode *what it does* and freeze
+  existing bugs into a permanently green suite — the audit is what makes P2's assertions
+  trustworthy. Explicitly **not** behaviour-preserving: it will surface real bugs, some fixed
+  inline. → `docs/codebase-health/P1_spec_audit.md`
+- **P2 — tests.** pytest in `tests/`, all four tiers (pure functions, routes, DB-bound logic,
+  Spotify-bound loops), JS out of scope. Plus the permanent workflow changes that keep the suite
+  alive: Verify runs it before finish-up, Implement runs it before handing off, and every future
+  spec carries a Tests section.
+- **P3 — refactor.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
+  snapshots over all 69 routes. Strictly behaviour-preserving.
+
+The four original findings, in the order they'd bite:
 
 - **No automated tests at 15,400 lines**, against a `symr.db` that is not reconstructible.
   The specs cover acceptance; nothing covers regression. `snapshot._diff_playlist_tracks` is
@@ -628,6 +653,16 @@ The four, in the order they'd bite:
   and already drifting (it says two `before_request` hooks; J adds a third).
 - **A circular import** between `artists.py` and `canonical_detect.py`. Fragile rather than
   broken, and the only cycle in an otherwise clean graph.
+
+**`create_app` gets query extraction, not blueprints** (`codebase-health-P.md` §5) — the read-path
+work moves into the modules that already own that data, leaving the routes where they are.
+Blueprints would namespace 53 `url_for` call sites, which would make the golden snapshots
+legitimately differ and destroy the one clean verification story P3 has. Deferred, not rejected:
+easier after extraction than before, and decidable on evidence then.
+
+**Lint and formatting are skipped** (pre-spec §8.5, answered on measurement): zero unused imports
+and zero trailing whitespace across all 18 modules, so a linter would find nothing, and a formatter
+would flatten `git blame` on a codebase whose why-comments are its most valuable asset.
 
 **The pre-spec's §6 and §7 matter as much as the findings.** They record what is healthy and
 must survive a cleanup — the 24% why-not-what comment density above all — and which
