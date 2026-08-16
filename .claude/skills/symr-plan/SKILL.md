@@ -36,4 +36,5 @@ The spec is the **first commit on that feature branch**; implementation commits 
 - **No "Open questions" section.** The spec ships fully decided. Anything you'd park there is a question to ask now, in chat.
 - Per-feature extra files (sub-specs, notes) go in `docs/<feature>/`, referenced from the spec.
 - Commit the spec (in Finn's name, when he asks) as the branch's **first** commit. Don't push.
+- **If this session started a dev server at any point (e.g. to check current behavior while shaping the spec), stop it once the commit lands.** Don't leave port 45660 occupied for whatever session comes next.
 - **Planning routinely produces edits outside the spec** — a new roadmap step, a correction to an existing doc, a skill or `CLAUDE.md` change. Those never join the spec commit: they land as a **second commit at the end of the plan phase**, so the first commit on a feature branch is always exactly the spec and nothing else.
