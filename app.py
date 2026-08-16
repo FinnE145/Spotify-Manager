@@ -58,7 +58,7 @@ def create_app():
     # authenticated request rather than scattered per-route like
     # canonical.ensure_track_groups(conn) -- a single hook is a write path
     # that can never be forgotten, which is the property the backstop exists
-    # for. Cheap on the common case (a 0.03ms PRAGMA); see scoring.ensure_fresh.
+    # for. Cheap on the common case (a 0.002ms PRAGMA); see scoring.ensure_fresh.
     @app.before_request
     def refresh_scores():
         if request.endpoint in _PUBLIC_ENDPOINTS:
@@ -1076,8 +1076,12 @@ def create_app():
 
     @app.route("/api/canonical/autogroup", methods=["POST"])
     def api_canonical_autogroup():
-        # Synchronous: ~1.2s with apply_partition(cleanup=False), so it needs
-        # neither the job slot nor a background thread.
+        # Synchronous: ~1.2s with apply_partition(cleanup=False), plus the
+        # ~1.8s closing recompute this route deliberately keeps inline
+        # (docs/specs/async-recompute-N.md §4.3). Still needs neither the job
+        # slot nor a background thread -- it's one deliberate click, the
+        # button reports its own progress, and the page reloads onto
+        # score-ordered content when it returns.
         return jsonify(canonical_autogroup.run(db.get_db()))
 
     @app.route("/api/canonical/autogroup/undo", methods=["POST"])
