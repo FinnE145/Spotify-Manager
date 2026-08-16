@@ -66,6 +66,8 @@ If I'm clearly in one phase but didn't invoke its skill, infer and load that **o
 
 ## When Asking Questions
 - Always **number** questions (use sub-letters when nesting, e.g. 1, 2a, 2b) so I can reply item-by-item. This applies to any list I'll respond to point-by-point; plain prose replies don't need identifiers.
+- **Brief first, then ballot.** Findings, reasoning and recommendations go in prose *above* the numbered list; each numbered item is the decision itself, ideally one line. A question carrying its own justification inline is hard to scan and hard to answer item-by-item — the identical list, re-asked with the rationale lifted out, reads far more clearly.
+- **Compressing a question moves its "why" up, never deletes it.** If a fact matters enough to state, it stays on the page — just above the list rather than inside it. This is a rule about placement, not about asking less: never drop a real consideration to make a list look tidy.
 
 ## Frontend
 - **Function over form.** This is a personal tool; a plain HTML page that does everything I want beats a pretty, half-finished one. Don't spend effort on visual polish unless I ask.

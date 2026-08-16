@@ -35,4 +35,5 @@ The spec is the **first commit on that feature branch**; implementation commits 
 - **Say up front whether this came from the roadmap.** Every spec's header states its provenance in one line: either *"Step X of `docs/Planning/roadmap.md`."* (read that step's section first — it carries measured facts and already-resolved decisions, and note in the spec anywhere planning contradicted it) or *"Not a roadmap step — standalone."* Verify's finish-up reads that line to decide whether to check a step off, so it can't be left implicit. If a brain-dump obviously *is* a roadmap step but Finn didn't say so, ask.
 - **No "Open questions" section.** The spec ships fully decided. Anything you'd park there is a question to ask now, in chat.
 - Per-feature extra files (sub-specs, notes) go in `docs/<feature>/`, referenced from the spec.
-- Commit the spec (in Finn's name, when he asks) as the branch's first commit. Don't push.
+- Commit the spec (in Finn's name, when he asks) as the branch's **first** commit. Don't push.
+- **Planning routinely produces edits outside the spec** — a new roadmap step, a correction to an existing doc, a skill or `CLAUDE.md` change. Those never join the spec commit: they land as a **second commit at the end of the plan phase**, so the first commit on a feature branch is always exactly the spec and nothing else.

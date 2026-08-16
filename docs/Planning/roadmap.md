@@ -122,8 +122,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
       DONE                      DONE                DONE                DONE
-  ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls) ──► F/G ──► L (better search)
+  ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls)
       DONE                                  DONE
+
+  ──► O (request budgets) ──► F/G ──► L (better search)
 ```
 
 **A, I, C, D, E, B, K, H, M and N have landed.** Their sections below are marked, and each points
@@ -143,6 +145,11 @@ explicitly when they're added — don't leave them dangling off the end.
 
 **N sat right after M by priority, not dependency.** Finn asked for it next while M was
 still in flight; it had no technical dependency on M, J, or anything else here.
+
+**O is gated on data, not code.** It follows J because J ships the `api_request` log, but the
+wait is for that log to *catch a real lockout* — until it has, there is no measured ceiling to
+budget against and O has nothing to display. Time spent on other steps is not time O is
+blocked by; it is time the log is collecting.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
@@ -581,6 +588,36 @@ ordering (`app.py`, `artists.py`, `canonical_detect._order()`); `canonical_autog
 ISRC + normalized title + duration and never touches one. That is what makes a briefly-stale
 `score` table safe, and it is the assumption to re-check before anything downstream starts
 *branching* on a score.
+
+## O — Request-budget surfacing
+
+**Not specced.** Own `/symr-plan` session. **Gated on data, not code** — it cannot be
+started until J's `api_request` log has caught a real lockout.
+
+J (`docs/specs/partial-pulls-J.md`) deliberately ships **no budget**: Symr had never recorded
+what it spent, when, or how the response came back, so any number would have been invented.
+What J ships instead is the log that makes a budget definable, plus one bare line on `/dev`
+reading `Requests: x in 24h · y in 7d`.
+
+O is what turns that record into something that stops you spending the quota by accident:
+
+- **The "remaining today" figure**, added to the row J already ships — deliberately left off
+  there because there is nothing to subtract from yet.
+- **Cost/budget estimates on the pages that spend requests** — `/dev/snapshot` (a pull's
+  estimated cost against what is left), `/dev/roundtrip`, the album backfill. M established
+  the pattern worth copying: server-render the number beside the button, because seeing it
+  before clicking *is* the budget control, with no preview-then-confirm step.
+- **Establish what the quota window actually is.** "24 hours" is an inference from a single
+  observed `Retry-After` in the tens of thousands of seconds (`docs/spotify_constraints.md`),
+  not a documented fact and not necessarily a rolling day. The log is the first evidence
+  Symr will ever have had; read it rather than assuming.
+
+**No viewing page for the log**, decided during J's planning — rolling counts in the places
+you are about to spend requests are the whole of the wanted UI, and a page listing every
+request would be read once and never again.
+
+**Useful when this is picked up:** `roundtrip_run.requests` remains the only *per-run* request
+count from before the log existed, kept deliberately for failed runs too.
 
 ## L — Better search
 
