@@ -125,7 +125,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls)
       DONE                                  DONE
 
-  ──► O (request budgets) ──► F/G ──► L (better search)
+  ──► P (codebase health) ──► O (request budgets) ──► F/G ──► L (better search)
 ```
 
 **A, I, C, D, E, B, K, H, M and N have landed.** Their sections below are marked, and each points
@@ -588,6 +588,38 @@ ordering (`app.py`, `artists.py`, `canonical_detect._order()`); `canonical_autog
 ISRC + normalized title + duration and never touches one. That is what makes a briefly-stale
 `score` table safe, and it is the assumption to re-check before anything downstream starts
 *branching* on a score.
+
+## P — Codebase health
+
+**Not specced. Findings already recorded → `docs/Planning/codebase_health_P.md`.** Read that
+first; it is a dated findings record from a bird's-eye review at the end of J's planning, and
+everything measured in it should be trusted or re-measured deliberately, never re-derived by
+accident. It is explicitly *not* implementation-ready — its §8 lists what a plan session still
+has to decide, starting with whether all four findings even belong in one step.
+
+The four, in the order they'd bite:
+
+- **No automated tests at 15,400 lines**, against a `symr.db` that is not reconstructible.
+  The specs cover acceptance; nothing covers regression. `snapshot._diff_playlist_tracks` is
+  the obvious first target — pure, deterministic, 80 lines, and the one function whose bugs
+  silently corrupt membership history.
+- **`create_app` is 1,572 lines** — 10% of the codebase in one function, holding 71 view
+  functions and 42 `conn.execute` calls. Its five largest views are all doing read-path work
+  that `CLAUDE.md`'s own stated rule says belongs in `entities.py`.
+- **`CLAUDE.md` is a hand-maintained second source of truth** whose accuracy is load-bearing
+  and already drifting (it says two `before_request` hooks; J adds a third).
+- **A circular import** between `artists.py` and `canonical_detect.py`. Fragile rather than
+  broken, and the only cycle in an otherwise clean graph.
+
+**The pre-spec's §6 and §7 matter as much as the findings.** They record what is healthy and
+must survive a cleanup — the 24% why-not-what comment density above all — and which
+apparent problems are deliberate decisions not to "fix" (the `raw_json` capture, the spent
+`scripts/` one-offs, the no-bundler frontend).
+
+**Placed here because it is the next actionable step after J**, not because anything depends
+on it: O is gated on the request log catching a real lockout, so it cannot start immediately
+whatever the order says. P has no dependencies at all and gets more expensive the longer it
+waits — `create_app` only grows. Easy to move if something else matters more.
 
 ## O — Request-budget surfacing
 
