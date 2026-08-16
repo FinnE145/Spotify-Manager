@@ -254,7 +254,7 @@ Needs **no play history and no Spotify requests**.
 
 **Planning moved three things out of B.** *Intent score* goes to H, *adoption stagger* to F/G (see both), and the *right-censoring flag* is dropped from this layer entirely — tenure is a raw measurement, so a song appearing only in the newest generation has tenure 1 regardless of age. Censoring is the interpreting consumer's job, and H must not read a low tenure on recent material as failure.
 
-## K — Entity viewing pages
+## K — Entity viewing pages ✅ DONE
 
 **✅ DONE → `docs/specs/entity-pages-K.md`.** That spec is authoritative for what actually
 shipped; the summary below is the original shape, kept for the reasoning. Planning **corrected
@@ -296,7 +296,7 @@ links to an album or artist at all.
 Sits after B so the generation view has something to show, and before H so scoring has
 somewhere to display its output.
 
-## H — Scoring
+## H — Scoring ✅ DONE
 
 **✅ DONE → `docs/specs/scoring-H.md`.** That spec is authoritative for what actually
 shipped; the summary below is the original shape, kept for the reasoning. Its §0 exists
