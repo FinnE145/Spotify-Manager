@@ -123,12 +123,12 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
       DONE                      DONE                DONE                DONE
   ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls)
-      DONE                                  DONE
+      DONE                                  DONE                          DONE
 
   ──► P (codebase health) ──► O (request budgets) ──► F/G ──► L (better search)
 ```
 
-**A, I, C, D, E, B, K, H, M and N have landed.** Their sections below are marked, and each points
+**A, I, C, D, E, B, K, H, M, N and J have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
@@ -365,9 +365,26 @@ past 7 days for a set of track ids, resolved through `played_uri_track`). It is 
 simple. Whatever bulk play aggregation H — or F/G — builds should absorb it rather than leaving
 two read paths that can disagree.
 
-## J — Partial / resumable pulls
+## J — Partial / resumable pulls ✅ DONE
 
-**Not specced.** Own `/symr-plan` session.
+**✅ DONE → `docs/specs/partial-pulls-J.md`.** That spec is authoritative for what actually
+shipped; the summary below is the original shape, kept for the reasoning. Its §0 records
+where planning contradicted this section, and two corrections matter enough to state here:
+
+**J's stated premise below is not yet true.** Measured 2026-08-15, a full pull costs **232
+requests** — the *same* 232 measured in July, even though the library went 3,611 → 11,418
+tracks, because the round-trip's new tracks carry no playlist memberships. Live memberships
+only moved 12,513 → 12,688. The growth this section anticipates has not arrived.
+
+**The real reason J was worth doing now** was found during planning: an aborted pull was
+worse than useless, it *poisoned the next refresh*. Every playlist's fresh `snapshot_id` was
+committed before any item read, and nothing compared it against what the stored items
+actually came from — so the playlists an aborted run never reached looked unchanged forever.
+Resumability and that bug were the same missing fact, fixed by one new column.
+
+**No request budget shipped** — there was no data to set one from. J ships the `api_request`
+log instead, which is what makes a budget definable later; that is step **O**, gated on the
+log catching a real lockout.
 
 A full pull is one indivisible run of ~225 requests across 152 playlists. The app
 is dev-mode with no extended-quota grant, and exhausting that quota returns a
@@ -391,11 +408,12 @@ starts over from the beginning.
   stored** — its work list recomputes what is left rather than checkpointing, so
   nothing can go stale.
 
-**What the spec session has to decide:** how a partial pull records where it got
-to (derived like D's, or an explicit cursor); whether it stops on a request budget
-rather than waiting to be rate-limited; ordering (most-stale first? smallest
-first?); whether resume is manual or automatic; and what the UI shows for "63 of
-152 playlists captured, resume tomorrow".
+**What the spec session had to decide, and did** (all five settled in the spec's §0.3–§0.4):
+progress is **derived**, per D's precedent — one new column plus one `meta` key, no cursor;
+**no request budget** (§0.3); ordering is never-captured first, then `all_time` score
+descending; resume is manual and needs **no new button**, because under the derived rule
+Refresh and Full pull *are* the resume; and the UI gets a stale count on the status line plus
+an end-of-run line that says what the run captured rather than implying a total loss.
 
 **Useful data:** `roundtrip_run.requests` is the first per-run request count Symr
 has ever recorded, and it is deliberately kept for failed runs too — it is the only
