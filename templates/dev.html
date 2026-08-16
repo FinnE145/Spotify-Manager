@@ -7,6 +7,8 @@
   <h1>Dev</h1>
   <p>Developer and inspection tools.</p>
 
+  <p class="meta">Requests: {{ request_counts.last_24h }} in 24h &middot; {{ request_counts.last_7d }} in 7d</p>
+
   <ul>
     <li>
       <a href="{{ url_for('dev_snapshot') }}">Snapshot</a>

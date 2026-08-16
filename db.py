@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS snapshot (
     snapshot_id TEXT,
     last_changed_at TEXT,
     tracks_pulled_at TEXT,
+    -- The snapshot_id in effect when this playlist's item read last
+    -- succeeded (docs/specs/partial-pulls-J.md §2.1). snapshot_id itself is
+    -- Spotify's change token, refreshed every run whether or not the item
+    -- read happens -- this is the only column that means "the stored items
+    -- are current".
+    tracks_pulled_snapshot_id TEXT,
     unfollowed_at TEXT,
     description TEXT,
     last_pull_error TEXT,
@@ -413,6 +419,29 @@ CREATE TABLE IF NOT EXISTS score (
     recent     REAL NOT NULL,
     PRIMARY KEY (tier, group_id)
 );
+
+-- One row per outbound Spotify request (docs/specs/partial-pulls-J.md §4),
+-- written by api_log.LoggingSession regardless of caller -- a job, an entity
+-- page's detail fetch, or the OAuth token refresh. host separates
+-- quota-counting requests (api.spotify.com) from accounts.spotify.com token
+-- refreshes. No headers, body or response content are ever stored -- only
+-- retry_after (the one header value worth reading) and response_bytes (a
+-- length, not the content). Kept forever; see the spec's retention analysis.
+CREATE TABLE IF NOT EXISTS api_request (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts             TEXT NOT NULL,
+    host           TEXT NOT NULL,
+    method         TEXT NOT NULL,
+    path           TEXT NOT NULL,
+    query          TEXT,
+    status         INTEGER,
+    duration_ms    INTEGER,
+    response_bytes INTEGER,
+    retry_after    INTEGER,
+    context        TEXT,
+    error          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_request_ts ON api_request(ts);
 """
 
 # Rebuilt whenever the definition here changes (see _ensure_views) rather than
@@ -640,9 +669,19 @@ def _migrate(conn):
         ("last_pull_error", "ALTER TABLE snapshot ADD COLUMN last_pull_error TEXT"),
         ("generation_declined",
          "ALTER TABLE snapshot ADD COLUMN generation_declined INTEGER NOT NULL DEFAULT 0"),
+        ("tracks_pulled_snapshot_id", "ALTER TABLE snapshot ADD COLUMN tracks_pulled_snapshot_id TEXT"),
     ):
         if column not in snapshot_columns:
             conn.execute(ddl)
+
+    # Asserts exactly what today's refresh logic already believes -- that a
+    # stored snapshot_id matching Spotify's means the stored items are
+    # current (docs/specs/partial-pulls-J.md §2.9). Without this, the first
+    # refresh after J ships would treat all playlists as stale.
+    conn.execute(
+        "UPDATE snapshot SET tracks_pulled_snapshot_id = snapshot_id "
+        "WHERE tracks_pulled_at IS NOT NULL AND tracks_pulled_snapshot_id IS NULL"
+    )
 
     # roundtrip_failed_uri briefly stored a free-text `reason` that was also
     # matched on as control flow. Recreate it with the slug enum -- only ever

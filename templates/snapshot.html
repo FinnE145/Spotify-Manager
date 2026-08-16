@@ -15,6 +15,7 @@
       <span data-field="playlists_pulled">{{ summary.playlists_pulled }}</span> /
       <span data-field="playlists_total">{{ summary.playlists_total }}</span> pulled
       &middot; <span data-field="playlists_excluded">{{ summary.playlists_excluded }}</span> excluded
+      &middot; <span data-field="playlists_stale">{{ summary.playlists_stale }}</span> stale
       <span id="playlists-failing-wrap" class="error" {% if not summary.playlists_failing %}hidden{% endif %}>
         &middot; <span data-field="playlists_failing">{{ summary.playlists_failing }}</span> failing
       </span>
@@ -47,6 +48,7 @@
       Backfill (<span data-field="backfill_pending">{{ summary.backfill_pending }}</span>
       request<span data-plural-for="backfill_pending">{{ "" if summary.backfill_pending == 1 else "s" }}</span>)
     </button>
+    <button id="snapshot-stop-btn" type="button" disabled>Stop</button>
     <p id="snapshot-error" class="error" hidden></p>
   </section>
 

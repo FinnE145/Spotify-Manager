@@ -55,7 +55,9 @@ def _record_failure(conn, playlist_id, name, error):
 
 
 def get_status():
-    return _status.get()
+    status = _status.get()
+    status["stopping"] = status["running"] and jobs.stop_requested()
+    return status
 
 
 def summary_counts(conn):
@@ -66,6 +68,16 @@ def summary_counts(conn):
         ).fetchone()[0],
         "playlists_excluded": conn.execute(
             "SELECT COUNT(*) FROM snapshot WHERE excluded = 1"
+        ).fetchone()[0],
+        # The size of the work list a Refresh would build right now (the
+        # refresh rule of §2.2) -- NULL != NULL is NULL, not TRUE, so this
+        # needs the explicit IS NULL branch rather than a plain !=. Liked
+        # Songs excluded: it has no real snapshot_id (§2.7), so it can never
+        # satisfy the stale check and would otherwise always count as one.
+        "playlists_stale": conn.execute(
+            "SELECT COUNT(*) FROM snapshot WHERE excluded = 0 AND playlist_id != ? AND "
+            "(tracks_pulled_snapshot_id IS NULL OR tracks_pulled_snapshot_id != snapshot_id)",
+            (LIKED_PLAYLIST_ID,),
         ).fetchone()[0],
         "playlists_failing": conn.execute(
             "SELECT COUNT(*) FROM snapshot WHERE last_pull_error IS NOT NULL AND excluded = 0"
@@ -133,6 +145,7 @@ def _run_pull(force_all):
         targets = _sync_playlists_and_get_targets(conn, sp, force_all)
 
         _status.set(phase="tracks", run_total=len(targets), run_done=0)
+        stopped = False
         for i, p in enumerate(targets):
             _status.set(current_playlist=p["name"], run_done=i)
             try:
@@ -147,29 +160,42 @@ def _run_pull(force_all):
             except Exception as e:
                 conn.rollback()
                 _record_failure(conn, p["id"], p["name"], e)
-        _status.set(run_done=len(targets), current_playlist=None)
+            # The natural safe point: this playlist's commit has already
+            # landed, and the next one's fetch hasn't started yet.
+            if jobs.stop_requested():
+                stopped = True
+                break
+        _status.set(run_done=(i + 1) if stopped else len(targets), current_playlist=None)
 
-        _status.set(phase="liked_songs")
-        liked_row = conn.execute(
-            "SELECT excluded FROM snapshot WHERE playlist_id = ?", (LIKED_PLAYLIST_ID,)
-        ).fetchone()
-        if not (liked_row and liked_row["excluded"]):
-            try:
-                _pull_liked_songs(conn, sp)
-                conn.commit()
-            except RateLimited:
-                conn.rollback()
-                raise
-            except Exception as e:
-                conn.rollback()
-                _record_failure(conn, LIKED_PLAYLIST_ID, "Liked Songs", e)
+        if not stopped:
+            _status.set(phase="liked_songs")
+            liked_row = conn.execute(
+                "SELECT excluded FROM snapshot WHERE playlist_id = ?", (LIKED_PLAYLIST_ID,)
+            ).fetchone()
+            if not (liked_row and liked_row["excluded"]):
+                try:
+                    _pull_liked_songs(conn, sp)
+                    conn.commit()
+                except RateLimited:
+                    conn.rollback()
+                    raise
+                except Exception as e:
+                    conn.rollback()
+                    _record_failure(conn, LIKED_PLAYLIST_ID, "Liked Songs", e)
 
-        db.set_meta(conn, "last_full_pull_at" if force_all else "last_refresh_at", jobs.now_iso())
+            # Both mean "a pull ran to completion" -- a stopped run leaves the
+            # page showing the older, honest date rather than claiming one
+            # (§2.8).
+            db.set_meta(
+                conn, "last_full_pull_at" if force_all else "last_refresh_at", jobs.now_iso()
+            )
+
         canonical.ensure_track_groups(conn)
         conn.commit()
         scoring.recompute(conn)
 
-        _status.set(phase="done", finished_at=jobs.now_iso())
+        # A deliberate stop is not a fault and must not render as one.
+        _status.set(phase="stopped" if stopped else "done", finished_at=jobs.now_iso())
     except RateLimited as e:
         # Discard anything this run left uncommitted before recomputing --
         # otherwise recompute()'s own commit would inadvertently make durable
@@ -204,6 +230,7 @@ def _run_backfill():
         ]
         _status.set(run_total=len(track_ids), run_done=0)
 
+        stopped = False
         for i, track_id in enumerate(track_ids):
             _status.set(current_playlist=track_id, run_done=i)
             try:
@@ -223,12 +250,16 @@ def _run_backfill():
                     "failed_playlists",
                     {"playlist_id": track_id, "name": track_id, "error": str(e)},
                 )
-        _status.set(run_done=len(track_ids), current_playlist=None)
+            if jobs.stop_requested():
+                stopped = True
+                break
+        _status.set(run_done=(i + 1) if stopped else len(track_ids), current_playlist=None)
 
         canonical.ensure_track_groups(conn)
         conn.commit()
         scoring.recompute(conn)
-        _status.set(phase="done", finished_at=jobs.now_iso())
+        # A deliberate stop is not a fault and must not render as one.
+        _status.set(phase="stopped" if stopped else "done", finished_at=jobs.now_iso())
     except RateLimited as e:
         conn.rollback()
         scoring.recompute(conn)
@@ -244,6 +275,61 @@ def _run_backfill():
 # -- Playlist list sync -------------------------------------------------
 
 
+def _is_stale(stored, fresh_snapshot_id):
+    """The refresh rule (docs/specs/partial-pulls-J.md §2.2): compared in
+    Python, not SQL -- NULL != NULL is NULL, and both columns are nullable."""
+    return (
+        stored is None
+        or stored["tracks_pulled_snapshot_id"] is None
+        or stored["tracks_pulled_snapshot_id"] != fresh_snapshot_id
+    )
+
+
+def _is_full_pull_target(stored, stale, epoch):
+    """The full-pull rule: the refresh rule, OR not yet done *for this
+    epoch* (§2.3) -- a forced pull's entire point is to re-read playlists
+    whose snapshot_id hasn't changed, which the refresh rule alone would
+    treat as already done."""
+    return (
+        stale
+        or stored is None
+        or stored["tracks_pulled_at"] is None
+        or stored["tracks_pulled_at"] < epoch
+    )
+
+
+def _resolve_force_epoch(conn, candidates):
+    """Resumes the current forced pull's epoch if it still has unfinished
+    targets; starts a new one (and persists it) only when the previous epoch
+    is complete or absent (§2.4). No Resume button -- this is what makes
+    Full pull its own resume."""
+    epoch = db.get_meta(conn, "pull_force_epoch")
+    if epoch is not None and any(
+        _is_full_pull_target(stored, stale, epoch) for _, stored, stale in candidates
+    ):
+        return epoch
+    epoch = jobs.now_iso()
+    db.set_meta(conn, "pull_force_epoch", epoch)
+    conn.commit()
+    return epoch
+
+
+def _order_targets(conn, targets):
+    """Never-captured first, then by all_time score descending (§2.5).
+    Materialized once here, at the start of the run -- a captured playlist
+    with no scored versions falls out as 0.0 and sorts last among captured,
+    with no special handling."""
+    ids = [p["id"] for p, stored in targets]
+    scores = scoring.playlist_scores(conn, ids)
+
+    def sort_key(item):
+        p, stored = item
+        never_captured = stored is None or stored["tracks_pulled_at"] is None
+        return (0 if never_captured else 1, -scores.get(p["id"], {}).get("all_time", 0.0))
+
+    return [p for p, stored in sorted(targets, key=sort_key)]
+
+
 def _sync_playlists_and_get_targets(conn, sp, force_all):
     playlists = _fetch_all_playlists(sp)
     excluded_ids = {
@@ -251,20 +337,23 @@ def _sync_playlists_and_get_targets(conn, sp, force_all):
         for row in conn.execute("SELECT playlist_id FROM snapshot WHERE excluded = 1")
     }
     seen_ids = set()
-    targets = []
+    candidates = []  # (playlist, stored-row-or-None, stale) for the not-excluded ones
     for p in playlists:
         seen_ids.add(p["id"])
         stored = conn.execute(
-            "SELECT snapshot_id FROM snapshot WHERE playlist_id = ?", (p["id"],)
+            "SELECT snapshot_id, tracks_pulled_snapshot_id, tracks_pulled_at "
+            "FROM snapshot WHERE playlist_id = ?",
+            (p["id"],),
         ).fetchone()
-        is_new_or_changed = stored is None or stored["snapshot_id"] != p["snapshot_id"]
         # Playlist-level metadata (name, snapshot_id, image, description,
         # track_count) is refreshed for every playlist regardless of
-        # exclusion -- only the item-read pass below is skipped.
+        # exclusion -- only the item-read pass below is skipped. Read stored
+        # above, before this overwrites snapshot_id with this run's value.
         _upsert_snapshot_playlist(conn, p)
         _upsert_card(conn, p)
-        if p["id"] not in excluded_ids and (force_all or is_new_or_changed):
-            targets.append(p)
+        if p["id"] in excluded_ids:
+            continue
+        candidates.append((p, stored, _is_stale(stored, p["snapshot_id"])))
     conn.commit()
 
     existing_ids = {
@@ -279,7 +368,16 @@ def _sync_playlists_and_get_targets(conn, sp, force_all):
         conn.execute("UPDATE snapshot SET unfollowed_at = ? WHERE playlist_id = ?", (now, pid))
     conn.commit()
 
-    return targets
+    if force_all:
+        epoch = _resolve_force_epoch(conn, candidates)
+        chosen = [
+            (p, stored) for p, stored, stale in candidates
+            if _is_full_pull_target(stored, stale, epoch)
+        ]
+    else:
+        chosen = [(p, stored) for p, stored, stale in candidates if stale]
+
+    return _order_targets(conn, chosen)
 
 
 def _fetch_all_playlists(sp):
@@ -736,9 +834,12 @@ def _apply_playlist_items(conn, playlist_id, items):
         (playlist_id,),
     ).fetchone()[0]
     last_changed = _compute_last_changed(conn, playlist_id)
+    # Self-referential: records the snapshot_id already stored by this run's
+    # list-read pass, which is the correct value to compare against next run
+    # (docs/specs/partial-pulls-J.md §2.1).
     conn.execute(
-        "UPDATE snapshot SET tracks_pulled_at = ?, track_count = ?, last_changed_at = ?, "
-        "last_pull_error = NULL WHERE playlist_id = ?",
+        "UPDATE snapshot SET tracks_pulled_at = ?, tracks_pulled_snapshot_id = snapshot_id, "
+        "track_count = ?, last_changed_at = ?, last_pull_error = NULL WHERE playlist_id = ?",
         (jobs.now_iso(), live_count, last_changed, playlist_id),
     )
 

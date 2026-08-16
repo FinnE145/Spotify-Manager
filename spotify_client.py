@@ -4,6 +4,7 @@ from spotipy.cache_handler import CacheFileHandler
 from spotipy.oauth2 import SpotifyOAuth
 from urllib3.util import Retry
 
+import api_log
 from config import (
     SPOTIFY_CLIENT_ID,
     SPOTIFY_CLIENT_SECRET,
@@ -14,12 +15,17 @@ from config import (
 
 
 def get_auth_manager():
+    # A second, separate LoggingSession with spotipy's default adapters --
+    # sharing the API client's session would silently apply its GET-only
+    # retry policy to the token-refresh POSTs (docs/specs/partial-pulls-J.md
+    # §4.1).
     return SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
         redirect_uri=SPOTIFY_REDIRECT_URI,
         scope=SPOTIFY_SCOPES,
         cache_handler=CacheFileHandler(cache_path=SPOTIPY_CACHE_PATH),
+        requests_session=api_log.LoggingSession(),
     )
 
 
@@ -37,7 +43,7 @@ def get_spotify_client():
     # build our own session with respect_retry_after_header=False: retry
     # transient 5xx a few times, but let a 429 raise immediately so
     # snapshot.py's own _call() can fail fast on a long wait.
-    session = requests.Session()
+    session = api_log.LoggingSession()
     retry = Retry(
         total=3,
         connect=None,

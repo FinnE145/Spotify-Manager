@@ -4,6 +4,7 @@ import secrets
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
+import api_log
 import artists
 import backfill
 import canonical
@@ -45,6 +46,16 @@ def create_app():
 
     # Endpoints reachable without a Spotify login. Everything else is gated.
     _PUBLIC_ENDPOINTS = {"login", "callback", "static"}
+
+    # First of app's three before_request hooks -- load-bearing order
+    # (docs/specs/partial-pulls-J.md §4.3): require_login below already calls
+    # get_spotify_client(), which can itself trigger a token-refresh POST, so
+    # the context label has to be set before that happens. Unconditional,
+    # not gated on _PUBLIC_ENDPOINTS -- /callback's own token exchange is a
+    # logged request too.
+    @app.before_request
+    def set_api_context():
+        api_log.api_context.set(request.endpoint)
 
     @app.before_request
     def require_login():
@@ -698,7 +709,10 @@ def create_app():
 
     @app.route("/dev")
     def dev_index():
-        return render_template("dev.html", active="dev")
+        conn = db.get_db()
+        return render_template(
+            "dev.html", active="dev", request_counts=api_log.request_counts(conn)
+        )
 
     @app.route("/dev/scoring", endpoint="dev_scoring")
     def dev_scoring_index():
@@ -1334,6 +1348,13 @@ def create_app():
         if not snapshot.start_backfill():
             return jsonify({"error": "already_running"}), 409
         return jsonify({"started": True})
+
+    @app.route("/api/snapshot/stop", methods=["POST"])
+    def stop_snapshot():
+        # Cooperative, like every other job's stop: finishes the current
+        # playlist (or track, for a backfill), commits, then ends in the
+        # stopped-early state.
+        return jsonify({"stopping": jobs.request_stop("snapshot")})
 
     @app.route("/api/snapshot/status")
     def snapshot_status():

@@ -56,6 +56,7 @@
   const pullBtn = document.getElementById("pull-btn");
   const refreshBtn = document.getElementById("refresh-btn");
   const backfillBtn = document.getElementById("backfill-btn");
+  const stopBtn = document.getElementById("snapshot-stop-btn");
   if (!pullBtn && !refreshBtn) return;
 
   const errorEl = document.getElementById("snapshot-error");
@@ -124,6 +125,7 @@
     if (pullBtn) pullBtn.disabled = running;
     if (refreshBtn) refreshBtn.disabled = running;
     if (backfillBtn) backfillBtn.disabled = running || !backfillPending;
+    if (stopBtn) stopBtn.disabled = !running;
     progressEl.hidden = !running;
     requestsEl.hidden = !running;
   }
@@ -153,10 +155,19 @@
     const backfill = lastAction === "backfill";
     const noun = backfill ? "Backfill" : "Pull";
     const unit = backfill ? "track" : "playlist";
+    // Only meaningful for a pull/refresh -- a backfill has no notion of
+    // playlists captured or stale.
+    const captureNote = backfill
+      ? null
+      : `${status.playlists_pulled} of ${status.playlists_total} captured, ${status.playlists_stale} still stale`;
 
     if (status.error) {
       if (status.retry_at) {
-        progressLabel.append(`${noun} failed: Rate limited by Spotify — retry `);
+        progressLabel.append(
+          captureNote
+            ? `Rate limited — ${captureNote}. Resume after `
+            : `${noun} failed: Rate limited by Spotify — retry `
+        );
         progressLabel.appendChild(makeDateSpan(status.retry_at));
       } else {
         const summary = document.createElement("span");
@@ -168,9 +179,14 @@
 
     const failed = status.failed_playlists || [];
     const summary = document.createElement("span");
-    summary.textContent = failed.length
-      ? `${noun} finished — ${failed.length} ${unit}(s) failed:`
-      : `${noun} finished.`;
+    if (status.phase === "stopped") {
+      // A deliberate stop is not a fault and must not read as one.
+      summary.textContent = captureNote ? `Stopped — ${captureNote}.` : `${noun} stopped.`;
+    } else {
+      summary.textContent = failed.length
+        ? `${noun} finished — ${failed.length} ${unit}(s) failed:`
+        : `${noun} finished.`;
+    }
     progressLabel.appendChild(summary);
 
     const reloadLink = document.createElement("a");
@@ -233,6 +249,7 @@
       setField("playlists_pulled", status.playlists_pulled);
       setField("playlists_total", status.playlists_total);
       setField("playlists_excluded", status.playlists_excluded);
+      setField("playlists_stale", status.playlists_stale);
       setFailingField(status.playlists_failing);
       setField("live_memberships", status.live_memberships);
       setField("backfill_pending", status.backfill_pending);
@@ -243,6 +260,10 @@
       backfillPending = status.backfill_pending > 0;
       if (status.action) lastAction = status.action;
       setRunning(status.running);
+      if (stopBtn) {
+        stopBtn.disabled = !status.running || status.stopping;
+        stopBtn.textContent = status.stopping ? "Stopping…" : "Stop";
+      }
 
       if (status.running) {
         progressLabel.hidden = false;
@@ -283,6 +304,15 @@
   if (pullBtn) pullBtn.addEventListener("click", () => start("/api/snapshot/pull", "pull"));
   if (refreshBtn) refreshBtn.addEventListener("click", () => start("/api/snapshot/refresh", "refresh"));
   if (backfillBtn) backfillBtn.addEventListener("click", () => start("/api/snapshot/backfill", "backfill"));
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => {
+      // Cooperative: stop waits for the current playlist (or track) to
+      // finish and commit.
+      stopBtn.disabled = true;
+      stopBtn.textContent = "Stopping…";
+      api("/api/snapshot/stop", { method: "POST" }).catch(() => {});
+    });
+  }
 
   // Pick up a run already going (e.g. kicked off from the Canvas page, or a
   // page reload mid-pull) -- the counter reconnects to its running total.

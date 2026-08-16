@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 
 from spotipy.exceptions import SpotifyException
 
+import api_log
+
 # The one lock and the one job slot.
 _lock = threading.Lock()
 _active = None  # None | "snapshot" | "history_import" | "roundtrip" | "backfill"
@@ -58,6 +60,10 @@ def try_start(name, target, *args):
 
     def run():
         global _active
+        # A fresh thread gets its own contextvars Context by construction, so
+        # this can't race a concurrent page-load request's own label (see
+        # api_log.api_context).
+        api_log.api_context.set(name)
         try:
             target(*args)
         finally:
