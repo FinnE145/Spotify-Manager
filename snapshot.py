@@ -302,10 +302,19 @@ def _resolve_force_epoch(conn, candidates):
     """Resumes the current forced pull's epoch if it still has unfinished
     targets; starts a new one (and persists it) only when the previous epoch
     is complete or absent (§2.4). No Resume button -- this is what makes
-    Full pull its own resume."""
+    Full pull its own resume.
+
+    A playlist whose item read is *failing* doesn't count as unfinished work
+    here. It stays in the target list either way (§2.6 -- a failure must be
+    retried), but letting it keep the epoch alive would mean one permanently
+    broken playlist silently downgrades Full pull into "retry just that one"
+    forever, and a genuine full re-read of the library would be impossible
+    until it was excluded by hand."""
     epoch = db.get_meta(conn, "pull_force_epoch")
     if epoch is not None and any(
-        _is_full_pull_target(stored, stale, epoch) for _, stored, stale in candidates
+        _is_full_pull_target(stored, stale, epoch)
+        and (stored is None or stored["last_pull_error"] is None)
+        for _, stored, stale in candidates
     ):
         return epoch
     epoch = jobs.now_iso()
@@ -341,7 +350,7 @@ def _sync_playlists_and_get_targets(conn, sp, force_all):
     for p in playlists:
         seen_ids.add(p["id"])
         stored = conn.execute(
-            "SELECT snapshot_id, tracks_pulled_snapshot_id, tracks_pulled_at "
+            "SELECT snapshot_id, tracks_pulled_snapshot_id, tracks_pulled_at, last_pull_error "
             "FROM snapshot WHERE playlist_id = ?",
             (p["id"],),
         ).fetchone()
@@ -866,5 +875,14 @@ def _pull_liked_songs(conn, sp):
     me = _call(sp.current_user)
     owner_name = me.get("display_name") or me.get("id")
     _ensure_liked_playlist_row(conn, owner_name)
+    # Committed *before* the item read, exactly as every real playlist's row
+    # is by _sync_playlists_and_get_targets -- Liked Songs is the one place
+    # the two diverged, and the divergence had teeth: leaving this write
+    # uncommitted holds the write lock across the fetch below, and every
+    # request api_log.record() tries to log then waits out the full 30s busy
+    # timeout and silently drops the row. Do not fold this commit away; the
+    # row must also exist before _apply_playlist_items, since
+    # membership.playlist_id has an FK onto snapshot(playlist_id).
+    conn.commit()
     items = _fetch_liked_items(sp)
     _apply_playlist_items(conn, LIKED_PLAYLIST_ID, items)

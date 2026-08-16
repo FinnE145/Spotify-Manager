@@ -12,7 +12,7 @@
   <h1>Tenure</h1>
   <p class="meta">
     <a href="{{ url_for('dev_generations', tier=tier) }}">&larr; Generations</a>
-    &middot; {{ total }} group{{ "s" if total != 1 }} ever present in a generation
+    &middot; {{ "{:,}".format(total) }} group{{ "s" if total != 1 }} ever present in a generation
     &middot; a low tenure on recent material means it hasn't had the chance yet, not that it failed
   </p>
 

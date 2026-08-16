@@ -20,7 +20,7 @@
         {% for tier in ('version', 'recording', 'release', 'track') %}
         <tr>
           <td>{{ tier|capitalize }}</td>
-          <td data-tier-count="{{ tier }}">{{ tier_counts[tier] }}</td>
+          <td data-tier-count="{{ tier }}">{{ "{:,}".format(tier_counts[tier]) }}</td>
         </tr>
         {% endfor %}
       </tbody>

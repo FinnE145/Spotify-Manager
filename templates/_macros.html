@@ -97,7 +97,7 @@
    _LISTING_CAP); this is how you find out you're not looking at all of it. #}
 {% macro listing_cap_note(shown, total) -%}
 {%- if shown < total %}
-<p class="meta">Showing the top {{ shown }} of {{ total }} by score — search to see the rest, or search <code>%</code> for all of them.</p>
+<p class="meta">Showing the top {{ "{:,}".format(shown) }} of {{ "{:,}".format(total) }} by score — search to see the rest, or search <code>%</code> for all of them.</p>
 {%- endif %}
 {%- endmacro %}
 

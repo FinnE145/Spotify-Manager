@@ -38,15 +38,15 @@
 
   <section class="panel">
     <h2>Stats</h2>
-    <p>{{ total_tracks }} tracks</p>
+    <p>{{ "{:,}".format(total_tracks) }} tracks</p>
     <table class="data-table">
       <thead><tr><th>Tier</th><th>Groups</th><th>Grouped</th></tr></thead>
       <tbody>
         {% for tier in ('song', 'version', 'recording', 'release') %}
         <tr>
           <td>{{ tier|capitalize }}</td>
-          <td>{{ tier_counts[tier].total }}</td>
-          <td>{{ tier_counts[tier].non_singleton }}</td>
+          <td>{{ "{:,}".format(tier_counts[tier].total) }}</td>
+          <td>{{ "{:,}".format(tier_counts[tier].non_singleton) }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -95,7 +95,7 @@
   </section>
 
   <section class="panel">
-    <h2>Groups ({{ group_total }})</h2>
+    <h2>Groups ({{ "{:,}".format(group_total) }})</h2>
     <form method="get" class="inline-form">
       <input type="hidden" name="cross" value="{{ cross_q }}">
       <input type="text" name="q" value="{{ q }}" placeholder="Filter by title or artist">

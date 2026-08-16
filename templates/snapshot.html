@@ -21,8 +21,8 @@
       </span>
     </p>
     <p class="meta">
-      <span data-field="live_memberships">{{ summary.live_memberships }}</span> live memberships
-      &middot; <span data-field="backfill_pending">{{ summary.backfill_pending }}</span>
+      <span data-field="live_memberships">{{ "{:,}".format(summary.live_memberships) }}</span> live memberships
+      &middot; <span data-field="backfill_pending">{{ "{:,}".format(summary.backfill_pending) }}</span>
       track<span data-plural-for="backfill_pending">{{ "" if summary.backfill_pending == 1 else "s" }}</span> awaiting backfill
     </p>
     <p class="meta">

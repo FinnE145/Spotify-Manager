@@ -81,7 +81,10 @@
 
   function setField(name, value) {
     document.querySelectorAll(`[data-field="${name}"]`).forEach((el) => {
-      el.textContent = value;
+      // Same shape as roundtrip.js / history_import.js: the server renders
+      // these with thousands separators, so a live update has to put them
+      // back or the first poll silently strips them.
+      el.textContent = typeof value === "number" ? value.toLocaleString() : value;
     });
     // Companion "s" spans, so a live-updated count doesn't leave "1 tracks".
     document.querySelectorAll(`[data-plural-for="${name}"]`).forEach((el) => {
@@ -155,11 +158,18 @@
     const backfill = lastAction === "backfill";
     const noun = backfill ? "Backfill" : "Pull";
     const unit = backfill ? "track" : "playlist";
-    // Only meaningful for a pull/refresh -- a backfill has no notion of
-    // playlists captured or stale.
-    const captureNote = backfill
-      ? null
-      : `${status.playlists_pulled} of ${status.playlists_total} captured, ${status.playlists_stale} still stale`;
+    // What *this run* captured, not what the library holds. run_done/run_total
+    // are the run's own work list; playlists_pulled/playlists_total are
+    // lifetime counts and would report ~the same "146 of 154" however little
+    // the run actually did. Undefined when a run died before its work list
+    // existed (rate-limited during the playlist-list fetch), which is why this
+    // is guarded rather than assumed. Not meaningful for a backfill, which
+    // counts tracks.
+    const captureNote =
+      backfill || typeof status.run_total !== "number" || status.run_total === 0
+        ? null
+        : `${status.run_done} of ${status.run_total} captured, ` +
+          `${status.run_total - status.run_done} remaining`;
 
     if (status.error) {
       if (status.retry_at) {
