@@ -15,7 +15,7 @@ N's roadmap section poses three questions and one of them turned out to be a dea
   runs in an app-wide `before_request` hook, so it fires on *every* authenticated request —
   including the next apply and the queue refetch the review UI is already awaiting
   (`static/js/canonical_review.js`, the `api(queueUrl())` call after a successful apply). Removing
-  the explicit call moves the 1.5s from the end of one request to the front of the next one in
+  the explicit call moves the 1.8s from the end of one request to the front of the next one in
   the same interaction. Same felt delay. A background worker is the only option that helps, so
   §3 builds one and the backstop question becomes a separate decision (§5).
 
@@ -24,35 +24,35 @@ N's roadmap section poses three questions and one of them turned out to be a dea
 
 - **Recompute *cannot* live in `jobs.py`, and this is a hard fact rather than a preference.**
   The roadmap notes that "recompute isn't a `jobs.py` job today, so none of that module's
-  single-job-slot machinery covers it" and leaves the door open. It has to stay shut: all four
-  jobs call `scoring.recompute()` **while holding the slot**, so routing recompute through
-  `jobs.try_start()` would make every job's own closing recompute fail to claim it. `JobStatus`'s
-  progress fields, 200-entry event log and cooperative stop are all wrong-shaped for a ~1.5s
-  uninterruptible pass besides.
+  single-job-slot machinery covers it" and leaves the door open. It has to stay shut: the three
+  jobs that recompute do so **while holding the slot**, so routing recompute through
+  `jobs.try_start()` would make every one of those closing recomputes fail to claim it.
+  `JobStatus`'s progress fields, 200-entry event log and cooperative stop are all wrong-shaped
+  for a ~1.8s uninterruptible pass besides.
 
 **Verified during planning, and load-bearing for §4 and §5:** *nothing in the codebase writes a
 decision derived from a score.* The complete reader set is `app.py` (page rendering and list
 ordering), `artists.py` (candidate-list display and ordering) and `canonical_detect.py`'s
 `_order()` (review-queue ranking). `canonical_autogroup`'s rule is ISRC + normalized title +
 duration and never touches a score. So a stale `score` table can only ever show a number that is
-~1.5s out of date or rank a list slightly wrong — it cannot cause a wrong durable decision
+~1.8s out of date or rank a list slightly wrong — it cannot cause a wrong durable decision
 anywhere.
 
 ---
 
 ## 1. The problem
 
-`scoring.recompute()` costs **1.35–1.50s** on the current library and is called synchronously at
-**20** call sites (measured 2026-08-15; `docs/specs/scoring-H.md` §9.2 is the design this
-implements against). Nine are in a request path, eleven are inside the four background jobs where
-1.5s is invisible.
+`scoring.recompute()` costs **1.75–1.80s** on the current library (measured 2026-08-15 during
+verify, over four consecutive runs; a cold first run costs ~2.5s) and is called synchronously at
+**20** call sites (`docs/specs/scoring-H.md` §9.2 is the design this implements against). Nine
+are in a request path, eleven are inside background jobs where 1.8s is invisible.
 
 The felt cost is the grouping review queue: `/api/canonical/apply` and
 `/api/canonical/cross/apply` are awaited by the UI before it advances, so every Enter/Next pays
 the full recompute.
 
 The concrete worst case of a stale table is not a wrong number but a **missing** one: a merge
-creates a new group id, and a stale `score` table has no row for it, so for ~1.5s that group
+creates a new group id, and a stale `score` table has no row for it, so for ~1.8s that group
 renders as absent and sorts to the bottom. In the review queue that decides only which item you
 see first, in a queue you work to exhaustion.
 
@@ -62,8 +62,9 @@ see first, in a queue you work to exhaustion.
 
 - `recompute()`'s body, its inputs, every scoring constant, the `score` table, and both horizons.
   N is scheduling, not scoring.
-- The eleven call sites inside `snapshot.py`, `roundtrip.py`, `history_import.py` and
-  `backfill.py`. They stay synchronous and are not edited.
+- The eleven call sites inside `snapshot.py` (6), `roundtrip.py` (3) and `history_import.py` (2).
+  They stay synchronous and are not edited. `backfill.py` has **none** — it writes only
+  `wanted_uri`, which is not a scoring input and is not in `_FINGERPRINT_TABLES`.
 - `jobs.py`. Not edited at all.
 - Nothing becomes incremental. The roadmap's reasoning stands: shrinkage pulls each version toward
   its bucket's **median** input, and a median does not update incrementally.
@@ -103,45 +104,62 @@ def request_recompute():
         if _worker_alive:
             return
         _worker_alive = True
-    threading.Thread(target=_worker, daemon=True).start()
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        with _worker_lock:
+            _worker_alive = False
+        raise
 ```
 
 `_worker_alive` is set **before** the thread is spawned, deliberately: it closes the window in
 which `ensure_fresh()` (§5) could see "no worker running" and act on a change the worker is about
 to cover.
 
+That ordering is also why the `start()` failure has to be caught. The flag is only ever cleared by
+the worker itself, so a thread that never ran leaves it raised forever — see §3.4 for what that
+costs.
+
 ### 3.4 The loop
 
 ```python
 def _worker():
     global _worker_pending, _worker_alive
-    conn = db.connect()
     try:
-        while True:
-            with _worker_lock:
-                if not _worker_pending or jobs.active():
-                    _worker_pending = False
-                    _worker_alive = False
-                    return
-                _worker_pending = False
-            try:
-                recompute(conn)
-            except Exception:
-                # recompute() has already recorded the failure via
-                # _record_recompute() and armed _failed_fingerprint (§6.2).
-                # Stopping here rather than looping is what stops a
-                # deterministic failure spinning.
+        conn = db.connect()
+        try:
+            while True:
                 with _worker_lock:
+                    if not _worker_pending or jobs.active():
+                        return
                     _worker_pending = False
-                    _worker_alive = False
-                return
+                try:
+                    recompute(conn)
+                except Exception:
+                    # recompute() has already recorded the failure via
+                    # _record_recompute() and armed _failed_fingerprint (§6.2).
+                    # Stopping here rather than looping is what stops a
+                    # deterministic failure spinning.
+                    return
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        with _worker_lock:
+            _worker_pending = False
+            _worker_alive = False
 ```
 
-**This is the coalescing.** Commits landing during a 1.5s pass all set the same flag, and are
+**This is the coalescing.** Commits landing during a 1.8s pass all set the same flag, and are
 absorbed by one extra pass — so holding Enter through ten queue items costs two or three
 recomputes, not ten.
+
+**The outer `finally` is why the flag is cleared in exactly one place.** Clearing it at each
+`return` — as this section originally specced — leaves two paths uncovered: `db.connect()` and
+`jobs.active()` both sit outside any handler, and either raising strands `_worker_alive` at `True`.
+That is the one unrecoverable state this module has, and it is entirely silent:
+`request_recompute()` would never spawn again, `ensure_fresh()` (§5.2) would defer forever, and the
+§7.1 banner would never appear, because `recompute()` never ran to record an error. Scoring would
+just stop, with every safety net disabled at once. Caught and fixed in verify.
 
 ### 3.5 Connection
 
@@ -156,9 +174,16 @@ import `scoring`.
 ### 3.6 Deferring to a job
 
 The worker exits without recomputing while `jobs.active()`, dropping `_worker_pending`. Nothing is
-lost, because **every job ends with its own `recompute()` on the success path and both failure
-paths** — the property `ensure_fresh()` already documents and relies on for the same deferral. The
-worker's own comment should say so, since the safety of dropping the flag rests entirely on it.
+lost, for two reasons, and it takes both:
+
+- **Every job that touches a scoring input ends with its own `recompute()` on the success path and
+  both failure paths** — the property `ensure_fresh()` already documents and relies on for the same
+  deferral. `backfill.py` is the exception that proves it: it never recomputes, because it writes
+  only `wanted_uri`, which no score reads.
+- **`ensure_fresh()` re-catches whatever the drop lost.** Deferring remembers nothing, so
+  `_last_fingerprint` still sits behind the dropped request's write; the first request after the
+  slot frees sees the moved fingerprint and enqueues. This is what covers a request-path apply
+  landing mid-backfill, and equally a job that dies before its own closing recompute.
 
 This also avoids fighting SQLite's single writer: the read phase takes no write lock, but
 `DELETE FROM score` plus the ~30–40k-row `executemany` does, and a job committing per
@@ -175,7 +200,7 @@ And it avoids briefly materializing scores computed from a half-updated library.
 > the outcome anyway.**
 
 Justified by the §0 finding: since no stale score can cause a wrong decision, the only thing a
-synchronous recompute buys is that the page you land on next is ordered correctly — worth ~1.5s on
+synchronous recompute buys is that the page you land on next is ordered correctly — worth ~1.8s on
 a click you make monthly, worthless on a keypress you make hundreds of times an hour.
 
 ### 4.2 Async — `conn.commit()` then `scoring.request_recompute()`
@@ -251,7 +276,7 @@ is `_checker()`. Update the sole caller, `refresh_scores()` in `app.py`'s `befor
 and its comment (the "cheap on the common case" note stays true; the "`conn` is used for the
 recompute itself" sentence in the docstring goes).
 
-Everything else stands: the 0.03ms `PRAGMA data_version` fast path, the ~87ms nine-`COUNT(*)`
+Everything else stands: the ~0.002ms `PRAGMA data_version` fast path, the ~5ms nine-`COUNT(*)`
 fingerprint on a moved data_version, and `_mark_seen()` on the "something committed but no scoring
 input moved" branch. The `needs_recompute` branch still records nothing — the worker's `recompute()`
 publishes its own, fresher `_observe()` pair.
@@ -272,7 +297,7 @@ free.
 The self-healing already in H covers a *transient* failure: `_mark_seen()` is never called on the
 error path, so the fingerprint stays behind and the next backstop check retries. A *repeatable*
 failure is the problem — `_last_data_version` never advances either, so every subsequent request
-would pay the 87ms fingerprint read and spawn another doomed 1.5s pass, forever, silently.
+would pay the fingerprint read and spawn another doomed 1.8s pass, forever, silently.
 
 - New module global `_failed_fingerprint`, guarded by `_backstop_lock`.
 - `recompute()` initializes `observed = None` before its `try` body (a failure inside
@@ -283,9 +308,9 @@ would pay the 87ms fingerprint read and spawn another doomed 1.5s pass, forever,
 - `ensure_fresh()` skips when the freshly-read fingerprint equals `_failed_fingerprint`: it neither
   enqueues nor marks anything seen.
 
-**Accepted cost:** while broken with nothing else committing, each request re-pays the 87ms
+**Accepted cost:** while broken with nothing else committing, each request re-pays the ~5ms
 fingerprint read, because `_last_data_version` is deliberately not advanced (it and
-`_last_fingerprint` only ever move together, via `_mark_seen()`). 87ms per page load while a banner
+`_last_fingerprint` only ever move together, via `_mark_seen()`). ~5ms per page load while a banner
 is telling you scoring is broken is the right trade for not splitting that invariant.
 
 The manual button always retries, since it calls `recompute()` directly and never consults
@@ -324,10 +349,17 @@ renders at most once per page — `pending_new_generation()` returns a single pe
 Behaviour: on **submit**, disable both buttons and relabel the clicked one to "Working…".
 
 > **The trap:** the form carries its decision on the submit button (`name="decision"`,
-> `value="yes"|"no"`), and a button disabled *before* submission does not contribute its value.
-> Wire this on the form's `submit` event and take the clicked button from `event.submitter`, which
-> the browser has already resolved by then. A click handler that disables the button first
-> silently posts a request with no `decision` and 400s.
+> `value="yes"|"no"`), and a disabled control contributes no value — **the submitter included**.
+>
+> `event.submitter` correctly identifies *which* button was clicked, but that is not enough on its
+> own: the browser constructs the form's entry list after the `submit` event finishes dispatching,
+> in the same synchronous step, and skips any disabled field. So disabling the button synchronously
+> inside the `submit` handler still drops `decision`, and the route 400s with "playlist_id and a
+> yes/no decision are required".
+>
+> Defer the disable past that step (`setTimeout(…, 0)`) so the browser reads the still-enabled
+> button first. Corrected during implementation — planning had assumed `event.submitter` alone
+> settled it — and verified in verify, both Yes and No, against the live route.
 
 ---
 
@@ -372,9 +404,9 @@ Incremental or faster scoring; any change to `recompute()`'s math or constants; 
 ## 11. Verification
 
 1. **The felt fix.** Apply a group in the review queue; the `/api/canonical/apply` response drops
-   from ~1.4s to milliseconds.
+   from ~1.8s to milliseconds (verify measured **95ms**).
 2. **Coalescing.** Apply several items in quick succession, then check `/dev/scoring`: one
-   recompute finishes within ~1.5s of the *last* apply, not one per apply.
+   recompute finishes within ~1.8s of the *last* apply, not one per apply.
 3. **Scores actually update.** Merge two tracks, wait ~2s, load the new group's page — it has a
    score, not a blank.
 4. **The backstop still works.** With the app freshly restarted, load a page that makes

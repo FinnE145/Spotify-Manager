@@ -123,10 +123,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► E (grouping catch-up) ──► B (generations) ──► K (entity pages) ──► H (scoring)
       DONE                      DONE                DONE                DONE
   ──► M (grouping fix + album backfill) ──► N (async score recompute) ──► J (partial pulls) ──► F/G ──► L (better search)
-      DONE
+      DONE                                  DONE
 ```
 
-**A, I, C, D, E, B, K, H and M have landed.** Their sections below are marked, and each points
+**A, I, C, D, E, B, K, H, M and N have landed.** Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
@@ -141,9 +141,8 @@ grows — M is not a prerequisite for scoring, it just raises the ceiling.
 New steps that aren't part of the listening-data chain slot into this order
 explicitly when they're added — don't leave them dangling off the end.
 
-**N sits right after M by priority, not dependency.** Finn asked for it next while M was
-still in flight; it has no technical dependency on M, J, or anything else here, so a later
-session is free to resequence it if something else becomes more urgent first.
+**N sat right after M by priority, not dependency.** Finn asked for it next while M was
+still in flight; it had no technical dependency on M, J, or anything else here.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
@@ -538,46 +537,50 @@ is not, and wants J (resumable pulls) to exist first.
 **M1 must land before M2 runs at any scale**, since every backfilled track with a common
 title is exactly the shape that triggers the bug.
 
-## N — Async score recompute
+## N — Async score recompute ✅ DONE
 
-**Not specced.** Own `/symr-plan` session. Surfaced 2026-08-15, mid-M-implement, when Finn
-noticed a half-second-plus delay after every Enter/Next in the grouping review queue.
+**Shipped 2026-08-15 → `docs/specs/async-recompute-N.md` is authoritative for what actually
+shipped.** Read it, not this summary. Surfaced 2026-08-15, mid-M-implement, when Finn noticed a
+half-second-plus delay after every Enter/Next in the grouping review queue.
 
-**Measured 2026-08-15:** `scoring.recompute()` costs **1.35–1.50s** on the current library
-(H's spec recorded ~1.2s; the library has grown since — `scoring.py` itself is untouched by
-M, confirmed by an empty diff, so this isn't a regression from that step). The delay is H's
-design working as specced: recompute runs **synchronously inside the request** at all **20**
-of its call sites across the codebase (`docs/specs/scoring-H.md` §9.2: "called at the end of
-every write path that touches a scoring input"). Only two of the twenty are felt on every
-keystroke — `/api/canonical/apply` and `/api/canonical/cross/apply`, the review queue's commit
-endpoints. The rest are one-off clicks (pin representative, generation confirm, the manual
-"Recompute scores" button, auto-group run/undo, `/dev/artists`' mark-same/unmerge — same
-per-decision shape as the review queue, just a shorter, less-frequently-worked queue) or
-already amortized over a multi-second-to-minute background job (snapshot, round-trip, history
-import), where an extra 1.5s is comparatively invisible.
+**Measurements.** `scoring.recompute()` was recorded at **1.35–1.50s** when N was scoped
+(2026-08-15; H's spec recorded ~1.2s before that — the library has grown, and `scoring.py` was
+untouched by M, confirmed by an empty diff, so none of the drift is a regression). Verify
+re-measured it the same day at **1.75–1.80s** over four consecutive runs, ~2.5s cold; that is
+the number the spec and code now carry. Verify also found two long-standing figures in H's
+comments to be badly stale and corrected them: the backstop's fingerprint read is **~5ms**, not
+the ~87ms claimed, and its `PRAGMA data_version` fast path **~0.002ms**, not 0.03ms.
 
-**Why it's whole-library, and why that's not a quick fix.** Two structural reasons, not an
-oversight: shrinkage pulls every version's raw score toward its bucket's **median** input
-(§4.5), and a median doesn't update incrementally the way a sum or count does — a targeted
-recompute would need either a stale baseline or a rescan of the bucket anyway. And a single
-grouping edit's blast radius is bigger than the tracks in the request: merges/splits shift
-membership/tenure/play counts for every version involved, `apply_partition` can drag in tracks
-outside the edited item, and each affected version cascades into its recording/release/track
-blend (§6). Making this incremental is a real redesign of scoring's core, not a tweak — and
-not what this step is for.
+**What shipped.** Recompute moved onto a single coalescing background worker in `scoring.py`
+(`request_recompute()` + `_worker()`), not into `jobs.py` — the spec's §0 established that as a
+hard impossibility rather than a preference, since jobs call `recompute()` *while holding the
+slot* and would deadlock against their own closing call. Holding Enter through ten queue items
+now costs two or three recomputes rather than ten, and `/api/canonical/apply` dropped from ~1.8s
+to **95ms** (measured in verify).
 
-**Direction: stop blocking the response on it, don't touch the math.** Nothing the review
-queue does right after a commit needs the freshly-recomputed score visible — the felt cost is
-entirely "the request is waiting on work nobody's about to look at."
+**The two open questions were both settled, one of them against its premise:**
+- *Background thread vs. dropping the explicit call and trusting `ensure_fresh()`* — the second
+  is a **dead end**. `ensure_fresh()` runs in an app-wide `before_request` hook, so dropping the
+  explicit call just moves the delay from the end of one request to the front of the next one in
+  the same interaction. Same felt delay. A worker was the only option that helped.
+- *Scope: the two queue endpoints, or `/dev/artists` too?* — settled **by a rule, not a list**:
+  async where you are working a queue, synchronous where you clicked once and are waiting for the
+  outcome anyway. Five of the nine request-path sites went async, four stayed synchronous.
 
-**What the spec session has to decide:**
-- Fire recompute in a background thread right after commit, vs. dropping the explicit call
-  from the hot endpoints entirely and trusting the existing read-time backstop
-  (`ensure_fresh()`, §9.3) to catch it on whichever later request actually needs a score.
-- If backgrounded: whether rapid-fire commits (holding Enter through a queue) should coalesce
-  into one recompute or just fire redundant overlapping ones — recompute isn't a `jobs.py` job
-  today, so none of that module's single-job-slot machinery covers it.
-- Scope: just the two canonical-queue endpoints, or `/dev/artists`' mark-same/unmerge too?
+**Why it stayed whole-library.** Unchanged and still true: shrinkage pulls every version's raw
+score toward its bucket's **median** input (§4.5), and a median doesn't update incrementally the
+way a sum or count does. A single grouping edit's blast radius is also bigger than the tracks in
+the request — merges/splits shift membership/tenure/play counts for every version involved,
+`apply_partition` can drag in tracks outside the edited item, and each affected version cascades
+into its recording/release/track blend (§6). Incremental scoring remains a real redesign of
+scoring's core, and is still not on this roadmap.
+
+**Load-bearing finding, verified during planning and worth not re-deriving:** *nothing in the
+codebase writes a durable decision derived from a score.* Scores are read only for rendering and
+ordering (`app.py`, `artists.py`, `canonical_detect._order()`); `canonical_autogroup`'s rule is
+ISRC + normalized title + duration and never touches one. That is what makes a briefly-stale
+`score` table safe, and it is the assumption to re-check before anything downstream starts
+*branching* on a score.
 
 ## L — Better search
 
