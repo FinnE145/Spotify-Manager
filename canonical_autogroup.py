@@ -3,7 +3,10 @@
 Closes every unreviewed main-queue candidate group whose tracks are pairwise
 "same ISRC + identical normalized full title + duration within 2s", writing one
 shared song/version/recording group and a release group per album. Scored
-116/116 against the 503-pair reviewed baseline before adoption -- re-score
+114/114 against the 491-pair reviewed baseline before adoption (corrected
+figures per grouping-catch-up-E.md's own post-implementation amendment; the
+pre-correction 116/116-against-503-pairs figure this docstring cited until
+P1-013, 2026-08-17, was superseded the same day E was written) -- re-score
 after any change to canonical_detect._auto_group_pair, because that baseline is
 the only ground truth in the project.
 

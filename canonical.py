@@ -230,8 +230,13 @@ def mark_reviewed_pairs(conn, pairs):
     refreshing decided_at on conflict. The pair-level writer -- callers that
     mean "every pair in this bucket" go through mark_reviewed() below;
     callers that mean something narrower (e.g. cross-component pairs only,
-    see canonical_detect.cross_component_pairs) call this directly."""
+    see canonical_detect.cross_component_pairs) call this directly.
+
+    Enforces track_id_a < track_id_b itself (P1-018) -- a caller's own
+    ordering must never be load-bearing for this invariant."""
     for a, b in pairs:
+        if b < a:
+            a, b = b, a
         conn.execute(
             """
             INSERT INTO reviewed_pair (track_id_a, track_id_b, decided_at)

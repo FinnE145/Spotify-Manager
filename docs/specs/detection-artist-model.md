@@ -1,5 +1,7 @@
 # Detection on the artist model — step I
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`), findings P1-010 and P1-020.
+
 Step **I** of `docs/Planning/roadmap.md`. Reworks `canonical_detect.py` to match on the **artist ids** step A captured (`track_artist` / `album_artist`) instead of the comma-joined `track.artists` string, and carries the four consequences that fall out of it.
 
 Read `docs/canonical-tracks/detection.md` for the detection rules themselves — this spec covers the change and the three pieces of surrounding work; that file is the living description of how detection behaves.
@@ -64,7 +66,7 @@ CREATE TABLE IF NOT EXISTS reviewed_artist_pair (
 
 This mirrors the track machinery deliberately, with one simplification. Like `reviewed_pair`, `reviewed_artist_pair` records only that a pair was *looked at* — the verdict is implicit in whether the two now resolve to the same canonical id — which is what stops a decided pair resurfacing. Unlike `track_group`, `artist_alias` is **sparse**: only merged artists get rows, because artists have no tier structure and resolution is a single lookup. There is no `ensure_*` pass.
 
-Resolution is always `COALESCE(aa.canonical_artist_id, <raw id>)` via `LEFT JOIN artist_alias aa`. `canonical_artist_id` is the id with the most `track_artist` rows (ties broken by id ascending); the canonical artist never gets a row pointing at itself. Merging three or more ids works for free — they all point at one canonical id.
+Resolution is always `COALESCE(aa.canonical_artist_id, <raw id>)` via `LEFT JOIN artist_alias aa`. `canonical_artist_id` was originally the id with the most `track_artist` rows (ties broken by id ascending); **superseded by `scoring-H.md` §11.3, noted 2026-08-17 (P1-010)** — it's now the id with the **highest `scoring.artist_scores(...)["all_time"]`**, ties still broken by id ascending, in `artists._canonical_of()`. Same underlying spec change as `canonical-tracks.md`'s representative-track tiebreak (P1-008) — H introduced one score-weighted rule to replace two earlier per-feature tiebreaks. One nuance worth knowing for fixtures: the tiebreak runs on **alias-resolved** credits (`track_artist_role`, built on `resolved_track_artist`), so an id already merged into a group scores at the display floor (its credits already count toward its canonical) — folding a third id into an existing alias group will almost always keep the incumbent canonical. The canonical artist never gets a row pointing at itself. Merging three or more ids works for free — they all point at one canonical id.
 
 `reviewed_artist_pair` stores its pair with `artist_id_a < artist_id_b`, matching `reviewed_pair`'s `_pair_key`.
 
@@ -78,9 +80,9 @@ Name collision is the only automatic signal, so it will not catch a `Kanye West`
 
 ### `/dev/artists`
 
-A plain page, linked from the `/dev` landing page. Lists each candidate pair with, for both sides: artist id, name, `track_artist` count, `album_artist` count, and up to four track titles — enough to judge without leaving the page. Two buttons per pair:
+A plain page, linked from the `/dev` landing page. Lists each candidate pair with, for both sides: artist id, name, `track_artist` count, `album_artist` count, and up to four track titles — enough to judge without leaving the page. **Queue ordering, undocumented until now (noted 2026-08-17, P1-010/P1-020):** `candidate_pairs()` sorts by `scoring.artist_group_score`, descending — the score driving that sort is computed but never rendered anywhere on the page, so it's currently an invisible sort key. Two buttons per pair:
 
-- **Same** — writes both `artist_alias` (the smaller side pointing at the canonical id) and `reviewed_artist_pair`.
+- **Same** — writes both `artist_alias` (the smaller side pointing at the canonical id — since H, this means **score-smaller**, consistent with the tiebreak above; originally track-count-smaller) and `reviewed_artist_pair`.
 - **Not same** — writes `reviewed_artist_pair` only.
 
 Below the queue, a section lists already-merged aliases with an **Unmerge** action (deletes the `artist_alias` row and the `reviewed_artist_pair` rows tying that artist to its former group, returning those pairs to the queue). Clearing only the pair against the canonical id would strand the rest: in a 3+-id group the review that merged an artist may have been recorded against a sibling, which would then stay suppressed despite no longer being merged. Consistent with the canonical-tracks convention that nothing is a one-way door.
@@ -119,7 +121,7 @@ Candidate *generation* stays maximally permissive on any credit, so nothing is m
 
 **Album artists are never an overlap signal in their own right.** They exist only to derive the primary/featured split. 51 tracks share the album artist `Various Artists` (`0LyfQWJT6nXafLPZqxe9Of`); an album-artist overlap rule would make every one of them overlap every other, merging unrelated Christmas and soundtrack tracks.
 
-**Unchanged:** title normalization, suffix classification and keywords, the tier model, ordering by playlist impact, the `_same_real` override, ISRC/duration/album rules at recording and release tier, the cross-artist queue definition (a bucket with ≥2 distinct components — now components by id), and the public interface.
+**Unchanged:** title normalization, suffix classification and keywords, the tier model, ~~ordering by playlist impact~~ (**stale, noted 2026-08-17, P1-020** — `canonical_detect._order()` now sorts by `scoring.group_score`, per `scoring-H.md` §11.1; `impact`-based ordering was retired site-wide by H, and this line predates that and was never updated), the `_same_real` override, ISRC/duration/album rules at recording and release tier, the cross-artist queue definition (a bucket with ≥2 distinct components — now components by id), and the public interface.
 
 **Deleted:** `normalize_artists`. It has no other caller.
 
@@ -154,7 +156,7 @@ EXISTS (SELECT 1 FROM track_artist ta JOIN artist ar USING(artist_id)
 
 This closes a real gap — today `t.artists LIKE '%Tyler, The Creator%'` matches, but the mangled tokens mean artist-name search is unreliable for any name containing `", "`.
 
-**Call sites.** Four SQL reads in `app.py` (each `COALESCE(ta.artists, '')`, so a track with no credits renders empty rather than `None`) plus `canonical.track_display`, two search predicates (`app.py`, `canonical.py`), two JS spots (`canonical_review.js`), six template spots (`snapshot_track.html`, `snapshot_playlist.html`, `snapshot.html` ×2, `canonical.html` ×3). Every one reads the `track_artists` view rather than repeating the SQL.
+**Call sites, as originally written** — this list was accurate at landing and drifted since (noted 2026-08-17, P1-020; it was also internally miscounted even then — the prose says "six template spots" but enumerates seven). Not worth maintaining precisely going forward given how fast it drifts; treat the `track_artists` view chain itself, not this list, as the source of truth. **Four SQL reads in `app.py`** (each `COALESCE(ta.artists, '')`, so a track with no credits renders empty rather than `None`) plus `canonical.track_display` — **now 3 reads, not 4**, as later steps changed call sites. **Two search predicates** (`app.py`, `canonical.py`) — **now 4**. Two JS spots (`canonical_review.js`). Six template spots (`snapshot_track.html`, `snapshot_playlist.html`, `snapshot.html` ×2, `canonical.html` ×3) — **`snapshot_track.html` and `snapshot_playlist.html` were both deleted by `entity-pages-K.md` §12.1**, 10 days after this spec landed; same K-supersession pattern found repeatedly elsewhere in this audit. Every live one reads the `track_artists` view rather than repeating the SQL.
 
 ---
 

@@ -1,5 +1,7 @@
 # Canonical-tracks fixes: tier-scoped grouping, and page load
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`), finding P1-009. §1 confirmed accurate throughout (including the `0 None` edge case). §2's fix shipped exactly as specced — the correction is about what happened to it afterward; see §2.3.
+
 Two unrelated fixes to the canonical-tracks feature, in one spec because they
 land in the same area and neither is big enough to plan alone:
 
@@ -18,8 +20,8 @@ change.
 
 ### 1.1 What happens now
 
-`applyLevel()` in [static/js/canonical_review.js:111](static/js/canonical_review.js:111)
-rewrites **every tier** for every selected track on each click:
+`applyLevel()` in [static/js/canonical_review.js:153](static/js/canonical_review.js:153)
+(line corrected 2026-08-17, P1-009 — was `:111`) rewrites **every tier** for every selected track on each click:
 
 ```js
 const sharedThroughIndex = level - 2;      // TIERS = [song, version, recording, release]
@@ -143,12 +145,26 @@ refinement within Taylor Swift's seven, on a group large enough that
 `clearAll()`-and-redo would be genuinely costly. Use it to confirm the fix holds
 when a selection is a small subset of a big item.
 
-Both are live in `symr.db` and unreviewed, so they can be worked in the real UI.
+~~Both are live in `symr.db` and unreviewed, so they can be worked in the real UI.~~
+**Both preconditions are stale (noted 2026-08-17, P1-009):** the `willow` case is **no longer
+runnable as written** — `M`'s rework replaced the cross-artist queue's tier-button UI (`0 None`
+etc.) with `/dev/canonical/cross`'s assign-to-group model, which has no tier buttons at all, so
+this acceptance case would need re-deriving against the current UI if it's ever needed again. The
+Inwood Hill Park case is **already resolved** to this section's exact target state in `symr.db` —
+a dated precondition, not a code issue, but it means neither case is currently usable to
+re-verify §1 by hand; §1's correctness here rests on the code reading, not a live re-run.
 Per the testing convention: leave anything ungrouped back in the queue.
 
 ---
 
 ## 2. `/dev/canonical` page load
+
+**§2.1's table is archived history, not current** (noted 2026-08-17, P1-009). Of its seven named
+calls, `cross_artist_groups` names a function that no longer exists at all, `all_candidate_groups`
+still exists but has zero callers anywhere (a P3 cleanup candidate), and `song_groups` was itself
+later split into `song_group_rows` / `hydrate_song_groups` — `song_tree × 142` is now capped at
+50, not 142. Only `candidate_groups` / `ensure_track_groups` / `tier_counts` still name live
+functions, and **none of the seven run on `/dev/canonical`'s current page-load path** — see §2.3.
 
 ### 2.1 Measured (2026-08-07, 9,693 tracks)
 
@@ -196,6 +212,21 @@ returns stale values. Detection has the same hazard — `/dev/canonical` calls
 "compute once, pass it down" is safer than another invisible cache.
 
 Expected: **~1.2 s → ~0.6 s**, with no cache and nothing to invalidate.
+
+**What actually shipped, and what happened after (noted 2026-08-17, P1-009).** The preferred
+option above shipped **verbatim** — `canonical_detect.canonical_page_groups()` is exactly this
+"one new function returning all three," and its own docstring restates this section's reasoning.
+Commit `4078acc` ("Build canonical detection once per /dev/canonical request") landed it inside
+`dev_canonical()` exactly as specced. What this section doesn't (and couldn't) anticipate: a
+**later, separate** commit (`5b76c8c`, "Make /dev/canonical paint in 112ms instead of 1.18s")
+moved the *caller* of `canonical_page_groups()` out of the synchronous page route entirely, into
+`/api/canonical/cross/listing` — an async endpoint the page fetches after paint. So today
+`dev_canonical()` itself calls none of the three original functions (nor
+`canonical_page_groups()`) — it's now effectively **detection-free on the synchronous path**
+(it still calls the cheap `canonical_detect.pending_song_ids()`, plain SQL over
+`pending_tier_review`, not the expensive `_fetch_tracks` path). The fix this section specified is
+intact and correctly attributed; only its *placement* moved, and that relocation was never
+written down anywhere until now.
 
 ### 2.4 If that isn't enough
 

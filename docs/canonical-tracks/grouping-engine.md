@@ -2,6 +2,8 @@
 
 Sub-spec of `docs/specs/canonical-tracks.md`. Read the tier model and data model there first.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`), finding P1-018.
+
 This phase builds the server-side module (`canonical.py`) that owns the four-tier group ids. It has no UI of its own — phases 5 and 6 drive it. Its semantics are the intricate part of the feature, so they're pinned down exactly here.
 
 ## Invariants
@@ -22,8 +24,14 @@ Call it at the top of every `/dev/canonical*` request and at the end of a snapsh
 Everything the UI does — merge, detach, ungroup, clear — is expressed as **one call**:
 
 ```python
-apply_partition(conn, labels) -> dict
+apply_partition(conn, labels, cleanup=True) -> dict
 ```
+
+**`cleanup` documented 2026-08-17 (P1-018)** — not in the original signature above.
+`cleanup=False` skips the four `_cleanup_tier` passes (a full `canonical_group` × `track_group`
+join each, which dominate the cost of a batch of calls). Only a caller that runs
+`cleanup_all_tiers()` itself once its own batch is done may pass it — `grouping-catch-up-E.md`'s
+auto-group run is the one caller today.
 
 `labels` maps each track in the queue item to a label per tier:
 

@@ -2,6 +2,14 @@
 
 Sub-spec of `docs/specs/canonical-tracks.md`. Replaces the throwaway listing page from phase 4.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`),
+finding P1-018. Five differences found, all documentation catch-up: the ordering claim below is
+stale (H retired impact-based ordering everywhere — same change `detection-artist-model.md` and
+`grouping-catch-up-E.md` needed the same fix for), the no-pagination claim is stale (the listing
+is capped at 50 unless a filter is set), the cross-artist entry point named below no longer
+exists, a dead-route link, and the "unreviewed" rule is narrower than stated for cross-artist
+buckets specifically. See inline notes below.
+
 `/dev/canonical` is where you look at what you've built, find mistakes, and fix them. It never edits inline — every fix opens the phase 5 queue UI, so there's exactly one grouping interface in the app.
 
 ## Stats block
@@ -17,7 +25,7 @@ This block is the "am I done?" answer and the standing check that the engine's i
 
 ## Group browser
 
-The main list: **non-singleton song groups**, ordered by playlist impact (same measure as the queue — total live memberships across the group's tracks), descending.
+The main list: **non-singleton song groups**, ordered by ~~playlist impact (same measure as the queue — total live memberships across the group's tracks)~~ **score, descending** (`scoring.group_score`, per `scoring-H.md` §11.1 — `impact`-based ordering was retired site-wide by H; this line was never updated). **Also stale, noted 2026-08-17 (P1-018): the listing is capped at 50 rows unless a filter (`?q=`) is set**, not unpaginated as this section originally said — same cap-then-filter pattern as `/dev/canonical`'s other listings.
 
 Each entry shows the song group's representative cover and title/artists, its track count, and its group id. Expanding it reveals the nesting:
 
@@ -49,13 +57,13 @@ For pairs detection will never propose — a cover, a re-titled reissue, two son
 
 ## Cross-artist list
 
-A separate section: same normalized base title, **no shared artist** — the covers and Christmas songs worth a human look. Each entry lists its tracks with artist prominent, and there's a **"Review in queue"** button opening `/dev/canonical/review?queue=cross-artist`.
+A separate section: same normalized base title, **no shared artist** — the covers and Christmas songs worth a human look. Each entry lists its tracks with artist prominent, and there's a **"Review in queue"** button opening ~~`/dev/canonical/review?queue=cross-artist`~~ (**stale, noted 2026-08-17, P1-018** — that entry point is gone, replaced by the dedicated `/dev/canonical/cross` route and its assign-to-group model, per `grouping-fixes-backfill-M.md`'s rework).
 
-Kept apart from the main list because most of these are *not* the same song, and mixing them into the main queue would poison it.
+Kept apart from the main list because most of these are *not* the same song, and mixing them into the main queue would poison it. **Also noted:** the "unreviewed if any pair is missing" rule (§Data model, `docs/specs/canonical-tracks.md`) is narrower here than site-wide — a cross-artist bucket settles on **cross-component pairs only** (`grouping-fixes-backfill-M.md` §1's M1 fix), not every pair in the bucket.
 
 ## Track page addition
 
-`/dev/snapshot/track/<track_id>` gains a **Canonical** line: its four group ids, each linking to that group on `/dev/canonical`, and its siblings at each tier (the other tracks sharing that id) with links to their own track pages. A track in no group shows all four as singletons.
+~~`/dev/snapshot/track/<track_id>`~~ **(dead route, noted 2026-08-17, P1-018 — now `/track/<track_id>`, per `entity-pages-K.md` §12.1)** gains a **Canonical** line: its four group ids, each linking to that group on `/dev/canonical`, and its siblings at each tier (the other tracks sharing that id) with links to their own track pages. A track in no group shows all four as singletons.
 
 ## Endpoints
 

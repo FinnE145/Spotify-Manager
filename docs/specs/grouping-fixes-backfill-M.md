@@ -1,5 +1,7 @@
 # M — Grouping-review fixes + album backfill
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`), finding P1-017. M1/M1b/M1c confirmed matching exactly. M2 (album backfill) had 8 documentation gaps, mostly about the exact edges of its "derived, checkpoint-free" guarantees, plus two deliberate rulings on where those guarantees stop — both noted inline where they occur.
+
 **Step M of `docs/Planning/roadmap.md`.** Four things in one step: three defects in the
 canonical-review surfaces (two of which silently produce *wrong groups*), and the album
 backfill that M1 in particular gates.
@@ -225,6 +227,14 @@ Four sites legitimately cannot use the macro today because they pass a query par
 splatted into the existing `url_for` calls. Every branch of the macro takes it, not just the
 playlist one.
 
+**Corrected 2026-08-17 (P1-017):** the `tier=` call sites above are on `entity_playlist.html:43,45`
+(the Version/Song generation-view toggle), not `generations.html:40` as originally written — a
+small misattribution. Separately, the shipped
+macro carries a **second** optional parameter beyond `params`: **`css_class`**, added because the
+playlist page's generation-view toggle needed an `active` class that `params` alone can't
+express. An empty `css_class` emits no attribute at all, so every existing call site is
+unaffected.
+
 ### 3.3 Sweep every bypass onto the macro
 
 With §3.2 in place there is no longer any reason for a site to build an entity URL by hand.
@@ -280,6 +290,12 @@ For an album `A`:
 - `missing(A)` = `A.total_tracks - owned(A) - queued(A)`
 - **`A` is settled** ⟺ `missing(A) <= 0`
 
+  **Ruled 2026-08-17 (P1-017):** if `total_tracks` is NULL, this arithmetic treats it as `0`,
+  which makes `missing(A) <= 0` unconditionally — the album computes as permanently settled and
+  silently drops out of every future backfill run. Zero albums are in this state today (this
+  spec's own original measurement), so it's current, if untested, policy rather than a live bug.
+  Documented here rather than guarded in code, since there's nothing real to guard against yet.
+
 A generation `G` is **handled** ⟺ every album with at least one track present in `G` is settled.
 
 This one definition gives every behaviour the design needs:
@@ -324,16 +340,23 @@ tracklist, and queue the uris with no `track` row. Split them:
 - **`fetch_album_tracklist(conn, album_id)`** keeps its guard — at most one Spotify request,
   on that album's own page, first view only, every failure swallowed so the page still renders
   from the DB.
-- **`queue_wanted_uris(conn, album_id)`** (new) runs off the **stored** `tracklist_json` and
-  costs **zero requests**. It writes `wanted_uri` rows for every tracklist item with no `track`
-  row, stamped with `album_id` and the caller's `source`.
+- **`queue_wanted_uris(conn, album_id, source)`** (new — **`source` is a required positional
+  argument, corrected 2026-08-17, P1-017**; the signature above originally omitted it even
+  though the very next sentence requires "the caller's `source`") runs off the **stored**
+  `tracklist_json` and costs **zero requests**. It writes `wanted_uri` rows for every tracklist
+  item with no `track` row, stamped with `album_id` and `source`.
 
 The album page then calls the fetch when `tracklist_pulled_at IS NULL` **and calls the queue
 step on every view**, with `source='album'`. That closes §0.5's re-add gap: clearing
 album-page-queued uris and revisiting the album genuinely restores them, for free.
 
-The backfill job calls the same two functions with `source='backfill'`, which is what keeps
-this a single ingest path rather than a second way to write a `wanted_uri` row.
+**"The backfill job calls the same two functions" is only half true, noted 2026-08-17
+(P1-017).** Only `queue_wanted_uris` is actually shared. The backfill job has its **own**
+tracklist-fetch function (`backfill._fetch_full_tracklist`), never
+`entities.fetch_album_tracklist` — and has to, since §4.5 requires paging past the first 50
+items, which the entity page's fetch deliberately never does. `CLAUDE.md`'s `entities.py` map
+entry repeats this section's incomplete version and should be corrected the same way if it's
+ever touched (out of scope for a spec-only pass).
 
 ### 4.5 The backfill job
 
@@ -361,7 +384,22 @@ Per album:
   generation.
 - Then run `queue_wanted_uris(conn, album_id)` with `source='backfill'`, whether or not a fetch
   just happened — so an album whose tracklist is already stored is requeued for free.
-- **Commit per album**, so a run that dies keeps everything it got.
+- **Commit per album**, so a run that dies keeps everything it got. **Refined 2026-08-17
+  (P1-017):** this durability is real but is a side effect of `queue_wanted_uris`'s own trailing
+  commit, not a commit the job's per-album loop issues itself — and that commit is *skipped* by
+  an early return when `tracklist_json` comes back empty. So an album whose fetch succeeds but
+  has nothing to queue can, in that narrow edge case, leave the fetch's own write uncommitted.
+  Narrow, not currently known to bite, but worth knowing rather than trusting "commits per
+  album" as the job's own guarantee.
+
+**Missing the closing `scoring.recompute()` call, noted 2026-08-17 (P1-017).** Every other job
+call site (eleven of them, per `CLAUDE.md`) ends with a `scoring.recompute()` after a run that
+touched a scoring input; `backfill.py` doesn't import `scoring` at all, even though its
+`_refresh()` does commit one (`canonical.ensure_track_groups`). Likely benign —
+`async-recompute-N.md`'s `ensure_fresh()` backstop should catch it on the next request that reads
+scores — but it means backfill is a documented exception to the "all eleven" pattern, not one of
+the eleven. This landed after M, when N introduced the backstop; not M's fault, just never
+folded back here.
 
 **Stopping**, all three inherited from the existing jobs with no new machinery:
 
@@ -391,10 +429,17 @@ Album backfill
   Next 2 generations (36–37):  69 albums,  ~70 requests   [Add]
 ```
 
-**The three counts partition the queue exactly.** Arm 2 of `_WORK_LIST_SQL` already excludes
-uris that appear in `play`, so listening / album-page / album-backfill sum to the total
-remaining with no double-counting. They supersede the single `wanted_uris` figure that
-`roundtrip.status()` returns today via `_WANTED_REMAINING_SQL`.
+**The three counts partition the queue exactly** — **except while the listening arm is muted,
+ruled 2026-08-17 (P1-017): that exception is deliberate and stays.** Arm 2 of `_WORK_LIST_SQL`
+already excludes uris that appear in `play`, so listening / album-page / album-backfill sum to
+the total remaining with no double-counting *when unmuted*. While muted, `_WORK_LIST_SQL`'s
+listening arm drops to zero (so `remaining_uris` correctly excludes it), but the **displayed**
+listening count deliberately keeps showing what it *would* contribute — `_LISTENING_REMAINING_SQL`
+omits the mute filter on purpose, so muting doesn't collapse the row to an uninformative zero and
+Finn can see what `[Re-add]` would bring back. The sum breaks in exactly this one state, and
+that's accepted: a partition-sum test should assert the invariant in the unmuted case and
+explicitly carve out the muted one, not treat it as a bug to fix. They supersede the single
+`wanted_uris` figure that `roundtrip.status()` returns today via `_WANTED_REMAINING_SQL`.
 
 - **listening** — arm 1 of `_WORK_LIST_SQL`: unresolved `play.spotify_track_uri` not in
   `roundtrip_failed_uri`.
@@ -424,6 +469,13 @@ Spotify calls from §4.2's arithmetic. No preview-then-confirm step: seeing the 
 clicking is the whole budget control Finn wants. The generation label shows the ordinals
 actually chosen, collapsed into ranges — they are contiguous today but need not stay so once
 generations are handled out of order.
+
+**These "computed with no Spotify calls" figures still write to the database, noted 2026-08-17
+(P1-017).** `previews()`'s call chain runs `canonical.ensure_track_groups()` and **commits**, on
+every ordinary `GET /dev/roundtrip` page view. Not a Spotify-request cost — this section's claim
+about that holds — but it is a database write on a plain page load that §4.2's "derived,
+checkpoint-free" framing doesn't flag. Harmless (it's the same idempotent bootstrap every
+`/dev/canonical*` request already triggers), just worth knowing.
 
 The counts and the job's progress refresh through `roundtrip.js`'s existing status poller;
 adding a second poller would be two things to keep in step.

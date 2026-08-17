@@ -2,6 +2,8 @@
 
 Status: **ready to implement**. This spec + its four sub-specs in `docs/canonical-tracks/` are the standalone implementation prompt — an implementation session can start from just this file. Follow the implement-phase skill: ask live for anything unforeseen, don't decide undecided things yourself.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`), findings P1-008 and P1-018. `grouping-engine.md` and `viewer-page.md` are stamped too, with their own drift noted inline. `detection.md` and `review-ui.md` were in the blind audit's read scope but produced no findings of their own — largely because their subject matter (detection, review UI) is more thoroughly re-covered by `grouping-catch-up-E.md`'s and `detection-artist-model.md`'s own audits. They are **not** separately stamped Audited; treat them as unverified until a finding explicitly clears them.
+
 > **Branch:** this work lives on `feat/canonical-tracks`. Check with `git branch --show-current`.
 
 ## Read first
@@ -96,6 +98,9 @@ CREATE TABLE canonical_group (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 ```
+**The shipped schema also carries `auto_run_id`** (added post-launch by `grouping-catch-up-E.md`'s
+auto-group feature — tags which `auto_group_run`, if any, created this group), not listed above
+since it predates E. See `grouping-catch-up-E.md` for what it's for.
 `created_at` is ISO-8601 with an explicit `Z`. Plain `datetime('now')` is naive UTC, which the front-end parses as local time and renders hours off — `db.py` carries a migration that rewrites any rows written in the old form.
 `AUTOINCREMENT` guarantees ids are **never reused**, so a future listening-history table can reference a song id permanently. Ids are globally unique across tiers (no ambiguity about what a bare id means).
 
@@ -128,13 +133,37 @@ CREATE TABLE reviewed_pair (
 ```
 Always stored with `track_id_a < track_id_b` lexicographically. A candidate group is **unreviewed** if *any* pair within it is missing here — so when a pull later adds a fifth track to a settled group of four, the group returns to the queue with only the new decision outstanding.
 
-There is deliberately **no decision log**. Undo is in-session only (client-side); anything already committed is fixed by navigating back to that item or re-opening the group from the viewer page.
+There is deliberately **no decision log** — for the hand-reviewed queue. Undo there is in-session only (client-side); anything already committed is fixed by navigating back to that item or re-opening the group from the viewer page. **This does not extend to auto-grouping** (noted 2026-08-17, P1-008/P1-018) — `grouping-catch-up-E.md`'s `auto_group_run` log and snapshot-based undo *are* a decision log, deliberately, for exactly the runs a human never reviewed.
 
 ### Representative track
 
-When `representative_track_id` is NULL, compute it: **most live memberships** (`membership` rows with `removed_at IS NULL`) → **oldest `added_at`** → **lowest `track_id`**. Note `track.popularity` is NULL for every row in the library (Spotify no longer returns it on playlist-item track objects), so it plays no part.
+**Rewritten 2026-08-17 (P1-008)** — the rule below is superseded by `scoring-H.md` §11.3, which
+made a deliberate change and says so in its own text; this section was simply never updated to
+match. `canonical.representative()`'s own docstring already cites §11.3 as current.
 
-The representative is used for group titles and covers on `/dev/canonical` and by future analytics rows. It is **never** used in playlist track views, which always render the real track.
+When `representative_track_id` is NULL, compute it: **highest `score.all_time`** (the track
+tier's own score — not the group's tier; a version group's representative is elected by its
+member tracks' *track*-tier scores, defaulting to `0.0` for an unscored track) → **oldest
+`added_at`** (over *all* membership rows for the track, live or not — no longer filtered to
+`removed_at IS NULL` as the pre-H rule was; a track with no membership rows at all sorts last,
+not first) → **lowest `track_id`**. If the `score` table is ever empty (e.g. before the first
+recompute) or a recompute is failing, every candidate coalesces to `0.0` and the election
+silently collapses to the tail of this rule (oldest `added_at` → lowest `track_id`, without the
+old live-membership filter). `track.popularity` and `track.album_image_url` no longer exist at
+all (moved to `album.image_url` in `track-metadata-A.md`; `popularity` is simply gone, not just
+always-NULL as this section previously said).
+
+The representative is used for group titles and covers on `/dev/canonical` and by future
+analytics rows. It is **never** used in playlist track views, which always render the real
+track. **It reads the `score` table, so — since `async-recompute-N.md` made recompute
+asynchronous — it is a moving target**: group titles/covers on `/dev/canonical`, the cross
+queue, tenure, search, and the entity pages can now shift between two page loads with no user
+action in between (a review-queue keypress, a pin, or an artist merge each fire a background
+recompute). Nothing breaks, but it's a real, silent UX consequence worth knowing about if a
+representative ever looks like it "changed on its own." **`representative()`/`group_tree()` are
+also now called on version-tier groups** (album/artist/search pages), not song-tier only as this
+section implies — pinning stays **song-tier only**; a version group always uses the computed
+election, never a pin.
 
 ## Phases
 
@@ -161,6 +190,11 @@ The snapshot pages are developer/inspection tools, and more will follow. Give th
   - `/snapshot/playlist/<playlist_id>` → `/dev/snapshot/playlist/<playlist_id>`
   - `/snapshot/track/<track_id>` → `/dev/snapshot/track/<track_id>`
   - `/api/snapshot/*` endpoints keep their current paths (they're API, not pages).
+
+  (Noted 2026-08-17, P1-018: this bullet is a historically-accurate record of what this phase
+  did — `/dev/snapshot/playlist/<id>` and `/dev/snapshot/track/<id>` were both later removed
+  entirely by `entity-pages-K.md` §12.1, replaced by `/playlist/<id>` / `/track/<id>`. Not a
+  correction to this bullet; a pointer forward for a reader who follows one of these links today.)
 - **No redirects** from the old paths — this is a local single-user tool; the old URLs simply stop existing.
 - Navbar: the existing snapshot icon in `.nav-utility` becomes a **gear**, **icon only** (matching how it renders today), linking to `/dev`. Its `active` state covers every `/dev/*` page.
 - Update every internal link and `url_for` reference (templates, `static/js/snapshot.js`) to the new endpoint names. Update the Codebase Map in `CLAUDE.md`.
@@ -186,8 +220,13 @@ Also add the ISRC and relinking facts from this spec's *Terminology* section to 
 
 These are recorded so the seams make sense, **not** as decided design. Each gets its own spec when its time comes.
 
-- **Listening history / ListenBrainz.** A play event resolves to a `track_id` → `track_group` → version id, and stats roll up at version level with a toggle to song level. Plays whose track id has never appeared in a playlist won't have a `track_group` row; that ingestion feature needs to decide whether to create rows for unseen tracks or match them by title/artist/ISRC.
-- **Rollup toggle.** Rather than a binary version/song switch, analytics pages may eventually offer a 3- or 4-position rollup selector (song / version / recording / release), since the ids for all four already exist.
+- ~~**Listening history / ListenBrainz.** A play event resolves to a `track_id` → `track_group` → version id, and stats roll up at version level with a toggle to song level. Plays whose track id has never appeared in a playlist won't have a `track_group` row; that ingestion feature needs to decide whether to create rows for unseen tracks or match them by title/artist/ISRC.~~
+  **Built, noted 2026-08-17 (P1-018).** `play-history-C.md` + `foreign-roundtrip-D.md`'s
+  `roundtrip.py` answer this: an unseen-track play resolves through the round-trip
+  (`played_uri_track`), not by title/artist/ISRC matching.
+- ~~**Rollup toggle.** Rather than a binary version/song switch, analytics pages may eventually offer a 3- or 4-position rollup selector (song / version / recording / release), since the ids for all four already exist.~~
+  **Partially built, noted 2026-08-17 (P1-018).** `generations.py`'s `tier="version"|"song"`
+  parameter is exactly this, at two positions rather than four.
 - **Dedup report.** Runs at version level and can grade severity using the finer tiers: same release = pure duplicate; different recording = same-sounding, pick one; different version = not a duplicate at all.
 - **Cover audits.** Release and recording ids make "you added the odd-cover edition of this song, unlike everywhere else you added it" a computable check.
 
@@ -195,6 +234,14 @@ These are recorded so the seams make sense, **not** as decided design. Each gets
 
 - Any **write** to Spotify.
 - The duplicate audit, version engine, and analytics that consume these ids.
-- Automatic grouping without review — every merge is confirmed by hand (pre-fills are only pre-fills; nothing is written until Enter).
+- ~~Automatic grouping without review — every merge is confirmed by hand (pre-fills are only pre-fills; nothing is written until Enter).~~ **No longer true, noted 2026-08-17 (P1-008/P1-018).**
+  `grouping-catch-up-E.md`'s auto-group feature (`canonical_autogroup.py`) does exactly this —
+  closes qualifying queue items in a batch with no human review pass at all, deliberately, once
+  its detection rule is confident enough. This scope statement predates E and E reversed it on
+  purpose; it's kept here (struck, not deleted) as a record of what this spec originally
+  intended, since the two specs actively disagree rather than one simply extending the other.
 - Fuzzy matching beyond the normalization in `docs/canonical-tracks/detection.md` (no edit-distance, no external metadata services like MusicBrainz).
-- Cross-session undo history.
+- ~~Cross-session undo history.~~ **No longer true, same note as above.** `auto_group_run` plus
+  the `auto_group_snapshot_*` tables are exactly a server-side, cross-session decision log with
+  restore, built by `grouping-catch-up-E.md` for its auto-group runs specifically (the
+  hand-reviewed queue's own undo is still in-session/client-side only, unaffected).

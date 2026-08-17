@@ -1,5 +1,7 @@
 # Grouping catch-up — step E
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`), finding P1-013. The large majority of this spec matches the code exactly, including its own extensive "corrected during implementation" notes. §2.2's `shares_base_version`/`neutral` rule below was the one real behavioral question raised — **ruled: the code is right, the original text below was the thing that needed to change** — plus a docstring figure fixed (`canonical_autogroup.py`, now 114/114 matching `canonical_detect._auto_group_pair`) and several smaller documentation gaps, all noted inline where they occur.
+
 D tripled the library and the review queues went with it: **810 unreviewed main
 candidates and 541 unreviewed cross-artist ones**, at a few seconds each. This
 feature closes 70% of the main queue deterministically, stops the prefill from
@@ -209,7 +211,12 @@ to `'`. So `(taylor’s version)` never matches the `taylor's version` keyword, 
 all 14 such tracks fall through to `unknown`.
 
 Add `normalize_suffix(s)`, used by `classify_suffix` and by the auto-group rule's
-title comparison:
+title comparison. **This undersells it, noted 2026-08-17 (P1-013):** the auto-group rule's
+title comparison actually runs through **two different normalizers**, not the one shared here —
+`normalize_title`'s base half strips punctuation entirely (`_strip_punct_collapse`, deletes
+non-alphanumerics), while the suffix half uses this function, which *replaces* punctuation with a
+space. Both are real and deliberate for their own half; the point worth stating is that they're
+not the same function, which this section's wording implies.
 
 1. `_strip_accents`, then `casefold`
 2. replace every character that is not a letter, digit, or space with a **space**
@@ -242,11 +249,21 @@ everything unrecognised becomes `neutral`.
 | `feat.` / `ft.` / `featuring` / `with` | `neutral` |
 | acoustic, live, remix, demo, instrumental, cover, nightcore, piano, orchestral, stripped, sped up, slowed, reprise | `version` |
 | generic `… version` — jazz, guitar, original, 1947 | `version` |
+| generic `… mix`, e.g. "Vocal Up Mix", "Country Mix" — **added 2026-08-17 (P1-013), was never in this table** — a different mix is a different balance, which sounds different; the named recording-tier cases (mono mix, remastered mix) are still caught by the `recording` row above them | `version` |
 | session / venue — long pond studio sessions, recorded at spotify studios, unplugged, voice memo, the voice performance | `version` |
 | `arr …` classical arrangements | `neutral` |
 | remaster, remastered, taylor s version, mono, stereo, clean, explicit, radio edit, single version, album version, deluxe, anniversary, extended | `recording` |
 | interlude, skit, bonus track, edit, soundtrack and franchise markers, alternate title parts, uncredited artist names | `neutral` |
 | anything unrecognised | `neutral` |
+
+**Precedence order, undocumented until now (P1-013).** `classify_suffix` checks these families
+in a fixed order — version keywords, then recording keywords, then structural neutral markers,
+then the generic version/mix catch-all, then the `feat.`/`ft.`/`with` credit keywords, then the
+neutral fallback. **The credit-keyword row above is checked *after* the version/mix catch-all**,
+which makes it a no-op for any suffix that also matches a version keyword — e.g. a hypothetical
+"(feat. X) [Remix]" classifies `version`, not `neutral`, because the version check runs first.
+This is deliberate (the code's own comment: a credit says nothing about the audio, so it must
+never *veto* something that does), just never written down as a table-ordering rule before.
 
 Two of these were close calls, decided deliberately:
 
@@ -279,10 +296,19 @@ duration and album, rather than sitting singleton at all four tiers. That is the
 intended trade — an obviously-related track sitting alone was the more annoying
 failure.
 
-**Version tier.** `shares_base_version` is true for `base`, `recording` and
-`neutral`, false for `version` — two different live cuts remain two different
-things. Unchanged in spirit; `neutral` simply joins the set that `base` and
-`recording` were already in.
+**Version tier — rewritten 2026-08-17 (P1-013), ruled code-is-right.** The original text here
+said `shares_base_version` is true for `base`, `recording` **and `neutral`**, false only for
+`version`. That is **not** what shipped, and — ruled during P1 — not what's wanted either.
+`canonical_detect.py:426`'s `shares_base_version` is true only for `base` and `recording`;
+`neutral` stands alone, on purpose: a neutral suffix (an unrecognised one, or a bare featured
+credit) is precisely the one the classifier understands *least*, so assuming "sounds the same"
+from the suffix class alone is a guess made with no evidence — unlike `base`/`recording`, which
+are known to sound the same. **This is not the same as isolating neutrals entirely** — a neutral
+track still joins its version group whenever the evidence supports it, via the nesting fix below
+(`_same_recording`/`_same_release`) or `_clean_explicit_pair`, or an existing `_same_real`
+decision. Worked example from the code's own comment: "Lemonade" and "Lemonade (feat. NAV)",
+sharing an ISRC and duration, merge on that evidence; "Speechless (Full)" and "Speechless (Part
+2)", with different durations, don't.
 
 **Version tier gains a nesting fix.** Today `same_version_group` consults only
 `_same_real` and `shares_base_version`, so two tracks that are the *same recording*
@@ -292,8 +318,19 @@ recording, because `assign_recording_release` runs scoped inside a version
 component. Add: `same_version_group` also returns true when `_same_recording` or
 `_same_release` holds. Same recording implies same version by nesting.
 
-**`_same_recording` compares normalized suffixes.** Its `ra["suffix"] ==
-rb["suffix"]` branch must use `normalize_suffix`, not the raw string.
+**Version tier also gains a dedicated clean/explicit rule, `_clean_explicit_pair`**
+(undocumented here until now, P1-013) — a clean edit and its explicit original merge at version
+tier (never recording — the `explicit` guard in `_same_recording_identity` keeps them apart
+there deliberately, since they're not literally the same audio). This exists *because of* the
+`neutral`-exclusion rule above: without it, a clean/explicit pair sharing only a `neutral` or
+mismatched suffix class would have no other path to a version merge.
+
+**`_same_recording` compares normalized suffixes.** ~~Its `ra["suffix"] == rb["suffix"]` branch
+must use `normalize_suffix`, not the raw string.~~ **Never implemented, noted 2026-08-17
+(P1-013)** — `_same_recording` (`canonical_detect.py:323`) has no suffix comparison of any kind
+at any tier; recording/release identity here runs entirely on ISRC + duration + explicit
+(`_same_recording_identity`). This line describes a change that was planned but never made — if
+it's still wanted, it needs a fresh decision, not just re-reading this line as done.
 
 **Recording and release tiers otherwise unchanged**, minus the `_eligible` gate,
 which no longer exists.
@@ -309,6 +346,11 @@ A pair `(a, b)` **matches** when all of:
 - both ISRCs are non-null and equal
 - normalized base titles are equal **and** normalized suffixes are equal
 - both durations are non-null and differ by ≤ 2,000 ms
+- **both share the same `explicit` flag** — added 2026-08-17 (P1-013): this guard is real
+  (`_same_recording_identity`, shared with §2.2's recording/release rules) and is already stated
+  correctly in this file's own §0 amendment and measurements section, but was never folded back
+  into this rule's canonical statement here. A clean edit and its explicit original do **not**
+  auto-group by this rule (they still merge at version tier via `_clean_explicit_pair`, §2.2).
 
 A candidate group **auto-closes** when the rule matches on **every** pair in the
 group. Partial matches close nothing — a 3-track group where the rule fires on two
@@ -348,7 +390,10 @@ applying to every future pull.
 
 ### 3.4 Run log and undo
 
-`auto_group_run(id, started_at, finished_at, groups_closed, tracks_affected)`.
+`auto_group_run(id, started_at, finished_at, groups_closed, tracks_affected)`. **Missing a
+column, noted 2026-08-17 (P1-013):** the shipped schema also carries `undone_at`, which is what
+actually gates whether the Undo button is available (a run with `undone_at` already set can't be
+undone again).
 
 **Undo is a whole-table snapshot, restored wholesale.** Before the run, copy
 `track_group`, `canonical_group` and `reviewed_pair` into three snapshot tables
@@ -405,9 +450,12 @@ New route `/dev/canonical/cross`, new template `canonical_cross.html`, new
 `static/js/canonical_cross.js`. The old `?queue=cross-artist` mode of
 `/dev/canonical/review` is removed.
 
-Bucket membership and ordering are unchanged: a bucket appears when any
+Bucket membership and ordering are unchanged **by this step**: a bucket appears when any
 cross-component pair is unreviewed (`_cross_component_reviewed`), ordered by the
-existing `_order`.
+existing `_order`. **`_order` itself changed later and this line was never revisited (noted
+2026-08-17, P1-013)** — `canonical_detect._order()` now sorts by `scoring.group_score`, not
+`impact`; H retired `impact`-based ordering everywhere, cross queue included, same pattern found
+in `detection-artist-model.md` and `canonical-tracks.md`'s sub-specs.
 
 ### 4.1 New vs established
 
@@ -499,8 +547,14 @@ exists to produce.
    > has no finer grouping its current ids *are* singletons, so the original
    > wording was right only for that case.
 2. **A `pending_tier_review(track_id)` row per assigned newcomer.**
-3. **`mark_reviewed` over every pair in the bucket** — assigned or not — so the
-   bucket doesn't resurface until another newcomer arrives.
+3. ~~**`mark_reviewed` over every pair in the bucket**~~ — **narrowed by
+   `grouping-fixes-backfill-M.md` §1's M1 fix, noted 2026-08-17 (P1-013), and this line was
+   never updated to say so.** The real write site (`app.py`) calls
+   `canonical.mark_reviewed_pairs(conn, canonical_detect.cross_component_pairs(conn, track_ids))`
+   — **cross-component pairs only**, not every pair in the bucket. Marking every pair
+   (including same-artist, within-component ones) would have suppressed them from the main
+   queue forever, which is the bug M1 fixes. See `grouping-fixes-backfill-M.md` for the full
+   story; this bullet is the same behavior described from E's side.
 
 ### 4.5 `pending_tier_review`
 
