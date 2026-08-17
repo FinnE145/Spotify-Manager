@@ -10,6 +10,8 @@ so an entity is reachable without already being on a page that links to it.
 This is the first set of **real app pages** in Symr that aren't dev tools. They live at the
 top level (`/song/<id>`, `/artist/<id>`, …), not under `/dev`.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 ---
 
 ## 0. Measured facts
@@ -160,8 +162,12 @@ its tier — not four functions. Unknown or reconciled-away ids `abort(404)`.
    tracks. A release group shows just its tracks. Every node links to its own page.
 5. **Member tracks** — a table of the group's tracks: name (→ `/track/<id>`), artists, album,
    duration, ISRC.
-6. **Edit** — a link to `/dev/canonical/group/<group_id>`, which already redirects into the
-   review queue. The page itself is **read-only**: no pin, no merge, no detach.
+6. **Edit** — a link to `/dev/canonical/group/<group_id>`, which redirects into **the canonical
+   viewer** (`/dev/canonical`, deep-linked to that group), not the review queue — corrected during
+   P1 (P1-016). A group with its own entity page already exists and is settled, so "the review
+   queue," which holds only unreviewed candidate pairs, was never the right destination; the
+   redirect target was already correct, only the link's own label text said otherwise, and has
+   been fixed to match. The page itself is **read-only**: no pin, no merge, no detach.
 
 ### 3.3 Read paths this needs
 
@@ -214,6 +220,13 @@ as the canonical and generations pages already do.
 Cover, name, album artists (linked, from `resolved_album_artist`), `album_type`, `release_date`,
 `total_tracks`, and **"14 of 19 known"**. Outbound Spotify link.
 
+**Corrected during P1 (P1-016):** the artist list is actually built by an inline query in
+`app.py`'s `album_page`, not a direct read of `resolved_album_artist` — that view carries no
+`position`, which this listing needs to preserve credit order. The inline query now `GROUP BY`s
+the resolved artist id (same reasoning as `track_artist_credit`'s existing `GROUP BY`), which it
+originally didn't — an album credited under both an alias id and its already-canonical id would
+have rendered that artist's name twice.
+
 ### 5.2 Tracklist
 
 Rendered in `(disc_number, track_number)` order from the cached tracklist:
@@ -223,8 +236,15 @@ Rendered in `(disc_number, track_number)` order from the cached tracklist:
 - **Unowned** tracks render from the simplified object — name, artists, duration, explicit —
   greyed and unlinked. That is everything an album row displays anyway.
 - If the album has never been fetched, the page shows only the owned tracks and says so.
-- `total_tracks > 50`: render the 50 fetched and note "first 50 of 460; Spotify pages beyond
-  this and we don't follow them."
+- **Corrected during P1 (P1-016):** the note is keyed on how many tracks were actually stored in
+  `tracklist_json`, not on `total_tracks > 50` — those diverge once the album backfill job
+  (`grouping-fixes-backfill-M.md` §4.5) has paged past 50 into the same `tracklist_json` this page
+  reads. The original wording fired the note on `total_tracks > 50` unconditionally, so a
+  fully-backfilled album (all N tracks stored) still claimed "first 50 of N" directly above a
+  table that in fact showed all of them. Now: render whatever `tracklist_json` holds, and only
+  when that count is *less than* `total_tracks` note "first `<count>` of `<total_tracks>`;
+  Spotify pages beyond this and we don't follow them" (with `<count>` being the true number
+  fetched — 50 on a page-load-only fetch, everything on a backfilled one).
 - **Any owned track the fetched page didn't contain is appended after it**, in the same
   `(disc_number, track_number)` order, under a divider saying so. Without this an album whose one
   known track sits at position 312 renders 50 rows that are all unowned and never shows the track
@@ -238,6 +258,22 @@ Below it: plays (total / 30d / 7d) over the owned tracks, and the playlists they
 On first view — `tracklist_pulled_at IS NULL` — spend one request on `GET /v1/albums/{id}`,
 store the response's `tracks.items` into `album.tracklist_json` and stamp
 `album.tracklist_pulled_at`. Never re-fetched automatically.
+
+**Fixed during P1 (P1-016): a failed attempt now also stamps `tracklist_pulled_at`.** The
+original behaviour only stamped it on success, so a transient failure (429, network) retried on
+*every* subsequent page view forever rather than the intended "first view only, cached forever" —
+`tracklist_json` stays `NULL` on a failed attempt, `fetched` in the route stays `False`, and the
+page still renders from what Symr already owns; it simply stops re-spending a request on every
+later visit. (No client at all — not logged in — still doesn't stamp anything; that's not a real
+attempt.) The artist-image fetch (§7.1) gets the identical fix, for the identical reason.
+
+**Fetching and queuing are two separate functions, not one combined step**
+(`grouping-fixes-backfill-M.md` §4.4, noted here since this section originally described them as
+one): `entities.fetch_album_tracklist` is the guarded, at-most-once-per-album Spotify request
+above; `entities.queue_wanted_uris(conn, album_id, source)` is a separate, zero-Spotify-cost
+function that reads the *stored* `tracklist_json` and runs on **every** view of the page, not just
+the first — which is what makes clearing the round-trip queue (§6) a real, working undo rather
+than a one-shot action: a cleared uri comes right back the next time this page is loaded.
 
 **Not into `album.raw_json`**: the snapshot pull overwrites that with the *simplified* album
 object embedded in every track, so a richer value there would be destroyed on the next pull.
@@ -263,6 +299,13 @@ CREATE TABLE IF NOT EXISTS wanted_uri (
     requested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 ```
+
+**A later source did arrive** (noted here during P1, P1-016): the table gained a fourth column,
+`album_id`, and a second live `source` value, `'backfill'`, both from
+`grouping-fixes-backfill-M.md` §4 — `'album'` is queued by browsing an album page (this section),
+`'backfill'` by the backfill job. `album_id` is what lets the backfill job's settled/missing
+arithmetic stay plain SQL instead of a per-page scan of every `tracklist_json`. Whichever route
+queues a uri first owns its `source` (`INSERT OR IGNORE`).
 
 - The album fetch inserts `INSERT OR IGNORE` for every unowned track uri it saw.
 - `roundtrip._WORK_LIST_SQL` gains a `UNION` arm selecting `wanted_uri.uri` for uris that don't
@@ -291,12 +334,19 @@ Nothing else about the round-trip changes: same guard, same batching, same break
 - **Tracks**: split **primary** vs **featured** using `track_artist_role`, which gives the split
   structurally. Each links to `/version/<id>`, deduped to one row per version group.
 - **Albums**: albums where they hold an album credit, linked, with release date.
-- **Playlists**: distinct playlists their tracks appear in.
+- **Playlists**: distinct playlists their tracks appear in. **Ambiguous on tense** (noted during
+  P1, P1-016): this includes a playlist where every one of the artist's tracks has since been
+  *removed*, with no visual distinction from one that still carries them — "appear in" reads
+  present-tense but the code means "ever appeared in." Not changed; recorded as the actual
+  behavior since it wasn't clear which tense was originally intended.
 - **Generations**: which generations any of their tracks were present in, as the same 37-cell
   strip.
 - **Plays**: total / 30d / 7d across all their tracks.
-- **No ordering.** Track and album lists sort by name; nothing is ranked. Ranking is step H's
-  job and the roadmap now says so (§15).
+- **No ordering.** ~~Track and album lists sort by name; nothing is ranked.~~ **Stale, rewritten
+  during P1 (P1-016):** step H shipped exactly as this section anticipated, and comprehensively —
+  every list on every entity page (this one included) now sorts by materialized score
+  (`all_time`) descending, and every header renders `score_display`. Nothing sorts by name
+  anymore.
 
 ### 7.1 The image fetch
 
@@ -304,6 +354,13 @@ Same pattern as the album: on first view, if `detail_pulled_at IS NULL`, one req
 `GET /v1/artists/{id}`, store the largest `images[].url` into `artist.image_url` and stamp
 `artist.detail_pulled_at`. Nothing else on the response is worth storing — `genres`,
 `followers` and `popularity` are all absent for this app.
+
+**Two bugs fixed during P1 (P1-016).** "The largest" wasn't actually computed — the code took
+`images[0]`, trusting Spotify's undocumented (and unguaranteed) response ordering rather than
+comparing `width`. Now picks by `max(width)` explicitly. Separately, a failed attempt didn't stamp
+`detail_pulled_at` (only success did), so a transient failure retried on every subsequent page
+view forever instead of the intended once — same fix and same reasoning as §5.3's tracklist-fetch
+bug.
 
 ---
 
@@ -345,6 +402,9 @@ everywhere.
   `removed_at`, `position`. Removed rows keep the existing `removed` class. Sortable, as now.
 - **Generation banner**: when the playlist has a `generation` row — "Generation 31" plus its span
   — and a link to the generation view.
+  **Stale (P1-016):** the banner itself renders only the ordinal and the link
+  (`templates/entity_playlist.html:25-30`); the span only appears one click deeper, inside the
+  generation view (§9.1) itself.
 
 ### 9.1 The generation view — `?generation=1`
 
@@ -368,7 +428,9 @@ complement of what the previous generation's own page already lists.
 `templates/search.html`, plus a plain `GET` form in `base.html`'s navbar (`/search`, one `q`
 input, no JS, no dropdown).
 
-`/search?q=` renders four groups, each `LIKE '%q%'`, each capped at 50, each ordered by name:
+`/search?q=` renders four groups, each `LIKE '%q%'`, each capped at 50, each ordered ~~by
+name~~ **by materialized score descending — stale, corrected during P1 (P1-016)**, same
+site-wide change §7's "No ordering" bullet already flags. Groups:
 
 | Group | Matches | Links to |
 |---|---|---|
@@ -377,9 +439,14 @@ input, no JS, no dropdown).
 | Artists | `artist.name`, alias-resolved | `/artist/<id>` |
 | Playlists | `snapshot.name` | `/playlist/<id>` |
 
-An empty `q` renders the page with no results. No ranking, no fuzzy matching, no typo tolerance
-— substring only. **Step L** is the follow-up that makes search good; this is deliberately the
-plain version.
+An empty `q` renders the page with no results. ~~No ranking~~, no fuzzy matching, no typo
+tolerance — substring only. **Step L** is the follow-up that makes search good; this is
+deliberately the plain version.
+
+**`q`'s `LIKE` wildcards are unescaped** (noted during P1, P1-016) — a literal `%` or `_` in the
+query behaves as a SQL wildcard rather than a literal character. Deliberate and already documented
+on `/dev/canonical`'s equivalent search (`CLAUDE.md`'s `_LISTING_CAP` note: "searching `%` still
+gets the whole thing"), just never stated here.
 
 ---
 
@@ -393,6 +460,10 @@ New templates: `entity_group.html`, `entity_track.html`, `entity_album.html`,
 - `play_stats(stats)` — the three figures plus the data-through date.
 - `entity_link(kind, id, text)` — so a link to a version/track/album/artist/playlist is written
   one way everywhere and the back-pass can't drift.
+  **Signature grew two more optional params** (noted during P1, P1-016; both added by
+  `grouping-fixes-backfill-M.md`): `params` (splatted into `url_for`, e.g. `{'generation': 1}`)
+  and `css_class` (an empty value emits no attribute at all, so every existing call site is
+  unaffected). Functionally harmless, just undocumented here.
 - `generation_strip(ordinals, spans)` — the 37-cell strip, **extracted from
   `generations_tenure.html`** so the tenure table and the group/artist pages share one
   implementation rather than growing two.
@@ -477,6 +548,14 @@ New module **`entities.py`** — the read paths these pages need that don't belo
 owner: `play_stats`, the playlist/album/artist rollups over a track set, and the two guarded
 Spotify detail fetches (album tracklist, artist image), which catch everything and return `None`
 rather than raising. Read-only w.r.t. the Spotify library, like everything except `roundtrip.py`.
+
+**Narrower than planned (noted during P1, P1-016):** only `play_stats` and `playlists_for_tracks`
+actually ended up here. The album/artist rollups this paragraph describes as belonging to
+`entities.py` are inline in `app.py`'s own route bodies instead (`album_page`, the artist page
+view) — never moved out. Not itself flagged as a problem to fix; `CLAUDE.md`'s `entities.py` map
+entry already describes the narrower, actual scope, and P3's query-extraction step
+(`codebase-health-P.md` §5) is the natural place to revisit where these rollups live, not this
+audit.
 
 ---
 

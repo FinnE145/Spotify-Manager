@@ -50,7 +50,15 @@ def generation_spans(conn):
     ).fetchall()
     spans = [dict(row) for row in rows]
     for i, span in enumerate(spans):
-        span["ended_at"] = spans[i + 1]["started_at"] if i + 1 < len(spans) else None
+        # The next span's started_at, skipping over any intervening
+        # generation whose own started_at is NULL (a playlist with zero live
+        # members) rather than taking spans[i + 1] unconditionally -- P1-015.
+        # Without the skip, a mid-sequence empty generation would desync this
+        # span's ended_at (falls back to "now" in tenures(), reading as still
+        # open) even though a later, real generation already superseded it.
+        span["ended_at"] = next(
+            (s["started_at"] for s in spans[i + 1 :] if s["started_at"] is not None), None
+        )
     return spans
 
 

@@ -74,9 +74,12 @@ def playlists_for_tracks(conn, track_ids):
 def fetch_album_tracklist(conn, album_id):
     """One request to GET /v1/albums/{id} on first view (tracklist_pulled_at
     IS NULL only -- never re-fetched automatically): stores the tracklist as
-    returned, capped at Spotify's own 50-item first page. Any failure -- no
-    client, 429, network, 404 -- is swallowed; the page always renders from
-    what the DB already has.
+    returned, capped at Spotify's own 50-item first page. A failed attempt --
+    429, network, 404 -- still stamps tracklist_pulled_at with tracklist_json
+    left NULL, so it counts as "tried" and isn't retried on every subsequent
+    view (P1-016); the page always renders from what the DB already has
+    either way. No client at all (not logged in) doesn't stamp anything --
+    that's not a real attempt.
 
     Queuing wanted_uri rows is queue_wanted_uris()'s job, not this one's --
     a caller runs both (docs/specs/grouping-fixes-backfill-M.md §4.4)."""
@@ -86,6 +89,11 @@ def fetch_album_tracklist(conn, album_id):
     try:
         album = sp.album(album_id)
     except Exception:
+        conn.execute(
+            "UPDATE album SET tracklist_pulled_at = ? WHERE album_id = ?",
+            (jobs.now_iso(), album_id),
+        )
+        conn.commit()
         return
 
     items = (album.get("tracks") or {}).get("items") or []
@@ -140,18 +148,28 @@ def fetch_artist_image(conn, artist_id):
     IS NULL only): stores the largest image url and stamps detail_pulled_at
     regardless of whether an image came back, so a future visit doesn't
     re-fetch. genres/followers/popularity are absent from this endpoint for
-    this app and aren't worth storing. Any failure is swallowed, same as
-    fetch_album_tracklist."""
+    this app and aren't worth storing. A failed attempt -- 429, network, 404
+    -- also stamps detail_pulled_at (image_url left NULL), so it counts as
+    "tried" rather than retrying on every subsequent view (P1-016), same as
+    fetch_album_tracklist. No client at all (not logged in) doesn't stamp
+    anything -- that's not a real attempt."""
     sp = get_spotify_client()
     if sp is None:
         return
     try:
         artist = sp.artist(artist_id)
     except Exception:
+        conn.execute(
+            "UPDATE artist SET detail_pulled_at = ? WHERE artist_id = ?",
+            (jobs.now_iso(), artist_id),
+        )
+        conn.commit()
         return
 
+    # Largest by width, not images[0] -- Spotify's ordering is undocumented
+    # and not guaranteed to be largest-first (P1-016).
     images = artist.get("images") or []
-    image_url = images[0]["url"] if images else None
+    image_url = max(images, key=lambda im: im.get("width") or 0)["url"] if images else None
     conn.execute(
         "UPDATE artist SET image_url = ?, detail_pulled_at = ? WHERE artist_id = ?",
         (image_url, jobs.now_iso(), artist_id),

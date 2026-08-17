@@ -26,8 +26,8 @@
     <h2>Tracklist</h2>
     {% if not fetched %}
     <p class="meta">Not fetched from Spotify yet — showing what Symr already knows.</p>
-    {% elif album.total_tracks and album.total_tracks > 50 %}
-    <p class="meta">First 50 of {{ album.total_tracks }}; Spotify pages beyond this and we don't follow them.</p>
+    {% elif album.total_tracks and tracklist_count is not none and tracklist_count < album.total_tracks %}
+    <p class="meta">First {{ tracklist_count }} of {{ album.total_tracks }}; Spotify pages beyond this and we don't follow them.</p>
     {% endif %}
     {% macro track_row(t) -%}
     <tr class="{{ '' if t.owned else 'unowned' }}">

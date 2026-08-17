@@ -2,6 +2,8 @@
 
 Status: **ready to implement**. This spec is the standalone implementation prompt — an implementation session can start from just this file. Follow the implement-phase workflow in `CLAUDE.md`: ask implementation questions live/one-at-a-time, don't decide undecided things yourself.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 > **Branch:** work in the main checkout on the current `feat/*` branch (currently `feat/snapshot`). Do **not** create a git worktree or work off `main` (see project memory `feedback-no-worktrees`). Check with `git branch --show-current` first.
 
 ## Read first
@@ -52,12 +54,32 @@ if request.path.startswith("/api/"):
 
 Use the `/api/` path prefix (the app's own convention), not Accept-header negotiation — simpler and exact.
 
+**Standardized on `{"error": <slug>, "detail": <string-or-null>}` for every `/api/*` error
+response, not just this handler's own** (settled during P1, P1-014). `render_error` still derives
+its slug mechanically from the HTTP status name for generic/uncaught errors; hand-written routes
+that need to signal a specific expected precondition (not authenticated, a job already running)
+now call a small shared `api_error(slug, code, detail=None)` helper directly, with their own
+hand-picked domain-specific slug, rather than building `jsonify(...)` inline — the two paths
+previously diverged on shape (the hand-written ones often omitted `detail` entirely). No slug was
+renamed; nothing anywhere compares a slug by exact string, so this was a shape fix, not a breaking
+rename.
+
 ### Diagnostics shown on the HTML page
 - Heading: `<code> — <name>` (e.g. `404 — Not Found`, `500 — Internal Server Error`).
-- The request **method + path** that errored (e.g. `GET /snapshot/track/xyz`).
+- The request **method + path**, including the query string when present (e.g.
+  `GET /callback?error=access_denied`) — verified during P1 (P1-014) that the query string was
+  being silently dropped; fixed to include it, since the query parameter is frequently what
+  actually caused the failure.
 - For `HTTPException`: the `description`/message, if any.
 - For the 500/exception case: the **exception type name + message** (e.g. `KeyError: 'placement'`). This shows even when debug is off — that's the normal run mode (`SYMR_DEBUG` defaults to `0`) and the whole point of the feature.
-- **Traceback:** when `APP_DEBUG` is on, Flask's built-in interactive debugger already intercepts uncaught exceptions with a full traceback *before* our handler runs, so the custom page primarily serves the **debug-off** case. Do **not** re-implement a traceback dump in the template — rely on the built-in debugger when debug is on, and on the type+message when it's off. (This satisfies "traceback only when debug is on" without duplicating Werkzeug.)
+- **Traceback:** do **not** re-implement a traceback dump in the template. **The reason is not
+  that Flask's interactive debugger gets there first** — corrected during P1 (P1-014), verified
+  empirically by running the app with `debug=True`: once `@app.errorhandler(Exception)` is
+  registered, Flask's `handle_user_exception` dispatches straight to *that* handler, and the
+  debugger's own entry point (`handle_exception`/`log_exception`) is never reached. The custom
+  500 page renders with no traceback dump **regardless of `APP_DEBUG`**, because the registered
+  handler pre-empts the debugger entirely, not because the debugger already showed one. The
+  practical outcome (no traceback in the template) is unchanged; only the stated reason was wrong.
 
 Since this is a local single-user tool, showing the exception type+message in the debug-off page is intended and acceptable.
 
@@ -84,8 +106,29 @@ Reroute these through the new system so they render on the styled page (or JSON 
 
 The `HTTPException` handler surfaces each `description` as the page's message. (`/callback` and `/login` are exempt from the auth guard, so rendering an error page there won't loop back to login.)
 
-### Auth-guard interaction (no change needed, but verify)
-The `before_request` guard runs *before* dispatch, so an unauthenticated user is redirected to `login` before reaching most errors (including a 404 for an unknown URL while logged out). Error handlers fire for logged-in requests, or during `/login`/`/callback` (which are exempt). No changes to the guard — just confirm error pages don't trigger a redirect loop.
+**Both named routes are dead** (found during P1, P1-014, same K-supersession pattern found
+repeatedly elsewhere in this audit): `snapshot_playlist`/`snapshot_track` and their
+`/dev/snapshot/{playlist,track}/<id>` routes no longer exist — `entity-pages-K.md` §12.1 replaced
+them with `/playlist/<id>`/`/track/<id>`. Their `abort(404, description=...)` conversions survive
+verbatim on the new routes; only the names above are stale pointers to where they used to live.
+
+**"The five" describes the state at landing, not today.** The app now has **35** `abort()` call
+sites (measured 2026-08-17, `grep -c 'abort(' app.py`), the overwhelming majority added since on
+`/api/*` routes this spec's own closing parenthetical says don't apply ("none of these are API")
+— each of those goes through the JSON path documented in Content negotiation above, not the HTML
+template. Not wrong, just radically incomplete as a description of current error-handling surface
+area; not worth enumerating precisely here, since the mechanism (route through `abort()`, let the
+registered handlers do the rest) is what actually matters and hasn't changed.
+
+### Auth-guard interaction
+**Fixed during P1 (P1-014) — this used to be a real gap.** The `before_request` guard runs
+*before* dispatch and used to unconditionally redirect an unauthenticated request to `login`,
+including an `/api/*` request — invisible to a `fetch()` caller, which would see an opaque
+redirect-then-HTML response instead of a JSON error. The guard now checks `request.path` first:
+an unauthenticated `/api/*` request gets `api_error("not_authenticated", 401)`, matching every
+other `/api/*` error path (see Content negotiation); an unauthenticated page request still
+redirects to `login` exactly as before. (`/callback` and `/login` remain exempt from the auth
+guard, so rendering an error page there still can't loop back to login.)
 
 ## Files touched (expected)
 - `app.py` — import `abort`, `HTTPException` (from `werkzeug.exceptions`); add the two error handlers + the shared `render_error` helper inside `create_app()`; convert the five inline errors to `abort(...)`.
@@ -96,7 +139,9 @@ The `before_request` guard runs *before* dispatch, so an unauthenticated user is
 ## Verify (implementer)
 Exercise each path in the running app (`SYMR_DEBUG` off, the default) and confirm the page/JSON shows the right code and diagnostics:
 1. **Unmatched URL** (e.g. `/nope`) while logged in → 404 HTML page with `GET /nope`.
-2. **Not-found record** — a bad `/snapshot/track/<id>` → 404 page showing "Track not found."
+2. **Not-found record** — a bad id, e.g. `/track/999999999` → 404 page (the route and its 404
+   message have moved since this was written — see the "Convert the five inline errors" section
+   above — but the mechanism this item exercises is unchanged).
 3. **OAuth failure** — hit `/callback?error=access_denied` → 400 page showing the message.
 4. **Uncaught 500** — temporarily raise in a page route → 500 page showing the exception type + message; **revert the temporary raise**.
 5. **API 500** — temporarily raise in an `/api/*` route, hit it → JSON error body (not HTML); **revert**.

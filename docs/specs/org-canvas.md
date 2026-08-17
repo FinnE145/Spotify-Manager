@@ -1,8 +1,110 @@
 # Org Canvas — Feature Spec
 
-Status: **ready to implement (Phase 1)**. This spec is the standalone implementation prompt — an implementation session can start from just this file. Follow the implement-phase workflow in `CLAUDE.md`: ask implementation questions live/one-at-a-time, don't decide undecided things yourself. Open implementation questions are listed at the bottom.
+Status: ~~ready to implement (Phase 1)~~ — **shipped and long since merged**; the status line and
+the branch note below are stale process metadata from before this repo used lettered roadmap
+steps. This was Symr's **first** feature, and it was never revisited after landing — see the
+corrections section immediately below for everything that has drifted since.
+
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
 
 > **Branch:** this work lives on `claude/spotify-library-manager-a4b129`. The implementation chat must **switch itself to that branch** (don't start a new worktree/branch or work off `main`) — check with `git branch --show-current` first and `git checkout claude/spotify-library-manager-a4b129` if you're not already on it, so all Phase 1 commits land alongside this spec.
+
+---
+
+## Corrections to current behavior (P1-012)
+
+**This spec is significantly out of date — read everything below the divider as historical
+design intent, not as a description of what runs today.** 17 differences found during P1, all
+here in one place (rather than scattered inline) specifically so a P2 test-writer has one
+concrete reference for what's actually true, rather than piecing it together from stale prose.
+Corrections not listed below (i.e. anything not mentioned here) can be assumed still accurate.
+
+**Security-relevant (fix regardless of anything else, same shape as `snapshot.md`'s already-fixed
+"no write scopes" line):**
+- **Scopes.** §Spotify integration claims "No write scopes, no library/liked scopes for this
+  feature." False — `config.py` requests **`user-library-read`** (Liked Songs, added by step
+  `track-metadata-A`) and **`playlist-modify-private`** (the round-trip's scratch playlist, added
+  by step D) alongside the two read scopes this spec names. Both are real, intentional, and used
+  by later features; this spec was just never told.
+- **Auth.** §Non-goals claims "No auth/login (local/Tailnet single-user for now)." False since
+  `site-shell.md` — the app-wide login guard (`app.py`'s `require_login` before-request hook)
+  gates `/canvas` exactly like every other page.
+
+**A real algorithmic divergence, ratified as the intended design (code kept, spec amended):**
+- §Export "Phase 1.5" says "Chains that never reach a label → Ungrouped," read as: stop at the
+  first dead-end. **The actual rule in `grouping.py`'s `group_cards()` is a full nearest-first
+  search, not a single hop.** Each card's candidate neighbors (`_sorted_candidates`, line 14-18)
+  are sorted nearest-first, labels breaking ties before cards; `resolve()` (line 48-65) walks that
+  sorted list and only commits to Ungrouped once **every** candidate within the cutoff has been
+  tried and none reaches a label — including candidates reached transitively through other cards,
+  with a `visiting` set to skip anything that would cycle back rather than aborting. So a card
+  whose *nearest* neighbor dead-ends can still attach via a longer alternate path through a
+  different, farther-but-still-in-cutoff neighbor. This changes real export output from what the
+  literal spec text describes, and is being kept as the better design.
+
+**Scope creep on the Pull button, doc-only fix (already correctly owned elsewhere):**
+- §Spotify integration describes a lightweight, metadata-only playlist pull. The button now
+  triggers `/api/snapshot/pull` → `snapshot.start_full_pull()`, the entire snapshot engine (every
+  playlist's full track contents, Liked Songs, artist/album records). Real behavior is documented
+  correctly in `snapshot.md` / `track-metadata-A.md` / `partial-pulls-J.md`; this spec's own
+  description of its own Pull button was just never updated to match.
+
+**Export mechanics, current and exact:**
+- §Export "Phase 1" (the simple nearest-label algorithm) **no longer exists in any form** — only
+  Phase 1.5's chained version above ships. Reading only the Phase 1 section and testing against it
+  would test dead code.
+- **Tie-break and cycle handling, both implemented** (`grouping.py:14-18,48-65`), where the spec's
+  own "Open implementation questions" still lists them as unresolved: ties broken by
+  nearest-distance, then label-before-card, then lower id; a cycle (e.g. two cards mutually
+  nearest to each other) falls back to the next-nearest unvisited candidate rather than giving up.
+- **`## Ungrouped` always renders**, even with zero cards under it (`render_export_text`,
+  unconditional). **Tray cards sort alphabetically by `display_name`.** Neither ordering rule is
+  specced.
+
+**Real, undocumented UI subsystems that shipped:**
+- **`card.note`** (`db.py`'s `card` table) — a free-text field, editable via the card UI and
+  `PATCH /api/card/<id>`, entirely undocumented here, and **not included in the export text**.
+- **Download button** — `static/js/canvas.js`'s `downloadBtn` saves the export as `symr-export.md`
+  — shipped despite §"Later tiers" explicitly listing file-download export as a later, deferred
+  tier.
+- **Proximity cutoff UI**: a number input (`#cutoff-input`, default `300`) plus a "show grouping
+  radius" checkbox/overlay (`#radius-checkbox`, `.radius-circle`) visualizing the cutoff per card
+  — neither specced.
+- **Grid-snap subsystem**: cards/labels snap to a `GRID = 17.5` (world units) lattice that scales
+  with the intrinsic-size slider (`canvas.js`'s `gridUnit()`) — a whole subsystem with no
+  counterpart in this spec.
+- **Delete/Backspace and drop-on-tray both *unplace*, not delete, a card**; both keys remove a
+  label outright. Wider and more specific than "Delete key removes it."
+- **Multi-select**: `ctrl` works alongside `shift`/`⌘` (not specced as an option), and marquee
+  selection is **midpoint-containment** (`card.x`/`card.y`, the stored midpoint, tested against
+  the marquee's bounds) — not bounding-box intersection.
+
+**Every "Open implementation question" at the bottom was resolved during implementation and never
+recorded back here** — concrete answers, for a test-writer who'd otherwise have nothing to go on:
+- **Save cadence**: on drag/move **completion** (`persistPosition()`, called from each
+  mouseup/drop handler) — one POST per completed move, not continuous and not debounced.
+- **Routes**: `GET /canvas` (page); `GET /api/board` (full state); `POST /api/card/<id>` (position
+  + placement); `PATCH /api/card/<id>` (note/x/y/placement, partial); `POST /api/label`;
+  `PATCH /api/label/<id>`; `DELETE /api/label/<id>`; `GET /api/export?cutoff=`.
+- **DB location**: `symr.db`, same connection/schema helper (`db.py`) as everything else — no
+  separate canvas database.
+- **Zoom slider range**: `0.25`–`2` (`canvas.html`'s `#zoom-slider`). **Intrinsic-scale slider
+  range**: `0.4`–`1.5` (`#scale-slider`).
+- **Cutoff default**: `300` (`#cutoff-input`'s `value`).
+- **Nearest-label tie rule**: see "tie-break and cycle handling" above — same mechanism serves
+  both Phase 1's (dead) nearest-label rule and Phase 1.5's chain resolution.
+
+**Still genuinely open, not resolved by implementation:**
+- **Unfollowed playlists** (`snapshot.unfollowed_at`) are never removed or flagged on their canvas
+  card — a card for a playlist Finn no longer follows renders indistinguishable from a live one.
+  This is exactly the spec's own "removed → decide" open question (§Open questions), still
+  undecided today, not silently resolved like the others above.
+
+**Schema, undocumented:**
+- **`card` carries `UNIQUE(board_id, entity_type, entity_id)`** (`db.py`), not mentioned in
+  §Data model — the snapshot-pull upsert path relies on it to avoid duplicate cards on a re-pull.
+
+---
 
 ## Read first
 - `CLAUDE.md` — conventions, workflow, tech stack, KISS + security rules.

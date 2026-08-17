@@ -2,6 +2,12 @@
 
 Status: **ready to implement**. This spec is the standalone implementation prompt — an implementation session can start from just this file. Follow the implement-phase workflow in `CLAUDE.md`: ask implementation questions live/one-at-a-time, don't decide undecided things yourself. Open implementation questions are at the bottom.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+**`/snapshot` left this spec's scope entirely** (all four references to it below are stale — see
+each inline note): `canonical-tracks.md` Phase 1 moved it to `/dev/snapshot`, and it is now a
+real, fully-built page (pull/refresh/backfill controls, live status), not a `coming_soon.html`
+stub.
+
 > **Branch:** work in the main checkout on the current `feat/*` branch (currently `feat/canvas`). Do **not** create a git worktree or work off `main` (see project memory `feedback-no-worktrees`). Check with `git branch --show-current` first.
 
 ## Read first
@@ -25,7 +31,9 @@ This session builds **only the shell** — no new feature logic. Each real featu
 - A global auth guard so **every** page (except OAuth routes + static) requires Spotify login.
 
 ### Not now (out of scope)
-- Any real content for Audit / Cover Library / Folder Structure / Analytics / Snapshot beyond the placeholder.
+- Any real content for Audit / Cover Library / Folder Structure / Analytics beyond the placeholder.
+  ~~Snapshot~~ — stale (P1-011): Snapshot got real content at `/dev/snapshot` via
+  `canonical-tracks.md` Phase 1, well before Audit/Cover Library/Folder Structure/Analytics did.
 - A design system / `style_guide.md` (still TBD). Keep styling minimal — "generally the right shape," no polish.
 - Version engine as its own page — it is a **sub-section of Audit**, not a nav item.
 
@@ -38,7 +46,7 @@ This session builds **only the shell** — no new feature logic. Each real featu
 | `/covers` | Cover Library | Stub | |
 | `/folders` | Folder Structure | Stub | |
 | `/analytics` | Analytics | Stub | |
-| `/snapshot` | Snapshot | Stub (utility) | Raw library snapshot browser — diagnostic, reached via the navbar utility slot, not the primary nav. |
+| ~~`/snapshot`~~ | ~~Snapshot~~ | ~~Stub (utility)~~ | **Stale (P1-011)** — moved to `/dev/snapshot` by `canonical-tracks.md` Phase 1, and is now a real, fully-built page (pull/refresh/backfill controls, live status), not a stub. |
 | `/login`, `/callback` | — | Existing OAuth | Unchanged. Exempt from the auth guard. |
 
 Keep the existing `/api/*` routes exactly as they are — only the page routes change.
@@ -54,6 +62,9 @@ Horizontal bar across the top, full width, sits **above** all page content on ev
 
 - **Left:** app title/wordmark **"Symr"** (links to `/`), then the primary feature links: **Home · Canvas · Audit · Cover Library · Folder Structure · Analytics**.
 - **Right (utility slot):** visually separated from the primary links (pushed to the far right). Holds the **Snapshot** link, shown as a small icon (a database/🗄-style glyph is fine — plain text/emoji, no icon library). This slot is the future home for other diagnostic/backend tools; structure it so more can be added without touching the primary nav.
+  **Stale (P1-011):** `canonical-tracks.md` Phase 1 changed the icon to a **gear** (⚙, `title="Dev"`,
+  icon only) linking to `/dev`, not a direct Snapshot link — `templates/base.html`'s
+  `.nav-utility` (lines 21-28: the search form at 21-24, the gear anchor at 25-26).
 - **Active state:** the current page's link is visually marked (e.g. an `active` class). Pass the active page name from each route to the template.
 - Basic HTML + minimal CSS only. Right shape, not pretty.
 
@@ -65,7 +76,9 @@ A structured-but-blank landing hub — not literally empty, but no real data yet
 - Plain HTML, right shape, no fancy CSS.
 
 ## Stub pages
-`/audit`, `/covers`, `/folders`, `/analytics`, `/snapshot` each render `coming_soon.html` with their display name. That's the whole page for now — they exist so the navbar is complete and every link resolves.
+`/audit`, `/covers`, `/folders`, `/analytics` each render `coming_soon.html` with their display name. That's the whole page for now — they exist so the navbar is complete and every link resolves.
+~~`/snapshot`~~ — **stale (P1-011)**: never a stub in its final form; moved to `/dev/snapshot` by
+`canonical-tracks.md` Phase 1 and is a real, fully-built page, not `coming_soon.html`.
 
 ## Auth guard
 Replace the per-route login check in `index` with a **single app-wide `before_request` guard**:
@@ -78,6 +91,10 @@ Security note (per CLAUDE.md): do this thoroughly — exempt by a known allowlis
 ## CSS
 - Keep the single `static/css/style.css`. Add navbar + shared/base styles there. (There won't be many; a separate file isn't worth it yet.)
 - **Layout fix:** `overflow: hidden` on `html, body` and the `height: calc(100% - 45px)` math are currently global and assume the canvas is the whole page. The canvas must still fill the viewport **below the navbar** (navbar height + its own toolbar accounted for), while ordinary pages (home, stubs) should **scroll normally**. Move the immersive/no-scroll behavior onto the canvas page only (via the `base.html` body-class hook), so home/stub pages get default document flow.
+  **Note (P1-011):** this bullet describes the *pre-implementation* state ("are currently
+  global") and was correct as a starting point; the fix landed as described — the canvas is now a
+  flex column (`body.immersive`, `#main{flex:1}`), and `calc(100% - 45px)` no longer appears
+  anywhere in `static/css/style.css`.
 
 ## Files touched (expected)
 - `app.py` — move `/` canvas → `/canvas`; add `/` home + stub routes; add `before_request` auth guard; render templates with active-page + stub-name context.

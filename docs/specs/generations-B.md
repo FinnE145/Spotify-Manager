@@ -3,6 +3,8 @@
 **Step B of `docs/Planning/roadmap.md`.** Establishes the *generation* — one current-favs
 playlist in the chain of 36 — as a first-class thing in the DB, and derives **tenure** from it.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 ## Read first
 
 - `docs/Planning/roadmap.md`, the B section — this spec supersedes it where they differ
@@ -168,6 +170,14 @@ song was continuously worth carrying forward, which is exactly what tenure means
 as such. Store and expose every run, though, so a later consumer can decide differently
 without re-deriving anything.
 
+**Ties for longest run favour the earliest one** (noted during P1, P1-016 — the code's own
+docstring already documented this, just never folded back here): a group present in just two
+non-consecutive generations is two length-1 runs, tied, and it's common. The reported `days` comes
+from whichever tied run appears first in run order — i.e. the oldest — not the most recent.
+(`first_ordinal`/`last_ordinal` are unaffected — those are the min/max over *every* ordinal the
+group was ever present in, not just the winning run.) Worth stating explicitly since `days`
+silently favors the older tie.
+
 ### Tenure in days
 
 Per run: from the start of the run's first generation to the **end** of the run's last
@@ -209,10 +219,12 @@ anyway — in Python it's a few readable lines and the tier is just an argument.
 
 ### `generations.py` (new module)
 
-- `generations(conn)` → the generation list, ordered by ordinal. Per row: `ordinal`,
-  `playlist_id`, `name` (from `snapshot`), `started_at`, `ended_at` (the next generation's
-  start; `None` for the active one), `group_count`, `carried_in`, `new_in`, `survived_out`
-  (how many of its groups appear in the next generation). Counts are at the requested tier.
+- `generations(conn, tier="version")` → the generation list, ordered by ordinal. Per row:
+  `ordinal`, `playlist_id`, `name` (from `snapshot`), `started_at`, `ended_at` (the next
+  generation's start; `None` for the active one), `group_count`, `carried_in`, `new_in`,
+  `survived_out` (how many of its groups appear in the next generation). Counts are at the
+  requested tier. (Signature corrected during P1, P1-016 — the `tier` parameter existed in the
+  adjacent prose but was missing from this bolded signature.)
 - `tenures(conn, tier="version")` → one entry per group ever present in a generation:
   `group_id`, `runs` (list of `(start_ordinal, end_ordinal)`), `tenure`, `total_generations`,
   `run_count`, `first_ordinal`, `last_ordinal`, `days` (for the longest run).
@@ -221,6 +233,14 @@ anyway — in Python it's a few readable lines and the tier is just an argument.
 than interpolating it into SQL.
 
 Both functions read only; neither commits.
+
+**The module's public surface is three functions larger** (noted during P1, P1-016):
+`generation_spans()`, `runs()`, and `presence_for_tracks()` all now exist and are consumed by
+step K's entity pages — none mentioned here. `generation_spans()` factors out the per-generation
+span-tiling both `generations()` and `tenures()` share; `runs()` is the public run-collapsing
+helper described above, callable directly rather than only through `tenures()`;
+`presence_for_tracks(conn, track_ids)` gives the sorted ordinals any of a track set was present
+in — the strip every K entity page renders.
 
 ### Display resolution
 
@@ -260,6 +280,12 @@ generation 37.
 `^v(\d+)\.\d+\.\d+$`, whose major number is not already a `generation.ordinal`, and whose
 `generation_declined` is 0.
 
+**Multiple simultaneous pending generations** (undocumented policy, noted during P1, P1-016):
+`pending_new_generation()` collects every candidate but surfaces only the lowest-major one at a
+time; the rest come up in turn as each is resolved (confirmed, per the function's own docstring).
+Ratified as-is — a real, if unlikely, multi-pending state resolves itself one at a time with no
+change needed.
+
 **Confirmation** — a yes/no line rendered on **`/dev/snapshot`** (where the pull output is,
 so it's in front of Finn right after a pull) and also on **`/dev/generations`**. Never
 silent, never automatic:
@@ -270,6 +296,11 @@ silent, never automatic:
   so it never needs typing.
 - **No** → set `snapshot.generation_declined = 1`, and stop asking.
 
+**Known limitation, documented as current behavior (P1-016):** the insert is `INSERT OR IGNORE`
+— a conflicting ordinal or playlist id is silently swallowed, and Finn is redirected as if it
+succeeded. No spec clause covers this failure mode. Left as-is: it needs two colliding
+confirmations to ever trigger, which hasn't happened and isn't expected to.
+
 Implement as a plain HTML **form POST** to `/dev/generations/confirm` that redirects back to
 the referring page. That keeps it identical on both pages with no duplicated JS, and avoids
 native browser dialogs entirely (they're suppressed in the in-app browser).
@@ -279,9 +310,12 @@ generation uses it, and the historical schemes are handled by the seed script.
 
 ## UI
 
-All of this lives under `/dev`. It's DB monitoring and setup, the same as the rest of the
-dev pages; it can graduate to the main navbar later if ongoing features accrue around it.
-**No change to `base.html`'s navbar.**
+~~All of this lives under `/dev`.~~ **Stale (P1-016):** true for the pages *this spec* built, but
+tenure numbers and the 36-cell strip now render on the public entity pages and the playlist
+generation view too, per step K — this feature's data outgrew `/dev` even though the standalone
+`/dev/generations*` pages themselves didn't move. It's DB monitoring and setup, the same as the
+rest of the dev pages; it can graduate to the main navbar later if ongoing features accrue around
+it. **No change to `base.html`'s navbar.**
 
 Add an entry to `templates/dev.html`'s list:
 
@@ -308,6 +342,11 @@ One row per version group ever present in a generation (~2,171). Columns: repres
 track (name + artists, via `track_display`), **tenure**, **total generations**, **runs**,
 first and last generation, days.
 
+**Gained a Score column and a fourth sort mode** (noted during P1, P1-016; expected addition from
+step H, never folded back here): every row's `scoring.song_scores()`/`scores_for_tier()` value is
+computed before sorting, over *every* row, not just the visible page — real whole-library work
+this section's own Performance note (below) never budgeted for.
+
 - **The strip.** A 36-cell row per track showing which generations it was in — filled or
   empty — making gaps and comebacks readable at a glance. Render as **real table cells** with
   hover identifying the generation.
@@ -328,12 +367,17 @@ first and last generation, days.
 |---|---|---|
 | `GET /dev/generations` | `dev_generations` | generation list |
 | `GET /dev/generations/tenure` | `dev_generations_tenure` | tenure table |
-| `GET /dev/generations/<int:ordinal>` | `dev_generation` | stub until step K |
+| ~~`GET /dev/generations/<int:ordinal>`~~ | ~~`dev_generation`~~ | **Stale (P1-016)**: gone, exactly as this row's own note predicted — absorbed into `/playlist/<id>?generation=1` by step K. |
 | `POST /dev/generations/confirm` | `dev_generations_confirm` | accept/decline a detected generation, then redirect back |
 
-No `/api/*` endpoints and no new JS file — every interaction is a link or a form POST.
+No `/api/*` endpoints and ~~no new JS file~~ — every interaction is a link or a form POST.
 `/dev/snapshot` gains only the rendered confirmation line, sharing a macro in `_macros.html`
 with the generations page.
+
+**"No new JS file" is stale (P1-016):** `static/js/generation_confirm.js` now exists, added by
+`async-recompute-N.md` §7.2 for click feedback on the confirm form. The underlying mechanism this
+section describes — a plain form POST, no fetch, no JSON — is unchanged; the JS only disables the
+buttons and relabels the clicked one, it doesn't change what gets submitted.
 
 ## Out of scope
 

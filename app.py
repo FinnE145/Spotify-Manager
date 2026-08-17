@@ -62,6 +62,10 @@ def create_app():
         if request.endpoint in _PUBLIC_ENDPOINTS:
             return None
         if get_spotify_client() is None:
+            # An /api/* caller wants JSON like every other /api/* error
+            # (P1-014) -- an HTML redirect here is invisible to fetch().
+            if request.path.startswith("/api/"):
+                return api_error("not_authenticated", 401)
             return redirect(url_for("login"))
         return None
 
@@ -93,11 +97,21 @@ def create_app():
 
     # -- Error handling -------------------------------------------------
 
+    def api_error(slug, code, detail=None):
+        """The one shape every /api/* JSON error response takes (P1-014):
+        {"error": <slug>, "detail": <string-or-null>}, code. render_error
+        below derives its slug mechanically from the HTTP status name for
+        generic/uncaught errors; call sites that need to signal a specific
+        expected precondition (not authenticated, a job already running)
+        call this directly with their own hand-picked slug instead, so the
+        response shape can't drift between the two paths."""
+        return jsonify({"error": slug, "detail": detail}), code
+
     def render_error(code, name, detail=None, exc=None):
         if request.path.startswith("/api/"):
             slug = name.lower().replace(" ", "_")
             message = exc if exc is not None else detail
-            return jsonify({"error": slug, "detail": message}), code
+            return api_error(slug, code, detail=message)
 
         try:
             return (
@@ -108,7 +122,8 @@ def create_app():
                     detail=detail,
                     exc=exc,
                     method=request.method,
-                    path=request.path,
+                    # full_path always appends "?" even with no query string.
+                    path=request.full_path if request.query_string else request.path,
                 ),
                 code,
             )
@@ -302,11 +317,18 @@ def create_app():
         entities.queue_wanted_uris(conn, album_id, source="album")
 
         artist_rows = conn.execute(
+            # Grouped so a credit under both an alias id and its already-
+            # canonical id collapses to one row (P1-016) -- same reasoning as
+            # track_artist_credit's GROUP BY. resolved_album_artist carries
+            # no position, so this stays an inline query rather than routing
+            # through that view.
             "SELECT COALESCE(aa.canonical_artist_id, ab.artist_id) AS artist_id, ar.name "
             "FROM album_artist ab "
             "LEFT JOIN artist_alias aa ON aa.artist_id = ab.artist_id "
             "JOIN artist ar ON ar.artist_id = COALESCE(aa.canonical_artist_id, ab.artist_id) "
-            "WHERE ab.album_id = ? ORDER BY ab.position",
+            "WHERE ab.album_id = ? "
+            "GROUP BY COALESCE(aa.canonical_artist_id, ab.artist_id), ar.name "
+            "ORDER BY MIN(ab.position)",
             (album_id,),
         ).fetchall()
 
@@ -404,6 +426,10 @@ def create_app():
             track_artist_credits=artist_credits,
             track_names=track_names,
             fetched=fetched,
+            # How many the fetch actually stored, vs. total_tracks -- the
+            # backfill job pages past the entity page's own 50-track cap
+            # (P1-016), so "first 50" is only true when this is still < 50.
+            tracklist_count=len(tracklist) if fetched else None,
             known_count=len(owned_ids),
             stats=entities.play_stats(conn, owned_ids),
             playlists=entities.playlists_for_tracks(conn, owned_ids),
@@ -1328,25 +1354,25 @@ def create_app():
     @app.route("/api/snapshot/pull", methods=["POST"])
     def pull_snapshot():
         if get_spotify_client() is None:
-            return jsonify({"error": "not_authenticated"}), 401
+            return api_error("not_authenticated", 401)
         if not snapshot.start_full_pull():
-            return jsonify({"error": "already_running"}), 409
+            return api_error("already_running", 409)
         return jsonify({"started": True})
 
     @app.route("/api/snapshot/refresh", methods=["POST"])
     def refresh_snapshot():
         if get_spotify_client() is None:
-            return jsonify({"error": "not_authenticated"}), 401
+            return api_error("not_authenticated", 401)
         if not snapshot.start_refresh():
-            return jsonify({"error": "already_running"}), 409
+            return api_error("already_running", 409)
         return jsonify({"started": True})
 
     @app.route("/api/snapshot/backfill", methods=["POST"])
     def backfill_snapshot():
         if get_spotify_client() is None:
-            return jsonify({"error": "not_authenticated"}), 401
+            return api_error("not_authenticated", 401)
         if not snapshot.start_backfill():
-            return jsonify({"error": "already_running"}), 409
+            return api_error("already_running", 409)
         return jsonify({"started": True})
 
     @app.route("/api/snapshot/stop", methods=["POST"])
@@ -1385,10 +1411,10 @@ def create_app():
         # Checked before the file is copied anywhere, so a rejected import
         # doesn't leave a ~66 MB orphan folder behind.
         if history_import.busy():
-            return jsonify({"error": "already_running"}), 409
+            return api_error("already_running", 409)
         folder = history_import.save_upload(upload)
         if not history_import.start_upload(folder, upload.filename):
-            return jsonify({"error": "already_running"}), 409
+            return api_error("already_running", 409)
         return jsonify({"started": True})
 
     @app.route("/api/history/reimport", methods=["POST"])
@@ -1398,7 +1424,7 @@ def create_app():
         if latest is None:
             abort(400, description="Nothing uploaded yet — there's no folder to re-import.")
         if not history_import.start_reimport(latest["folder"], latest["original_name"]):
-            return jsonify({"error": "already_running"}), 409
+            return api_error("already_running", 409)
         return jsonify({"started": True})
 
     @app.route("/api/history/status")
@@ -1417,9 +1443,9 @@ def create_app():
     @app.route("/api/roundtrip/reconcile", methods=["POST"], defaults={"reconcile_only": True})
     def start_roundtrip(reconcile_only):
         if get_spotify_client() is None:
-            return jsonify({"error": "not_authenticated"}), 401
+            return api_error("not_authenticated", 401)
         if not roundtrip.start(reconcile_only=reconcile_only):
-            return jsonify({"error": "already_running", "detail": jobs.active()}), 409
+            return api_error("already_running", 409, detail=jobs.active())
         return jsonify({"started": True})
 
     @app.route("/api/roundtrip/stop", methods=["POST"])
@@ -1495,13 +1521,13 @@ def create_app():
     @app.route("/api/backfill/start", methods=["POST"])
     def start_backfill_job():
         if get_spotify_client() is None:
-            return jsonify({"error": "not_authenticated"}), 401
+            return api_error("not_authenticated", 401)
         body = request.get_json()
         n = body.get("generations")
         if n not in _BACKFILL_GENERATION_COUNTS:
             abort(400, description=f"generations must be one of {_BACKFILL_GENERATION_COUNTS}")
         if not backfill.start(n):
-            return jsonify({"error": "already_running", "detail": jobs.active()}), 409
+            return api_error("already_running", 409, detail=jobs.active())
         return jsonify({"started": True})
 
     @app.route("/api/backfill/stop", methods=["POST"])
