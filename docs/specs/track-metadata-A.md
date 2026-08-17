@@ -2,13 +2,15 @@
 
 **Roadmap step A.** Status: **ready to implement**. This spec is the standalone implementation prompt — an implement session can start from just this file. Follow `/symr-implement`: ask live for anything this doesn't decide.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 > **Branch:** this work lives on `feat/track-metadata-A`. Check with `git branch --show-current`.
 
 ## Read first
 - `CLAUDE.md` — conventions, KISS, the no-assumptions rule.
 - `docs/Planning/roadmap.md` — step A in context, and why I / C / D follow it.
 - `docs/spotify_constraints.md` — especially *Enrichment endpoints — all 403* and *Dead track-object fields*. Those two sections are the entire justification for this feature.
-- Existing code: `snapshot.py` (`_parse_track_item`, `_upsert_track`, `_apply_playlist_items`, `_sync_playlists_and_get_targets`, `summary_counts`), `db.py` (`SCHEMA`, `_migrate`), `app.py` (`/dev/snapshot*` routes, `/api/snapshot/*`), `templates/snapshot.html`, `templates/snapshot_playlist.html`, `static/js/snapshot.js`.
+- Existing code: `snapshot.py` (`_parse_track_item`, `_upsert_track`, `_apply_playlist_items`, `_sync_playlists_and_get_targets`, `summary_counts`), `db.py` (`SCHEMA`, `_migrate`), `app.py` (`/dev/snapshot*` routes, `/api/snapshot/*`), `templates/snapshot.html`, `static/js/snapshot.js`. (`templates/snapshot_playlist.html` no longer exists — its toggle now lives on `templates/entity_playlist.html`, per `entity-pages-K.md` §12.1's removal table.)
 - `scripts/backfill_track_details.py` — the existing standalone-script idiom (argument parsing, its own DB connection, commit-as-you-go) for the migration script to follow.
 
 ## What this is
@@ -179,8 +181,8 @@ LEFT JOIN album a ON a.album_id = t.album_id
 `LEFT JOIN`, so a track with a NULL `album_id` still appears.
 
 - `canonical_detect.py:86` — the detection input query. **Mechanical swap only; no matching logic changes here.** `album_norm` must compute the same string it does today. (Reworking detection onto the artist model is roadmap step **I**, deliberately separate.)
-- `app.py:306` — playlist detail rows.
-- `app.py:323` — `SELECT * FROM track`; convert to named columns plus the join.
+- `app.py:306` — playlist detail rows. (That view, `snapshot_playlist()`, was later removed entirely by `entity-pages-K.md` §12.1 — replaced by `/playlist/<id>`.)
+- `app.py:323` — `SELECT * FROM track`; convert to named columns plus the join. (That view, `snapshot_track()`, was also removed by K §12.1 — replaced by `/track/<id>`.)
 - `canonical.py:334` (`track_display`) — `SELECT * FROM track`; convert to named columns plus the join. Its `dict(row)` result feeds `canonical.html` and `canonical_review.js`, so the aliases must match today's key names exactly.
 
 ## Playlist exclude flag
@@ -191,7 +193,7 @@ LEFT JOIN album a ON a.album_id = t.album_id
 
 - `_sync_playlists_and_get_targets` filters excluded playlists out of `targets`, in both the full-pull and refresh paths.
 - `_pull_liked_songs` is skipped when `__liked__` is excluded. `__liked__` is excludable like any other row — it still holds tracks unique to it.
-- `last_pull_error` is **not** cleared on exclusion; the reason stays readable and the counts below depend on it.
+- `last_pull_error` is **not** cleared on exclusion; the reason stays readable and the counts below depend on it. It **is** cleared on un-exclusion, and on re-following a previously-unfollowed playlist (added post-launch, per `partial-pulls-J.md` §2.3–2.4 — a stale error from before re-inclusion would otherwise keep pinning the force-pull epoch or misleadingly discounting the playlist). An ordinary pull never clears it either way — only a successful item read does.
 - Nothing auto-clears the flag and nothing re-tests an excluded playlist — by definition it isn't read. To re-test, untoggle and pull.
 - Excluded playlists still get their Canvas card (unchanged behaviour).
 
@@ -210,7 +212,7 @@ Status header renders `143 / 150 pulled · 7 excluded`, with **failing** surface
 
 ### UI
 
-- **Toggle in both places** — a control per row in the playlist table on `/dev/snapshot`, and one in the header of `/dev/snapshot/playlist/<id>`. The toggle is itself the visual indicator; no separate column needed.
+- **Toggle in both places** — a control per row in the playlist table on `/dev/snapshot` (still there, `templates/snapshot.html:83`), and one in the header of the entity page `/playlist/<id>` (`templates/entity_playlist.html:22` — `/dev/snapshot/playlist/<id>` and `templates/snapshot_playlist.html` were removed by `entity-pages-K.md` §12.1). The toggle is itself the visual indicator; no separate column needed.
 - **Bulk button** — "Exclude the N playlists that failed" appears **only at the end of a pull, in the existing failure list** rendered by `showDone()` in [static/js/snapshot.js:118](../../static/js/snapshot.js). No failures, no button. Confirm before applying, then reload.
   To make it target exactly what's listed, add `playlist_id` to the entries `_record_failure` pushes onto `_status["failed_playlists"]`.
 

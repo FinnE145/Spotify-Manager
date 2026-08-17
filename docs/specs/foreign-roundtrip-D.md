@@ -9,6 +9,8 @@ track objects back out of the playlist-items endpoint.
 built around that: the write is confined to one playlist, guarded before it happens,
 and never touches anything else.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 ---
 
 ## Request budget — read this first
@@ -222,16 +224,20 @@ including `history_import.coverage_counts`.
 
 ## 4. The run
 
-### 4.1 Guard (1 request)
+### 4.1 Guard (2 requests)
 
-`sp.playlist(LOADER_ID)`. Refuse to continue, with a clear error and **zero
-writes**, unless:
+**Heading and body corrected 2026-08-17 (P1-007, item C)** — this was never one request; the
+measurements table near the top of this file already said so ("The guard is two reads, not
+one") and this section just never caught up.
+
+`sp.playlist(LOADER_ID)` **and** `sp.current_user()` — name/owner verified against a live read
+each time, not cached. Refuse to continue, with a clear error and **zero writes**, unless:
 
 - the name is exactly `<Play History Loader>`, and
 - the owner id equals the current user's id.
 
 This is the whole insurance policy against the one thing that must never happen —
-a bug pointing the clear-playlist call at a real playlist. It costs one request per
+a bug pointing the clear-playlist call at a real playlist. It costs two requests per
 run and is not optional.
 
 On success, upsert a `snapshot` row for the playlist with `excluded = 1`, so a
@@ -309,9 +315,20 @@ finds less to do.
    - **Some missing** → record those in `roundtrip_failed_uri`; the batch
      succeeded.
    - **All missing** → systemic (wrong read, wrong playlist, scope revoked),
-     not 100 individually dead tracks. Record **nothing** — poisoning 100 good
-     uris is the worse error — log it loudly and fail the batch so the §5
-     circuit breaker stops the run.
+     not necessarily 100 individually dead tracks — but only when the read
+     itself looks broken. **Corrected 2026-08-17 (P1-007):** the original
+     text here said "record nothing" unconditionally, which contradicts
+     §4.5's own precondition (reconciliation operates on `not_returned`
+     rows, which this rule as originally written would never create in the
+     all-missing case). The actual, correct rule: if the read nonetheless
+     came back structurally sane — a full page of *something*, one usable
+     track per uri sent, just none of them the ones requested — record every
+     requested uri as `not_returned` so §4.5 has something to work with. Only
+     when the read itself looks broken (a short or empty read-back) is
+     nothing recorded, since poisoning 100 good uris on a systemic fault is
+     the worse error. Either branch still fails the batch, so the §5 circuit
+     breaker stops a run that keeps doing this either way — the distinction
+     is about what gets *recorded*, not about pass/fail.
 7. **Commit** per batch, then advance the progress counters. Committing per
    batch is what makes a quota death cost nothing already earned.
 
@@ -379,6 +396,18 @@ decides what this pass is willing to spend requests on. A probe-confirmed
 `dead` (404 on open.spotify.com) never is; `not_returned` is worth one more
 look. That is exactly why it is a slug and not the sentence shown on the page
 — see §3.
+
+**Bug found and fixed 2026-08-17 (P1-007, item A).** `_fail_uris` originally wrote with
+`INSERT OR IGNORE`, on the assumption that protects a `dead` verdict from being clobbered. It
+does the opposite of what's needed here: a uri already stored as `not_returned` — exactly what
+this pass's own `_reconcile_list` selects — that a probe during this pass confirms `dead` (or a
+retry confirms `load_failed`) would have that write **silently dropped**, leaving the row stuck
+at `not_returned` forever and getting re-probed on every future reconciliation run. That
+directly contradicted the "never" above. `_fail_uris` now upserts (`ON CONFLICT ... DO UPDATE`)
+instead. This is safe in the other direction too — nothing calls `_fail_uris` with
+`not_returned` for a uri already in the table (the main pass's work list already excludes any
+uri present in `roundtrip_failed_uri` at all), so a `dead` row can never be overwritten back to
+a less-conclusive state by this change.
 
 A uri that this pass re-requests and Spotify simply *serves* this time needs no
 matching at all: it resolves through `played_uri_track` the moment the
@@ -512,7 +541,14 @@ Follows the `snapshot.html` pattern; no new UI vocabulary.
   `jobs.request_stop()`; the run finishes its current batch, commits, skips the
   clear (§4.4), and ends in the stopped-early state. The button switches to a
   "stopping…" state immediately so it's obvious the request landed, since the
-  actual stop waits for the batch boundary.
+  actual stop waits for the batch boundary. **This includes a stop requested during
+  §4.5's reconciliation pass** — bug found and fixed 2026-08-17 (P1-007, item B):
+  `_reconcile` checked `jobs.stop_requested()` between its own batches but never
+  signalled a stop back to the caller, so `_run`'s `outcome` stayed `"completed"` —
+  the clear still ran and the run log recorded a completed run despite having been
+  cut short. `_reconcile` now returns whether it was stopped, and `_run` sets
+  `outcome = "stopped"` and skips the clear when it was, matching this bullet's
+  guarantee for the reconciliation phase too.
 - **Live status** while running: phase, batch *n* of *m*, uris done, **requests
   issued this run**, current activity, and errors.
 - **Terminal state:** completed vs stopped-early, request count, `retry_at` when

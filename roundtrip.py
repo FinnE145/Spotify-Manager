@@ -412,8 +412,11 @@ def _run(reconcile_only=False):
         if outcome == "completed":
             # Second pass over what the main one couldn't resolve, while the
             # guard is still fresh and the loader is already ours (§4.5).
-            _reconcile(conn, sp)
+            if _reconcile(conn, sp):
+                outcome = "stopped"
             _record_run(conn, run_id, "running")
+
+        if outcome == "completed":
             # Tidiness only, and one request whatever is in there. Nothing
             # depends on it: each batch replaces the last, so the loader holds
             # at most one batch at any time.
@@ -651,9 +654,12 @@ def _match_substitutes(conn, unresolved, candidates):
 
 
 def _reconcile(conn, sp):
+    """Returns True if a stop cut reconciliation short, so the caller can
+    record the run as stopped and skip the clear (§6.1) instead of quietly
+    finishing as "completed" (P1-007)."""
     uris = _reconcile_list(conn)
     if not uris:
-        return
+        return False
     batches = [uris[i:i + BATCH_SIZE] for i in range(0, len(uris), BATCH_SIZE)]
     _status.set(phase="reconciling", batch_total=len(batches), batch_done=0)
     _status.log(
@@ -663,9 +669,10 @@ def _reconcile(conn, sp):
     for index, batch in enumerate(batches, start=1):
         if jobs.stop_requested():
             _status.log("Stop requested — ending reconciliation.")
-            return
+            return True
         _reconcile_batch(conn, sp, index, len(batches), batch)
         _status.set(batch_done=index)
+    return False
 
 
 def _reconcile_batch(conn, sp, index, total, uris):
@@ -865,10 +872,19 @@ def _probe_dead(uris):
 
 
 def _fail_uris(conn, uris, state, detail=None):
+    """Upsert, not insert-or-ignore: reconciliation calls this on uris already
+    recorded as not_returned (that's _reconcile_list's whole selection), and a
+    probe-confirmed dead/load_failed verdict must overwrite that provisional
+    state or the uri gets re-probed forever (P1-007). The main pass's own
+    calls never hit the conflict branch -- _work_list already excludes any
+    uri already present in this table, so they're always fresh inserts."""
     for uri in uris:
         conn.execute(
-            "INSERT OR IGNORE INTO roundtrip_failed_uri (requested_uri, state, detail) "
-            "VALUES (?, ?, ?)",
+            "INSERT INTO roundtrip_failed_uri (requested_uri, state, detail) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(requested_uri) DO UPDATE SET "
+            "state = excluded.state, detail = excluded.detail, "
+            "failed_at = excluded.failed_at",
             (uri, state, detail),
         )
         _status.append(

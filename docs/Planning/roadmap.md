@@ -8,6 +8,41 @@
 
 ---
 
+## Spec index
+
+What each of the 17 audited specs in `docs/specs/` actually covers, and the code it's
+authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
+cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
+files before landing on the answer. This table exists so that question, and ones like it, are
+a lookup from now on rather than a re-derivation. `codebase-health-P.md` itself isn't in the
+17 — it's the standing approach doc for this step, not an audited spec (see its own §0).
+
+Four predate the lettered steps entirely (Symr's original build-out, before this roadmap
+existed); the rest map onto the lettered order above. **P1 audited** tracks
+`docs/codebase-health/P1_findings.md` — update as each spec picks up its "Audited" header line.
+
+| spec | scope | primary code | step | P1 audited |
+|---|---|---|---|---|
+| `snapshot.md` | Original playlist/track pull design — largely superseded, see P1-003 | (superseded — `track-metadata-A.md`, `partial-pulls-J.md`, `entity-pages-K.md` now own this territory) | pre-lettering | no |
+| `org-canvas.md` | The drag-and-drop playlist canvas, Symr's first feature | `grouping.py`, `static/js/canvas.js`, `templates/canvas.html` | pre-lettering | no |
+| `site-shell.md` | Shared base template + navbar; turned the single-page canvas into a multi-page site | `templates/base.html`, page routes' shell | pre-lettering | no |
+| `error-pages.md` | Centralized HTTP error handling — styled page for browsers, JSON for `/api/*` | `app.py` error handlers, `templates/error.html` | pre-lettering | no |
+| `canonical-tracks.md` | The four-tier (release→recording→version→song) canonical grouping engine | `canonical.py`, `db.py` (`canonical_group`/`track_group` schema) | pre-lettering | no |
+| `canonical-fixes.md` | Two fixes: review-UI losing finer grouping work; `/dev/canonical` load time | `canonical_review.js`, `app.py` (`/dev/canonical`) | pre-lettering | no |
+| `track-metadata-A.md` | Full track/album/artist metadata capture (raw JSON + normalized model); playlist exclude flag | `snapshot.py` (parsing/upsert), `db.py` schema | A | partial — see P1-001, P1-002 |
+| `detection-artist-model.md` | Reworks `canonical_detect` onto artist ids instead of the comma-joined name string; artist alias model | `canonical_detect.py`, `artists.py`, `db.py` (`artist_alias`) | I | no |
+| `play-history-C.md` | GDPR streaming-history export ingestion into `play`, row-hash dedup | `history_import.py` | C | partial — see P1-006 |
+| `foreign-roundtrip-D.md` | Resolves played-but-unknown uris into real `track` rows via the scratch-playlist round-trip; introduces `jobs.py`'s single-lock design (§2) | `roundtrip.py`, `jobs.py` | D | partial — see P1-007 |
+| `grouping-catch-up-E.md` | Closed the post-D review backlog (810 main + 541 cross-artist candidates) | `canonical_detect.py`, `canonical_autogroup.py` | E | no |
+| `generations-B.md` | The `generation` table, tenure derivation, confirm-on-pull for new versions | `generations.py` | B | no |
+| `entity-pages-K.md` | Unified song/version/recording/release/track/album/artist/playlist entity pages | `entities.py`, `app.py` entity routes, `templates/entity_*.html` | K | no |
+| `scoring-H.md` | The one materialized score (version tier), query-time aggregation for everything else | `scoring.py` | H | no |
+| `partial-pulls-J.md` | Resumable/partial playlist pulls (derived work list, no cursor); the API request log | `snapshot.py` (pull logic), `api_log.py` | J | partial — see P1-004, P1-005 |
+| `grouping-fixes-backfill-M.md` | Three review-UI bugs (M1/M1b/M1c) + the album-tracklist backfill job | `canonical.py`, `backfill.py`, `entities.py` | M | no |
+| `async-recompute-N.md` | Moves `scoring.recompute()` off the request path for queue-driven writes | `scoring.py` (worker/backstop) | N | no |
+
+---
+
 ## Verified facts
 
 Everything in this section was measured for the listening-data steps (A–J). Later steps should add their own subsections rather than assume these still hold.
@@ -228,7 +263,7 @@ Deciding what to do with the resulting diff over the existing 288 groups stays a
 The project's **first write to the Spotify library**. Turns the foreign URIs into real `track` rows with full metadata for ~125 requests instead of one per URI.
 
 - Needs `playlist-modify-private`; delete `.spotipy_cache` and re-auth.
-- **Finn creates the temp playlist manually** and sets its exclude flag. Code only looks up its id (stored in `meta`) — no create/delete logic.
+- **Finn creates the temp playlist manually** and sets its exclude flag. Code only looks up its id — a hardcoded module constant with a `TODO`, not a `meta` lookup (corrected above; this bullet previously said `meta`).
 - Add 100 URIs/request, read back 100/page, clear afterwards so it never nears the 10,000-item cap.
 - **Map on the requested URI, not the returned id.** Relinking can return a different id and can collapse two URIs onto one.
 - Run on a **different day** from A's re-pull.
@@ -237,7 +272,7 @@ The project's **first write to the Spotify library**. Turns the foreign URIs int
 
 It is **not**, however, a grouping signal, as this plan previously claimed. Checking the mechanics: the requested id comes back only as a stub carrying `id`/`uri`/`type`/`href`/`external_urls` — no name, artists, album or duration — so it can never become a `track` row of its own. There is therefore no *pair* of rows to group and nothing for E to inherit; `track_uri_alias` absorbs the relationship completely. What relinking actually buys is better than a grouping hint: when a foreign URI relinks onto a track already in the library, a "foreign" URI turns out to be an owned track, its plays join straight onto it, and the foreign count shrinks by an amount that can't be predicted in advance.
 
-**Dead URIs** — a 20-URI sample resolved **20/20**, no failures, no unplayable. So this should be rare. When a batch does 400: bisect once or twice via the API to narrow, then check candidates against `https://open.spotify.com/track/<id>` — the **public web page, which is not the Web API and costs no quota**. Worst case if bisecting all the way via API is ~400 extra requests; the web-check path makes that moot.
+**Dead URIs** — a 20-URI sample resolved **20/20**, no failures, no unplayable. So this should be rare. When a batch does 400: probe all 100 uris against `https://open.spotify.com/track/<id>` — the **public web page, which is not the Web API and costs no quota** — rather than bisecting via the API, which would spend the very quota the round-trip exists to protect. Drop the confirmed-404s, retry the batch once with the survivors.
 
 ## E — Grouping catch-up ✅ DONE
 

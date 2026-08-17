@@ -3,6 +3,8 @@
 **Step J of `docs/Planning/roadmap.md`.** Read that step's section first; §0 below records
 everywhere planning contradicted it.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 ---
 
 ## 0. What planning changed
@@ -144,6 +146,23 @@ No Resume button, no new endpoint. The consequence worth naming: while a forced 
 incomplete, clicking Full pull will **not** force-re-read the playlists it already captured
 in that epoch. That is the desired behaviour and the only thing the epoch exists to express.
 
+**A playlist whose item read is currently failing counts as unfinished for this purpose**
+(`_resolve_force_epoch`, `snapshot.py`) — it keeps the epoch alive exactly like any other
+incomplete target, even though it also stays in the work list under §2.6's separate rule. This
+is deliberate, found and fixed during P1 (finding P1-004, `docs/codebase-health/P1_findings.md`):
+an earlier version discounted failing playlists from this check specifically, so that once the
+*only* unfinished target left in an epoch was a permanently-failing playlist, the epoch would
+resolve as "complete" and the next Full pull would mint a fresh one — which, per the rule above,
+forces every already-captured playlist to re-enter the work list. That silently turned a
+targeted retry of one broken playlist into a full ~230-request re-read of the entire library,
+directly contradicting this section's own promise. The correct way to unstick a permanently
+broken playlist and let the epoch complete is to **exclude it** (`/dev/snapshot`'s toggle or the
+post-pull bulk-exclude button) — an excluded playlist is filtered out of the candidate set
+entirely, upstream of this check, so excluding it lets the epoch resolve as complete with no
+silent re-read of anything else. Un-excluding it (or re-following a previously-unfollowed
+playlist) clears its `last_pull_error` so it doesn't carry a stale failure forward — see
+`track-metadata-A.md`'s exclude-flag section.
+
 ### 2.5 Ordering
 
 Materialized **once**, at the start of the run, into the existing `targets` list
@@ -171,7 +190,8 @@ behaviour change from today, where the fresh `snapshot_id` silently suppressed t
 It is correct — a transient failure should be retried — and it costs nothing in practice: the
 7 known permanent 403s are already excluded, so they never enter the work list at all. A new
 persistent failure gets retried until Finn excludes it by hand, which is the existing
-workflow (`/dev/snapshot`'s exclude toggle and the post-pull bulk-exclude button).
+workflow (`/dev/snapshot`'s exclude toggle and the post-pull bulk-exclude button). During a
+forced pull, that same exclusion is also what lets the epoch complete cleanly — see §2.4.
 
 ### 2.7 Liked Songs stays the tail step
 
@@ -393,10 +413,22 @@ match the refresh rule of §2.2, i.e. the size of the work list a Refresh would 
 - The status line gains it: `89 / 145 pulled · 8 excluded · 56 stale`.
 - `playlists_stale` is added to the polled status payload alongside the existing fields, so
   it ticks down live.
-- The end-of-run line must say what was captured, not just that something failed.
-  Rate-limited: **"Rate limited — 89 of 145 captured, 56 still stale. Resume after 14:20."**
-  Stopped: **"Stopped — 89 of 145 captured, 56 still stale."** `retry_at` renders through the
-  existing `data-datetime` / `format.js` path.
+- The end-of-run line must say what was captured, not just that something failed. **Amended
+  2026-08-17 (P1-005)** — the wording below now matches what's shipped (`static/js/snapshot.js`),
+  which says "remaining" rather than the original draft's "still stale": "remaining" is this
+  *run's* own leftover work list, while "stale" (the status line above) is a DB-wide count that
+  can genuinely differ — on a Full pull, `_is_full_pull_target` is a strict superset of the
+  refresh-stale rule, so `stale` can read 0 while `remaining` reads the whole library. Printing
+  "stale" here would visibly contradict the header's live count polled in the same tick.
+  - Rate-limited, mid-run (a work list already exists): **"Rate limited — 89 of 145 captured, 56
+    remaining. Resume in 14 mins."** `retry_at` renders through the existing `data-datetime` /
+    `format.js` path via `makeDateSpan`, with no trailing period after the date span.
+  - Rate-limited before a work list exists (e.g. during the playlist-list fetch itself, so there
+    is no `run_total` to report against): a distinct third message — **"Pull failed: Rate
+    limited by Spotify — retry in 14 mins."**
+  - Stopped: **"Stopped — 89 of 145 captured, 56 remaining."** Caveat: on a stopped run,
+    `run_done` counts a just-failed-and-recorded playlist as done, so `remaining` can slightly
+    undercount the true leftover work in that specific case — accepted, not worth a special case.
 - A **Stop** button (§3.2) beside Full pull / Refresh / Backfill.
 
 Per-run request count already exists (`snapshot.html:38`) and is unchanged.

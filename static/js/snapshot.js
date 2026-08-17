@@ -175,7 +175,7 @@
       if (status.retry_at) {
         progressLabel.append(
           captureNote
-            ? `Rate limited — ${captureNote}. Resume after `
+            ? `Rate limited — ${captureNote}. Resume `
             : `${noun} failed: Rate limited by Spotify — retry `
         );
         progressLabel.appendChild(makeDateSpan(status.retry_at));

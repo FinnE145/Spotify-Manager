@@ -4,10 +4,12 @@
 
 > **Branch:** this work lives on `feat/play-history-C`. Check with `git branch --show-current`.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 ## Read first
 - `CLAUDE.md` — conventions, KISS, the no-assumptions rule.
 - `docs/Planning/roadmap.md` — step C in context. **Where it disagrees with this spec, this spec is right** (see *Corrections to the roadmap* below).
-- Existing code to mirror: `snapshot.py` (`_status` / `_status_lock` / `_set_status` / `get_status` / `_start` / `summary_counts`), `db.py` (`SCHEMA`, `_migrate`), `app.py` (`/api/snapshot/*` routes), `templates/snapshot.html`, `static/js/snapshot.js` (progress bar + status poller), `templates/dev.html`.
+- Existing code to mirror: `snapshot.py` (`_start` / `summary_counts`), `jobs.py` (`JobStatus`, `try_start` — the shared single-job-slot design this spec's own §Status/§Concurrency below predate; see `foreign-roundtrip-D.md` §2), `db.py` (`SCHEMA`, `_migrate`), `app.py` (`/api/snapshot/*` routes), `templates/snapshot.html`, `static/js/snapshot.js` (progress bar + status poller), `templates/dev.html`.
 
 ## What this is
 
@@ -197,6 +199,7 @@ Cost is negligible — canonicalize + SHA-1 over all 90,662 rows is 0.55 s, on t
    - Compute `row_hash`, normalize, `INSERT OR IGNORE` with `import_id` and `source_file` (basename).
 4. Commit every 5,000 rows (see *Concurrency*).
 5. Update the `play_import` row with `files_parsed`, `rows_read` (rows seen, before the filter), `rows_inserted` (`total_changes` delta, so it counts only rows that actually landed), and `range_start` / `range_end` (min/max `ts` among rows read).
+6. **`scoring.recompute(conn)`** (added post-launch, expected once `scoring-H.md` landed — plays are a scoring input). Called on both success and the `import_id is not None` branch of failure, so a partial import's committed rows still get scored.
 
 `rows_read` and `rows_inserted` diverging is the normal, informative case — a second import of a cumulative export reads ~90k and inserts ~0.
 
@@ -208,23 +211,34 @@ It writes a **new `play_import` row** with `kind='reimport'`, `folder` copied fr
 
 ### Concurrency
 
-**A snapshot pull and an import must not run at the same time**, in either direction:
+**A snapshot pull and an import must not run at the same time**, in either direction. **First
+two bullets amended 2026-08-17 (P1-006)** — the pairwise mutual-check design below was
+superseded by `foreign-roundtrip-D.md` §2 before this spec was ever implemented against: two
+locks cannot enforce one shared invariant (each side checks the other's status with no lock
+held, then takes its own — a real race), so D replaced it with one shared job slot,
+`jobs.try_start`, that every job (including this one) claims via a single atomic
+check-and-set. This spec was never updated to say so:
 
-- `history_import.start_*` returns `False` when `snapshot.get_status()["running"]` is true.
-- `snapshot._start` returns `False` when `history_import.get_status()["running"]` is true.
-- Both API routes return `409 {"error": "already_running"}`, matching `/api/snapshot/pull`.
+- `history_import.start_*` calls `jobs.try_start("history_import", ...)`; it returns `False`
+  (no thread started) when any job — including a snapshot pull — already holds the slot.
+- There is no separate `snapshot._start` check to make, because there's only one slot for both
+  to contend for.
+- Both API routes return `409 {"error": "already_running"}`, matching `/api/snapshot/pull` —
+  this part is unchanged and still accurate.
 
 Commit every 5,000 rows anyway. A single 90k-row transaction holds SQLite's write lock long enough to block anything else that wants it, and chunked commits keep each hold short.
 
 ### Failure
 
-**Partial imports are kept.** On an exception mid-run: whatever committed stays, the error string lands on `play_import.error`, and the counts reflect what actually landed. A re-import then fills the rest — the hash makes it safe to re-run any number of times. Nothing is rolled back and nothing is deleted.
+**Partial imports are kept.** On an exception mid-run: whatever committed stays, the error string lands on `play_import.error`, and the counts reflect what actually landed. A re-import then fills the rest — the hash makes it safe to re-run any number of times. **Corrected 2026-08-17 (P1-006):** "nothing is rolled back" was never literally true — `_run_import` does call `conn.rollback()` on failure — the accurate statement is that only the **uncommitted tail** is discarded; the 5,000-row chunks that already committed survive, and nothing is ever deleted afterward.
 
 A failed import still leaves its `play_import` row, so the failure is visible on the page.
 
 ## Status
 
-Module-global `_status` + `_status_lock` + `_set_status` + `get_status`, exactly as in `snapshot.py`:
+**Rewritten 2026-08-17 (P1-006)** — `snapshot.py` never had a `_status`/`_status_lock`/
+`_set_status` of its own to mirror; both modules use `jobs.JobStatus` (`foreign-roundtrip-D.md`
+§2), which is what actually ships here too:
 
 ```python
 {
@@ -239,6 +253,7 @@ Module-global `_status` + `_status_lock` + `_set_status` + `get_status`, exactly
     "started_at": None,
     "finished_at": None,
     "error": None,
+    "log": [],               # JobStatus.get() injects this on every call, capped at 200 entries
 }
 ```
 
@@ -250,7 +265,7 @@ Progress is per file (13 of them) with the running row counts alongside — the 
 |---|---|
 | `POST /api/history/import` | multipart upload of the zip; starts the import. `409` if anything is already running. |
 | `POST /api/history/reimport` | re-parse the newest upload folder. `409` likewise; `400` if there's no upload yet. |
-| `GET /api/history/status` | `get_status()` plus the coverage counts below. |
+| `GET /api/history/status` | `get_status()` plus the coverage counts below, plus `active_job` (added post-launch — which job currently holds the slot, if any; `history_import.js` uses it to grey out the controls when a *different* job is running). |
 
 `MAX_CONTENT_LENGTH = 150 * 1024 * 1024` in `config.py` (the current zip is ~66 MB). Flask raises `413` past it, which the existing `HTTPException` handler already renders as JSON for `/api/*`.
 

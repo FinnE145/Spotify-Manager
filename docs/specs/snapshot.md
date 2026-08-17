@@ -2,6 +2,30 @@
 
 Status: **ready to implement**. This spec is the standalone implementation prompt — an implementation session can start from just this file. Follow the implement-phase workflow in `CLAUDE.md`: ask implementation questions live/one-at-a-time, don't decide undecided things yourself. Open questions are listed at the bottom.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
+> ## ⚠️ Superseded — historical reference only
+>
+> This spec predates the lettered roadmap and was never revisited after later steps replaced
+> nearly everything in it. For current behavior, read the successor specs below. The one
+> exception is the **Core model** section (append-only membership log, why copies get their own
+> rows, and "Change detection & diffing") — that section is still the living, authoritative
+> description of `_diff_playlist_tracks`; nothing else in the codebase documents its mechanics at
+> this level of detail, so it was rewritten in place (below) rather than superseded.
+>
+> | this file | current reality | see |
+> |---|---|---|
+> | Routes (`/snapshot`, `/snapshot/playlist/<id>`, `/snapshot/track/<id>`) | gone — `/dev/snapshot` + the unified entity pages `/playlist/<id>` / `/track/<id>` | `canonical-tracks.md` Phase 1, then `entity-pages-K.md` §12.1 |
+> | `track` table shape (`album_name`, no `isrc`/artist model) | fully replaced | `track-metadata-A.md` |
+> | Spotify field list (`track.album.{id,name}`, no artist ids) | fully replaced by the artist/album model | `track-metadata-A.md` |
+> | Pull & refresh flow (always-full-reread, no exclude, no resume) | replaced by the derived resumable work list | `partial-pulls-J.md` |
+> | Pull progress (module-level status dict) | replaced by `jobs.JobStatus` | `partial-pulls-J.md`, `foreign-roundtrip-D.md` §2 |
+> | Rate-limit handling ("rely on Spotipy's built-in 429 handling") | reversed — fail-fast (`RateLimited`) rather than blind-sleeping through an app-quota wait | `spotify_client.py`, `docs/spotify_constraints.md`, `partial-pulls-J.md` |
+> | "Still **no write scopes**" (below) | **false** — `playlist-modify-private` has existed since D (fixed inline below too, since it's a security claim) | `foreign-roundtrip-D.md` |
+> | Liked Songs "always re-pulled and diffed on every refresh" (below) | now gated on the `excluded` flag | `track-metadata-A.md` |
+>
+> Finding: P1-003 (whole-file), P1-002 (Change detection & diffing specifically).
+
 > **Branch:** this work lives on `feat/snapshot`. Check with `git branch --show-current` and `git checkout feat/snapshot` if you're not already on it.
 
 ## Read first
@@ -34,12 +58,49 @@ This is efficient precisely because the library is append-only: refreshes almost
 A playlist can legitimately hold the same track twice. The "Finn All has no duplicates" invariant means Symr must be able to **represent and detect** that — so the log does **not** collapse to unique `(playlist, track)`. Each copy is its own row with its own `added_at`. Exact-dup detection is then trivial: *any `(playlist, track)` with more than one live row.* (The single-vs-album-version dup is a *different* track id → a separate fuzzy title+artist match, not a schema concern here.)
 
 ### Change detection & diffing
-- **`snapshot_id` is the cheap gate.** The `current_user_playlists` paging pass returns every playlist's current `snapshot_id` in ~3 calls. Compare to stored; only re-pull tracks for playlists whose `snapshot_id` changed. **No manual "tracked/archived" flag** — an edited old playlist changes its `snapshot_id` and gets caught automatically; an untouched one is never re-pulled.
-- **Diff by copy count.** When re-pulling a changed playlist, compare *how many copies* of each track id it has vs. stored live rows:
-  - count up (e.g. 1→2 of track X): insert a new membership row for the new copy (its `added_at`, position).
-  - count down (2→1): stamp `removed_at = now` on the departed copy.
-  - **Which copy departed:** best-effort — pick the copy whose `position`/neighbouring tracks no longer line up. **Fallback when ambiguous:** stamp the copy with the *latest* `added_at` (an accidental duplicate is almost always the newer re-add, so the original survives). This only affects which `added_at`/position-history the surviving row keeps; it is not correctness-critical.
-  - Update `position` for surviving copies each pull (position is refreshed *data*, never used as copy identity — it slides when earlier tracks are removed).
+
+**Rewritten 2026-08-17 (P1-002)** to describe `_diff_playlist_tracks`'s actual algorithm — the
+original text above described a vaguer, different mechanism ("pick the copy whose
+position/neighbouring tracks no longer line up") that was never implemented, and directly
+contradicted itself elsewhere in this file by ruling position out as copy identity while the
+real fallback pass uses position for exactly that. This section is the authoritative
+description; nothing else in the codebase documents these mechanics at this level of detail.
+
+- **`snapshot_id` is the cheap gate.** The `current_user_playlists` paging pass returns every
+  playlist's current `snapshot_id` in ~3 calls. Compare to stored; only re-pull tracks for
+  playlists whose `snapshot_id` changed. **No manual "tracked/archived" flag** — an edited old
+  playlist changes its `snapshot_id` and gets caught automatically; an untouched one is never
+  re-pulled.
+- **Diff runs per track id, in three passes**, comparing stored live `membership` rows against
+  the freshly-pulled items for that track:
+  1. **Identity pass — exact `added_at` match.** A current copy whose `added_at` exactly matches
+     a stored copy's `added_at` is treated as *the same copy*, wherever it now sits — its
+     `position` is updated, nothing else changes. This pass runs first and is unconditional: it
+     can match the *newest* stored copy while leaving an *older* one unmatched, which inverts the
+     "newest presumed departed" intent of pass 3 below for whichever copies it resolves. The
+     fallback passes only ever see whatever this pass leaves unmatched.
+  2. **Position-order pairing, on a net increase or no change.** Whatever's left after pass 1 —
+     unmatched current items and unmatched stored rows — is sorted by `position` (stored rows
+     with a NULL position sort as `0`) and paired off index-by-index. **This is a deliberate use
+     of position as copy identity**, for whichever copies the identity pass didn't already
+     resolve — the earlier text in this file ruling that out entirely was wrong. Any current
+     items left over after pairing (a net increase) become new `INSERT`s.
+  3. **Oldest-survives fallback, on a net decrease.** If fewer unmatched current items remain
+     than unmatched stored rows, the stored leftovers are sorted by `added_at` ascending (a NULL
+     `added_at` sorts first, i.e. treated as oldest, and therefore never departs by this rule) —
+     ties on equal `added_at` keep their existing position order, so the lowest-position one
+     among a tie survives. The oldest `n_survive` (matching the count of unmatched current items)
+     survive and are paired to the current leftovers by position order; **the survivor's
+     `added_at` is overwritten with its paired current copy's `added_at`**, not just its
+     position. The rest are marked `removed_at = now`.
+- **Update `position` for every matched/surviving copy each pull.** Position is refreshed *data*
+  in all three passes; it is only ever used as copy *identity* in pass 2, and only for copies the
+  identity pass didn't already resolve.
+- **Two caveats for anyone building fixtures or tests:** the query fetching stored rows has no
+  `ORDER BY`, so which of two rows sharing an exact `added_at` gets consumed by pass 1 first is
+  unspecified — assert set-level outcomes, not row order. And `position` here is Symr's own
+  dense per-pull index (locals/episodes are skipped without incrementing it), not Spotify's raw
+  item index.
 
 ### Derived recency (`last_changed_at`)
 Computed, never a status you set. Seed on first capture from `max(added_at)` across the playlist's live memberships. Going forward it's `max(added_at, removed_at)` across its memberships (so our own removal stamps advance it too). Its only blind spot is a playlist whose most recent event was a removal *before Symr ever saw it* — which Spotify can't date anyway. Retained because it's a future cross-check for **folder placement** (a playlist still changing but filed under "Old Playlists," or a long-dead one sitting up top, is a flag).
@@ -62,14 +123,14 @@ Extends the existing schema in `db.py` (additive migrations per the existing `_m
 - **No** unique constraint on `(playlist_id, track_id)` (copies allowed).
 - Indexes: `(playlist_id)`, `(track_id)` — for the "where does this track appear" query.
 
-**Liked Songs** is included, represented as a **synthetic playlist row** in `snapshot` (fixed sentinel `playlist_id`, e.g. `__liked__`, name "Liked Songs", `owner` = the user). Its memberships live in `membership` like any other playlist. Because Liked Songs (`/me/tracks`, "Saved Tracks") has **no `snapshot_id`**, the cheap change-gate can't apply to it — so it is **always re-pulled and diffed on every refresh**. It does have `added_at`, so the log/removal model works normally.
+**Liked Songs** is included, represented as a **synthetic playlist row** in `snapshot` (fixed sentinel `playlist_id`, e.g. `__liked__`, name "Liked Songs", `owner` = the user). Its memberships live in `membership` like any other playlist. Because Liked Songs (`/me/tracks`, "Saved Tracks") has **no `snapshot_id`**, the cheap change-gate can't apply to it — so it is **always re-pulled and diffed on every refresh, unless excluded** (the `excluded` flag added by `track-metadata-A.md` applies to `__liked__` like any other row). It does have `added_at`, so the log/removal model works normally.
 
 **Pull progress** is tracked in an **in-memory module-level status object** guarded by a lock (single process, single user — no DB table needed): `running`, `phase`, `playlists_total`, `playlists_done`, `current_playlist`, `started_at`, `finished_at`, `error`.
 
 Persistence: **SQLite** via the stdlib `sqlite3` + the existing thin helper (per CLAUDE.md).
 
 ## Spotify integration
-- Use **Spotipy**. **Scopes:** add **`user-library-read`** to `SPOTIFY_SCOPES` (for Liked Songs / Saved Tracks) alongside the existing `playlist-read-private`, `playlist-read-collaborative`. **This scope change forces a one-time re-login** (Finn re-consents; delete/refresh the cached token). Still **no write scopes**.
+- Use **Spotipy**. **Scopes:** add **`user-library-read`** to `SPOTIFY_SCOPES` (for Liked Songs / Saved Tracks) alongside the existing `playlist-read-private`, `playlist-read-collaborative`. **This scope change forces a one-time re-login** (Finn re-consents; delete/refresh the cached token). At the time this feature was built, no write scopes were requested — **that changed with `foreign-roundtrip-D.md`**, which added `playlist-modify-private` for the round-trip's scratch-playlist replace. This app now holds a write scope; see `foreign-roundtrip-D.md` for what it's used for (`roundtrip.py` only, per its own module invariant).
 - **Playlist list:** page `current_user_playlists(limit=50)` via `sp.next` (as the existing endpoint does). Grab `snapshot_id`, name, image, owner, `tracks.total`.
 - **Tracks:** page each playlist's items (100/page) via `sp.next`. For each item read `track.id`, `track.name`, `track.artists[].name`, `track.album.{id,name}`, `duration_ms`, and the item's `added_at` + position.
 - **Liked Songs:** page `current_user_saved_tracks(limit=50)` via `sp.next` into the synthetic `__liked__` playlist; each item has `added_at`.

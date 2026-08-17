@@ -101,10 +101,19 @@ def backfill_pending(conn):
 
 def set_excluded(conn, playlist_ids, excluded):
     placeholders = ",".join("?" for _ in playlist_ids)
-    conn.execute(
-        f"UPDATE snapshot SET excluded = ? WHERE playlist_id IN ({placeholders})",
-        [1 if excluded else 0, *playlist_ids],
-    )
+    if excluded:
+        conn.execute(
+            f"UPDATE snapshot SET excluded = 1 WHERE playlist_id IN ({placeholders})",
+            playlist_ids,
+        )
+    else:
+        # Un-excluding is a fresh start -- don't carry a stale error forward
+        # from before the playlist was taken out of rotation.
+        conn.execute(
+            f"UPDATE snapshot SET excluded = 0, last_pull_error = NULL "
+            f"WHERE playlist_id IN ({placeholders})",
+            playlist_ids,
+        )
     conn.commit()
 
 
@@ -304,17 +313,18 @@ def _resolve_force_epoch(conn, candidates):
     is complete or absent (§2.4). No Resume button -- this is what makes
     Full pull its own resume.
 
-    A playlist whose item read is *failing* doesn't count as unfinished work
-    here. It stays in the target list either way (§2.6 -- a failure must be
-    retried), but letting it keep the epoch alive would mean one permanently
-    broken playlist silently downgrades Full pull into "retry just that one"
-    forever, and a genuine full re-read of the library would be impossible
-    until it was excluded by hand."""
+    A playlist whose item read is *failing* still counts as unfinished work
+    here -- it stays in the target list either way (§2.6 -- a failure must
+    be retried), and letting it keep pinning the epoch is deliberate: the
+    alternative (discounting it) makes the epoch "complete" on its own,
+    which mints a fresh one and forces the *entire* library to re-read on
+    the next click, silently. The sanctioned way to unstick a permanently
+    broken playlist is to exclude it by hand -- exclusion drops it out of
+    `candidates` before this function ever sees it, which lets the epoch
+    complete on the remaining (finished) targets with no silent re-read."""
     epoch = db.get_meta(conn, "pull_force_epoch")
     if epoch is not None and any(
-        _is_full_pull_target(stored, stale, epoch)
-        and (stored is None or stored["last_pull_error"] is None)
-        for _, stored, stale in candidates
+        _is_full_pull_target(stored, stale, epoch) for _, stored, stale in candidates
     ):
         return epoch
     epoch = jobs.now_iso()
@@ -434,7 +444,10 @@ def _upsert_snapshot_playlist(conn, p):
             pulled_at=excluded.pulled_at,
             snapshot_id=excluded.snapshot_id,
             description=excluded.description,
-            unfollowed_at=NULL
+            unfollowed_at=NULL,
+            -- Re-following is a fresh start too -- don't carry a stale
+            -- error forward from before the playlist was unfollowed.
+            last_pull_error=CASE WHEN unfollowed_at IS NOT NULL THEN NULL ELSE last_pull_error END
         """,
         (
             p["id"],
