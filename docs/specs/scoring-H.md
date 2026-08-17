@@ -9,6 +9,8 @@ absolute scale.
 Motivation, from the roadmap: play count over-rewards pleasant background music,
 tenure under-rewards recent arrivals, and neither handles recency.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 ---
 
 ## 0. What planning changed
@@ -679,8 +681,13 @@ type enters — as a weight on membership, never as a different term:
 
 - **1.0** by default.
 - **`FEATURED_WEIGHT` (< 1)** for a version that reaches an artist only through a featured
-  credit. Available structurally from step I: an artist credited on the track but not on
-  its album (`track_artist` minus `album_artist`, exposed by the `track_artist_role` view).
+  credit. Available structurally from step I, exposed by the `track_artist_role` view: a
+  credit is `primary` when its artist is also an album artist, or — the fallback the view
+  adds specifically so Various Artists compilations don't misclassify the real artist as
+  featured — when *none* of the track's credited artists match any album artist; otherwise
+  `featured`. Not literally "`track_artist` minus `album_artist`" per-credit; the fallback
+  makes it a per-track decision that can promote every credit on a track to `primary` at
+  once.
 
 ### 5.4 Albums are padded with their untouched tracks
 
@@ -736,8 +743,8 @@ re-litigated:
 
 ## 6. Tiers below version
 
-Recording, release and track each get their own score, computed by §4 over their own
-narrower track set, then blended toward their version's score:
+Recording, release and track each get their own score, computed over their own narrower
+track set, then blended toward their version's score:
 
 ```
 score(x) = (1 − SUBTIER_W)·score(version(x)) + SUBTIER_W·score_own(x)
@@ -747,6 +754,15 @@ score(x) = (1 − SUBTIER_W)·score(version(x)) + SUBTIER_W·score_own(x)
 almost identically — close enough that comparing the wrong one is a rounding error — while
 still differing enough to break ties, which is what makes score usable for choosing a
 version's representative track (§11).
+
+**`score_own(x)` is raw only (§4.4) — it does not run §4's shrinkage.** Shrinkage needs a
+bucket baseline (median inputs across every group sharing a bucket), and building a second
+full bucket-baseline system per finer tier isn't worth the cost for a term whose only job
+is breaking a tie in representative-track selection, already the one place `SUBTIER_W` is
+known to matter and already flagged there as unvalidated (§10.1). Settled here, not left as
+an unstated implementation judgment call — `docs/scoring/tuning_prototype.py`'s
+`subtier_score()` takes a pre-derived `own_score` as a bare parameter and was never called,
+so it doesn't settle this either way (§0.2, §12).
 
 ---
 
@@ -1129,13 +1145,18 @@ the contents of one album or one playlist that keep their native order.
 
 ### 11.3 Behavioural, not display
 
-- **`canonical.representative()`** (`canonical.py:244`) — currently most live memberships
+**Citations corrected 2026-08-17 (P1-008/P1-010)** — both line numbers had drifted and the
+second function was renamed during implementation; neither was ever a different design, just a
+stale pointer.
+
+- **`canonical.representative()`** (`canonical.py:251`) — currently most live memberships
   → oldest `added_at` → lowest track id. Becomes highest score. It stays **computed at
   read**, not materialized, so this costs no extra invalidation; a manual pin
   (`canonical_group.representative_track_id`) still wins over the score. §6's `SUBTIER_W`
   exists to make this tie-breaking meaningful.
-- **`artists._canonical_choice()`** (`artists.py:59`) — picks which artist id wins a merge,
-  currently by raw track count. Becomes score-weighted.
+- **`artists._canonical_of()`** (`artists.py:51`, shipped under this name rather than the
+  `_canonical_choice()` this section originally called it) — picks which artist id wins a
+  merge, currently by raw track count. Becomes score-weighted.
 - ~~**Round-trip work-list ordering** (`roundtrip._WORK_LIST_SQL`, currently by play
   count)~~ — **struck during implementation, left ordering by play count.** The work list is
   defined by `played_uri_track` *not* resolving (`x.track_id IS NULL`), so every uri on it

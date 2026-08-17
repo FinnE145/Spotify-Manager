@@ -5,6 +5,8 @@
 Stop blocking a request on `scoring.recompute()`. The math is untouched; only *when* and *on
 whose thread* it runs changes.
 
+**Audited 2026-08-17** against the code, as part of P1 (`docs/codebase-health/P1_spec_audit.md`).
+
 ---
 
 ## 0. What planning changed from the roadmap section
@@ -179,7 +181,11 @@ lost, for two reasons, and it takes both:
 - **Every job that touches a scoring input ends with its own `recompute()` on the success path and
   both failure paths** — the property `ensure_fresh()` already documents and relies on for the same
   deferral. `backfill.py` is the exception that proves it: it never recomputes, because it writes
-  only `wanted_uri`, which no score reads.
+  only `wanted_uri`, which no score reads. **Narrower than stated for `history_import.py`**: its
+  single `except` block only calls `recompute()` when `import_id is not None` — i.e. only once the
+  import row itself has been created. Benign (nothing durable enough to be a scoring input can have
+  been written before that point), but the guarantee as written ("both failure paths",
+  unconditionally) doesn't literally hold for this one job.
 - **`ensure_fresh()` re-catches whatever the drop lost.** Deferring remembers nothing, so
   `_last_fingerprint` still sits behind the dropped request's write; the first request after the
   slot frees sees the moved fingerprint and enqueues. This is what covers a request-path apply
@@ -224,7 +230,7 @@ and would otherwise miss the write it was asked about.
 | Site | Why |
 |---|---|
 | `/api/scoring/recompute` (`app.py`) | The one deliberately blocking recompute. Its response carries the fresh tier counts and outcome that `static/js/scoring.js` renders in place; async would mean inventing a poll for no gain. It is also the manual retry after a failure (§6.2). |
-| `/dev/generations/confirm` (`app.py`) | A form POST that redirects straight onto `/dev/generations` or `/dev/snapshot`, both score-ordered, and a new generation shifts tenure library-wide. Roughly monthly. |
+| `/dev/generations/confirm` (`app.py`) | A form POST that redirects straight onto `/dev/generations` or `/dev/snapshot`, both score-ordered. Recomputes only on a **"yes"** decision — a new generation shifts tenure library-wide, a scoring input; declining just mutes the prompt and touches nothing scoring reads, so it skips the recompute entirely. Roughly monthly. |
 | `canonical_autogroup.run()` / `.undo()` | One deliberate click each, already multi-second, and the page reloads onto score-ordered content when they return. |
 | The 11 job call sites | Amortized into a multi-second-to-minute run. |
 
@@ -268,8 +274,12 @@ with _worker_lock:
         return False
 ```
 
-Without this, the request right after an async apply would see the moved fingerprint and fire a
-*synchronous* recompute, reinstating exactly the delay N exists to remove.
+The real reason is narrower than that, and worth stating precisely since §5.1 already removed the
+only path that could fire a synchronous recompute: `request_recompute()` is idempotent — calling it
+again while the worker runs just re-sets the already-`True` `_worker_pending` flag — but
+`_last_data_version`/`_last_fingerprint` can't move until the worker's own `recompute()` finishes,
+so without this guard every request landing in that ~1.8s window would still pay the ~5ms
+fingerprint read for a fingerprint it already knows is about to be superseded.
 
 **5.3 It loses its `conn` parameter.** It never recomputes inline, so the only connection it needs
 is `_checker()`. Update the sole caller, `refresh_scores()` in `app.py`'s `before_request` hook,
@@ -294,19 +304,31 @@ free.
 
 **6.2 Do not auto-retry an identical failed fingerprint.**
 
-The self-healing already in H covers a *transient* failure: `_mark_seen()` is never called on the
-error path, so the fingerprint stays behind and the next backstop check retries. A *repeatable*
-failure is the problem — `_last_data_version` never advances either, so every subsequent request
-would pay the fingerprint read and spawn another doomed 1.8s pass, forever, silently.
+`_last_data_version` never advances on a failure, so without a suppression rule every subsequent
+request would pay the fingerprint read and spawn another doomed 1.8s pass, forever, silently.
 
 - New module global `_failed_fingerprint`, guarded by `_backstop_lock`.
 - `recompute()` initializes `observed = None` before its `try` body (a failure inside
   `canonical.ensure_track_groups()` happens before `_observe()`), and on the error path records
-  `observed`'s fingerprint as `_failed_fingerprint` when it is not `None`.
+  `observed`'s fingerprint as `_failed_fingerprint` whenever it is not `None` — **every** failure
+  past that point, not only a failure already known to be repeatable.
 - `_mark_seen()` clears `_failed_fingerprint`. Any success — background or the manual button —
   re-arms auto-retry.
 - `ensure_fresh()` skips when the freshly-read fingerprint equals `_failed_fingerprint`: it neither
   enqueues nor marks anything seen.
+
+**There is no separate self-heal path for a transient failure**, by design, settled during P1:
+`recompute()` cannot know in advance whether a failure it just caught is transient or repeatable —
+the only way to find out is to retry it, which is exactly what unbounded auto-retry would do. And
+this worker never talks to the network or to Spotify; every step between `_observe()` and the
+`INSERT`s is local SQLite plus in-process Python, so a failure here is overwhelmingly likely to be
+a deterministic bug against the current data, not a one-off flake — the "transient" case this
+section originally distinguished barely exists in this worker's actual failure surface. So a
+caught failure is suppressed unconditionally until either a fresh commit moves the fingerprint or
+the manual button (`/api/scoring/recompute`, always available, never consults
+`_failed_fingerprint`) is clicked — accepted as the simpler and lower-risk design over adding a
+time-based retry, which would reintroduce a slow version of the exact spin this section exists to
+prevent.
 
 **Accepted cost:** while broken with nothing else committing, each request re-pays the ~5ms
 fingerprint read, because `_last_data_version` is deliberately not advanced (it and
@@ -328,20 +350,27 @@ The manual button always retries, since it calls `recompute()` directly and neve
   `scoring.recompute_status()` — an in-memory dict copy under a lock, so it costs nothing per
   request. Expose whether the last outcome was `"error"` and the error text.
 - `templates/base.html` renders a one-line banner between the navbar and `{% block content %}`,
-  only when that flag is set: the message, the error text, and a link to `/dev/scoring`. Reuse the
-  existing `.error` styling; add a minimal banner rule to `static/css/style.css` only if needed.
+  only when that flag is set: the message, the error text, and a link to `/dev/scoring`. Shipped as
+  its own `.scoring-banner` rule in `static/css/style.css`, not a reuse of `.error` — `.error` turned
+  out to be scoped to `.page`, and the banner sits outside `.page` (see the immersive-pages bullet
+  below), so reusing it would have needed the same override this dedicated rule is.
 - It clears itself — the next successful recompute overwrites the status.
 - **It renders everywhere `base.html` does, including the immersive full-viewport pages**
   (`canonical_review.html`, `canvas.html`). That is deliberate: the review queue is exactly where a
   silently-broken recompute would otherwise go unnoticed. A slightly squashed canvas while scoring
   is broken is acceptable.
+- **It fires for any recorded failure, not only a silent background one** — including the manual
+  `/api/scoring/recompute` button's own failure, which already surfaces its own error to whoever
+  clicked it. Harmless (the clicker sees the same information twice, once inline and once in the
+  banner) and not worth a special case to suppress.
 
 ### 7.2 `/dev/generations/confirm` click feedback
 
-New `static/js/generation_confirm.js` — an IIFE that no-ops when the form is absent, wired on
-`DOMContentLoaded`, loaded site-wide from `base.html`'s `<head>` beside `format.js`. Site-wide
-rather than added to `snapshot.html` and `generations.html` individually so it cannot drift from
-the macro it serves, which is itself shared for that reason.
+New `static/js/generation_confirm.js` — a bare `DOMContentLoaded` listener (not wrapped as an IIFE
+like the site's other per-page JS files) that no-ops when the form is absent, loaded site-wide from
+`base.html`'s `<head>` beside `format.js`. Site-wide rather than added to `snapshot.html` and
+`generations.html` individually so it cannot drift from the macro it serves, which is itself shared
+for that reason.
 
 `generation_confirm_banner` in `templates/_macros.html` gains a stable id on its `<form>` (it
 renders at most once per page — `pending_new_generation()` returns a single pending playlist).
