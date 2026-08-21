@@ -137,6 +137,11 @@ def test_an_album_is_padded_with_its_untouched_tracks(conn):
 
 
 def test_an_album_holding_more_tracks_than_it_claims_is_not_padded_negatively(conn):
+    """Note for a future mutation pass: simply *deleting* the `max(..., 0)`
+    changes nothing, because `[0.0] * -1` is already `[]` -- that mutant is
+    equivalent, not a surviving one. What this test does catch is the
+    plausible wrong guard, `abs(...)`, which pads a short-claiming album with
+    phantom zero-scoring tracks."""
     # source: scoring-H.md §5.4's "Known interaction -- duplicate album
     # rows"; the `max(..., 0)` guard in album_scores
     album_id = builders.make_album(conn, total_tracks=1)
@@ -201,6 +206,66 @@ def test_a_featured_only_credit_is_discounted_in_an_artist_score(conn):
     result = scoring.artist_scores(conn, ["art1"])
     assert result["art1"]["all_time"] == pytest.approx(91.367, abs=1e-3)
     assert result["art1"]["all_time"] != pytest.approx(87.5925, abs=1e-2)
+
+
+def test_featured_only_means_every_credit_on_the_version_is_featured(conn):
+    """The discriminating fixture is version A: **two tracks in one version
+    group**, the artist primary on one and featured on the other. Every other
+    fixture in this file gives an artist one role per version, where "any
+    credit is featured" and "every credit is featured" agree -- so a MAX-based
+    implementation passes them all.
+
+    Here it does not: under MAX, version A is featured-only too, both members
+    carry FEATURED_WEIGHT, and the uniform scaling cancels inside combine()'s
+    ratio -- giving 87.5925, exactly the no-discount answer.
+    """
+    # source: scoring-H.md §5.3 -- FEATURED_WEIGHT applies to "a version that
+    # reaches an artist ONLY through a featured credit"; _artist_role_rows'
+    # docstring, "featured_only is true iff every credit tying this version to
+    # this artist is a featured one"
+    album_primary = builders.make_album(conn, artists=["art1"])
+    builders.make_track(conn, track_id="t_a1", album_id=album_primary, artists=["art1"])
+    album_guest = builders.make_album(conn, artists=["other"])
+    builders.make_track(conn, track_id="t_a2", album_id=album_guest, artists=["other", "art1"])
+    version_a = builders.make_group(conn, ["t_a1"])
+    builders.make_group(conn, ["t_a2"], version=version_a["version"])  # same version group
+
+    album_b = builders.make_album(conn, artists=["other2"])
+    builders.make_track(conn, track_id="t_b", album_id=album_b, artists=["other2", "art1"])
+    version_b = builders.make_group(conn, ["t_b"])  # art1 featured, and only featured
+
+    builders.make_score(conn, "version", version_a["version"], all_time=100.0, recent=100.0)
+    builders.make_score(conn, "version", version_b["version"], all_time=50.0, recent=50.0)
+
+    roles = scoring._artist_role_rows(conn, ["art1"])
+    assert roles["art1"][version_a["version"]] is False  # one credit is primary
+    assert roles["art1"][version_b["version"]] is True
+
+    result = scoring.artist_scores(conn, ["art1"])
+    assert result["art1"]["all_time"] == pytest.approx(91.367, abs=1e-3)
+    assert result["art1"]["all_time"] != pytest.approx(87.5925, abs=1e-2)
+
+
+def test_a_version_with_no_materialized_score_drops_out_rather_than_counting_zero(conn):
+    """An artist credited on two versions, only one of which has a `score`
+    row -- the state between a grouping change and the next recompute. The
+    unscored version must leave the collection entirely; treating it as 0.0
+    would drag the artist to 87.0551 on evidence that does not exist yet."""
+    # source: scoring-H.md §4.6 -- absence of evidence is never negative
+    # evidence; _weighted_score's `if vid not in maps[h]: continue`
+    album1 = builders.make_album(conn, artists=["art1"])
+    builders.make_track(conn, track_id="t1", album_id=album1, artists=["art1"])
+    g_scored = builders.make_group(conn, ["t1"])
+
+    album2 = builders.make_album(conn, artists=["art1"])
+    builders.make_track(conn, track_id="t2", album_id=album2, artists=["art1"])
+    builders.make_group(conn, ["t2"])  # deliberately never scored
+
+    builders.make_score(conn, "version", g_scored["version"], all_time=100.0, recent=100.0)
+
+    result = scoring.artist_scores(conn, ["art1"])
+    assert result["art1"]["all_time"] == pytest.approx(100.0, abs=1e-3)
+    assert result["art1"]["all_time"] != pytest.approx(87.0551, abs=1e-2)
 
 
 def test_an_artist_group_score_unions_the_pairs_versions(conn):

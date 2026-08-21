@@ -6,7 +6,6 @@ ordering.
 import pytest
 
 import builders
-import canonical
 import scoring
 
 
@@ -74,6 +73,68 @@ def test_recompute_groups_any_track_that_has_no_group_yet(conn):
     assert conn.execute(
         "SELECT 1 FROM score WHERE tier = 'track' AND group_id = 't1'"
     ).fetchone() is not None
+
+
+def test_the_recent_column_holds_the_recent_horizon_not_a_copy_of_all_time(conn):
+    """The stored `recent` column is the only place §7's second horizon is
+    observable, and every other test here reads `all_time` -- so without this
+    an implementation writing all_time into both columns passes the whole
+    suite.
+
+    Two bucket-A versions whose only play is 200 days ago, outside the 90-day
+    window: recent_windowed is 0 for both, so each stored recent is exactly
+    RECENT_ALLTIME_BLEND of its own normalized all_time (§7.1a) and nowhere
+    near it. Hand-derived from §4.3/§4.5/§7.1a/§8:
+
+      v1 (full play, W=1.0): R=0.15,  all_time 28.7904, recent 11.1505
+      v2 (half play, W=0.5): R=0.075, all_time 25.0642, recent  9.7073
+
+    The finer tiers carry the same split, so the track row is asserted too --
+    §6's blend runs per horizon, and t1's own recent raw is 0.
+    """
+    # source: scoring-H.md §7.1 / §7.1a / §9.1 -- "One table ... holding both
+    # horizons"; "recent = (1 - RECENT_ALLTIME_BLEND)·recent_windowed +
+    # RECENT_ALLTIME_BLEND·all_time"
+    g1 = builders.make_group(conn, ["t1"])
+    builders.make_play(conn, track_id="t1", ts=builders.days_ago(200), ms_played=210_000)
+    g2 = builders.make_group(conn, ["t2"])
+    builders.make_play(conn, track_id="t2", ts=builders.days_ago(200), ms_played=105_000)
+
+    scoring.recompute(conn)
+
+    def stored(tier, group_id):
+        row = conn.execute(
+            "SELECT all_time, recent FROM score WHERE tier = ? AND group_id = ?",
+            (tier, str(group_id)),
+        ).fetchone()
+        return row["all_time"], row["recent"]
+
+    v1_all, v1_recent = stored("version", g1["version"])
+    v2_all, v2_recent = stored("version", g2["version"])
+    t1_all, t1_recent = stored("track", "t1")
+
+    assert v1_all == pytest.approx(28.7904, abs=1e-3)
+    assert v1_recent == pytest.approx(11.1505, abs=1e-3)
+    assert v2_all == pytest.approx(25.0642, abs=1e-3)
+    assert v2_recent == pytest.approx(9.7073, abs=1e-3)
+    assert t1_all == pytest.approx(28.8720, abs=1e-3)
+    assert t1_recent == pytest.approx(10.8681, abs=1e-3)
+
+
+def test_tier_counts_reports_a_zero_for_a_tier_with_no_rows(conn):
+    """An empty library materializes nothing, and /dev/scoring still has to
+    render four numbers. A plain GROUP BY returns no rows at all here, so the
+    per-tier default is the whole content of this function."""
+    # source: scoring-H.md §9.1 -- the four stored tiers; tier_counts'
+    # docstring, "{tier: count} ... for each of the four stored tiers"
+    scoring.recompute(conn)
+
+    assert scoring.tier_counts(conn) == {
+        "version": 0,
+        "recording": 0,
+        "release": 0,
+        "track": 0,
+    }
 
 
 def test_recompute_records_a_successful_run(conn):

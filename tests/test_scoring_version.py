@@ -113,6 +113,8 @@ def test_exposure_is_clamped_to_the_window_on_the_recent_horizon():
 
 
 def test_exposure_inside_the_window_is_not_clamped():
+    # source: scoring-H.md §7.1 -- the negative half of the clamp above:
+    # only a first opportunity *predating* the window is pulled forward to it
     now = _now()
     win = (now - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
     fo = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -266,7 +268,7 @@ def test_the_whole_bucket_a_library_scores_as_the_spec_derives_it(conn):
     Wrong answers this discriminates against: if SHRINK_MAX were dropped
     (pull=1.0 whenever W is small), a1 would land exactly on the baseline
     and display as 44.7214 instead of 31.6228. If the baseline used the mean
-    input (0.75) instead of the median (0.5), a1 would display as 35.3553.
+    input (0.8333) instead of the median (0.5), a1 would display as 35.3553.
     a2's own raw already equals the baseline, so its score is
     shrink-invariant -- it is the control here, not a discriminator.
     """

@@ -363,6 +363,11 @@ def test_the_alive_flag_comes_down_even_when_the_connection_cannot_be_opened(mon
 
 
 def test_a_failing_recompute_stops_the_worker_rather_than_spinning(monkeypatch):
+    """The request landing *during* the failing pass is what makes this
+    discriminate. Without it `_worker_pending` is already False when the pass
+    ends, so the loop exits on its own top-of-loop guard whether the `except`
+    arm returns or falls through to another iteration -- and an implementation
+    that spins forever on a deterministic failure passes anyway."""
     # source: async-recompute-N.md §3.4 -- "Stopping here rather than
     # looping is what stops a deterministic failure spinning."
     monkeypatch.setattr(scoring, "request_recompute", conftest.REAL_REQUEST_RECOMPUTE)
@@ -370,6 +375,8 @@ def test_a_failing_recompute_stops_the_worker_rather_than_spinning(monkeypatch):
 
     def _always_fails(c):
         calls.append(1)
+        if len(calls) == 1:
+            scoring.request_recompute()  # a commit lands mid-pass, so a spin has something to spin on
         raise RuntimeError("boom")
 
     monkeypatch.setattr(scoring, "recompute", _always_fails)
