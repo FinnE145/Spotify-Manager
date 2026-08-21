@@ -9,7 +9,7 @@ __pycache__/
 instance/
 data/
 .pytest_cache/
-.coverage
+.coverage*
 htmlcov/
 .spotipy_cache*
 .claude/*

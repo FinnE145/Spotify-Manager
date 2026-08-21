@@ -77,7 +77,10 @@ those two.** Characterization is fine there.
   two that got through session 1 and how the fixtures had to change.
 - **Weaken a test to make it pass.** If a test that should pass doesn't, that is a finding.
 - **Touch `symr.db`.** See §4.1. This is the security-grade part of P.
-- **Look at coverage before §7.** Deliberate — see there.
+- **Look at coverage, in any form.** Not the number, not the gap list, and specifically **not
+  `docs/codebase-health/P2_coverage_SEALED.md`**, which sessions 2, 3 and 4 must not open. A
+  coverage map in view optimises for executing lines, and the cheapest way to execute a line is
+  the tautology above. Verify measures; the sessions that write tests do not. See §7.
 
 ---
 
@@ -349,23 +352,46 @@ permanent.
 
 ---
 
-## §7 Coverage — session 5 only, and deliberately last
+## §7 Coverage — never while writing, and sealed away from the sessions that do
 
-`pytest-cov` is a dependency from session 0, but **no session looks at coverage until session 5.**
+**A session writing tests does not look at coverage. Ever.** Not the number, not the gap list.
 
 The reason is the one that governs everything else here: writing tests while watching a coverage
 map optimises for executing lines, and the cheapest way to execute a line is a characterization
-test asserting what it already does. That is §2's failure at small scale. Writing all four area
-sessions blind, then measuring, gives a coverage number that means something — it reports what an
-honest pass actually reached.
+test asserting what it already does. That is §2's failure at small scale. Writing each area session
+blind gives a coverage number that means something — it reports what an honest pass actually
+reached.
+
+**Where it is measured (revised 2026-08-21, during session 1's Verify).** The original rule here
+was "nobody measures until session 5". That is now split, because the prohibition was never really
+about *when* — it was about *who*:
+
+- **Each session's Verify pass measures**, scoped to that session's own modules. Verify is safe
+  by construction: it writes no tests, and reviews a diff that is already finished, so a gap list
+  cannot bend what got written. Finn fills gaps from there, in Verify, where nothing is being
+  authored.
+- **Session 5 does the consolidated whole-suite pass** and takes the ruling on what is left.
+
+**The measurements live in `docs/codebase-health/P2_coverage_SEALED.md`, which sessions 2, 3 and 4
+must not open.** Recording the gaps and then publishing them where a test-writing session reads
+them would defeat the blind-writing discipline exactly as thoroughly as watching the map live — the
+session would just work the list. The seal is also what stops a bare number anchoring a session
+*upward* ("session 1 got X, mine should beat it" — which buys lines, not assertions) or *downward*
+("I'm probably around X, I can stop" — which ends a session on a number rather than on §5's floor).
+For the same reason **no coverage figure appears in this file, in `P2_findings.md`, in
+`codebase-health-P.md` §10's status table, or in a commit message.**
 
 **Coverage is a gap-finder, not a gate.** "These 47 branches in `canonical_detect.py` have never
 been executed" is a real, cheap, mechanical list, and it is exactly the kind of gap hand
 enumeration failed to produce in P1 without burning a quota. But there is **no numeric threshold**,
 because a suite of `assert True` reaches 100% and a target rewards the tests worth least.
 
-Session 5 measures, reports the gaps to Finn, and he decides whether any are worth filling — which
-may be its own session or may be nothing.
+**One infrastructure note, since §7 promised a measurement that was not actually possible until
+session 1's Verify:** coverage.py stores its data in a SQLite file in the repo root, so §4.1's
+`sqlite3.connect` guard refused it — the suite passed and pytest then exited `INTERNALERROR` on the
+report. `conftest.py` now carries a basename-scoped exemption (`.coverage*` only, which no Symr
+database is ever named), with one test that coverage can write and one that the exemption stays
+narrow.
 
 ---
 
