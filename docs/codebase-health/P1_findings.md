@@ -328,9 +328,14 @@ ceremony) — the highlights, grouped by what kind of thing they are:
   was triggered against the running app this session.
 - **Test:** Specification test: a candidate set with one `last_pull_error`-carrying,
   not-excluded playlist that would otherwise satisfy `_is_full_pull_target` must keep
-  `pull_force_epoch` alive (not start a fresh one) while every other target is done; excluding
-  that playlist must then let the epoch complete on the next forced pull with no other
-  previously-captured playlist re-entering the work list. Also cover the never-seen-before
+  `pull_force_epoch` alive (not start a fresh one) while every other target is done, **and** the
+  work list on that run must be exactly that playlist — no previously-captured playlist
+  re-entering is what the fix buys. Excluding that playlist must then let the epoch complete,
+  i.e. mint a fresh one. *(Amended 2026-08-20, finding P2-002: the "nothing re-enters" clause was
+  originally attached to the exclusion case, where it is false — a fresh epoch puts every
+  captured playlist back in the work list by definition. The **Ruling** above always had this
+  right; "no **silent** re-read" means one the user did not ask for while resuming.)* Also cover
+  the never-seen-before
   (`stored is None`) arm, and `last_pull_error` clearing on un-exclude and on a
   previously-unfollowed playlist reappearing (but *not* clearing on an ordinary re-pull of a
   still-followed, still-failing playlist).

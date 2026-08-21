@@ -224,9 +224,16 @@ migrates it — and these are the functions with the power to damage `symr.db`.
   position tie-break; NULL `added_at` on one or more stored rows.
 - **`_resolve_force_epoch`'s failing-playlist discount (P1-004)** — a `last_pull_error`-carrying,
   not-excluded playlist that would otherwise satisfy `_is_full_pull_target` must keep
-  `pull_force_epoch` alive while every other target is done; excluding it must then let the epoch
-  complete with no previously-captured playlist re-entering the work list. Cover the
+  `pull_force_epoch` alive while every other target is done, **and** the work list on that run
+  must be exactly that playlist — nothing previously captured re-entering is the whole point of
+  the fix. Excluding it must then let the epoch complete, i.e. mint a fresh one. Cover the
   never-seen-before case too.
+
+  **Corrected 2026-08-20 (P2-002).** This bullet previously attached "with no previously-captured
+  playlist re-entering the work list" to the *exclusion* case, where it does not hold and cannot
+  be asserted: a completed epoch mints a fresh one, and every captured playlist then satisfies
+  `tracks_pulled_at < epoch` and re-enters — which is what a fresh Full pull means. The claim
+  belongs to the epoch-*preserved* case, above, and is written there now.
 - **`roundtrip._run_batch` (P1-007)** — an all-missing batch whose read-back returns a full page of
   unlabelled substitutes must record every uri as `not_returned` *and* still count as failed toward
   the circuit breaker; an all-missing batch with a genuinely short/empty read-back records nothing
