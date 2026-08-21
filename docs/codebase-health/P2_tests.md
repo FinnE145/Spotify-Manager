@@ -28,10 +28,10 @@ source: the spec clause it derives from, or `characterization`. That comment is 
 is what makes review a scan of (assertion, cited clause) pairs, and during P3 it is what says at a
 glance which tests may legitimately be regenerated and which must never be.
 
-**A second failure mode, and it is quieter than the first (learned in session 1, 2026-08-20).**
-The tautology §2 prohibits at least *looks* wrong on the page. This one does not: a test can cite
-a real spec clause, assert something perfectly true, pass — and still be unable to fail if the
-code were wrong. Two of session 1's did.
+**A second failure mode, and it is quieter than the first (learned in session 1, 2026-08-20; it
+has recurred in every session since).** The tautology §2 prohibits at least *looks* wrong on the
+page. This one does not: a test can cite a real spec clause, assert something perfectly true,
+pass — and still be unable to fail if the code were wrong. Two of session 1's did.
 
 - A relink test asserted that `roundtrip` pairs each requested uri with the substitute Spotify
   actually served. True, and cited. But the fake returns tracks in request order, so a purely
@@ -50,6 +50,38 @@ answer is "the same thing", the fixture is wrong, not the test — the discrimin
 needs one more element, a shift, or a value the builders could not previously express. Ask it of
 every test that turns on an ordering, a fallback, or which of several passes handled a case; those
 are where two mechanisms agree on the easy input and diverge only on the awkward one.
+
+**Session 2 sharpened the fixture question (P2-003, P2-005).** A fixture must disagree with
+**every** rule the implementation could fall back on, not just the one the spec discusses. P2-005
+satisfied §5's floor wording exactly and still could not fail: the floor named one wrong rule
+(credit count) where `_canonical_of` has two, and the fixture's ids happened to make the
+score-blind fallback elect the same winner. Both of session 2's arrived through the *fixture*
+rather than the assertion — P2-003 through a `make_group` that pinned a representative production
+never pins, which short-circuited the election before it ran.
+
+**Session 3 found a different shape entirely, and the question above does not reach it (P2-007).**
+Three of its four un-failable tests were not fixtures too simple — they were **observations never
+made**. The `score` table's whole `recent` column was unasserted, so an implementation writing
+`all_time` into it passed all 596 tests; `tier_counts` was only ever compared against itself
+(`status["counts"] == scoring.tier_counts(conn)`); and the worker's stop-on-failure test asserted
+a call count that was forced by something other than the rule it was named for. You cannot ask
+"would this assertion have told the difference?" about an assertion nobody wrote. So ask a second
+question, and ask it of the **module** rather than of a test: *what does this produce — a stored
+column, a return value, a branch — that no test reads at all?*
+
+**Coverage cannot answer either question, and is structurally blind to the second.** The code that
+produces an unread value runs exactly as it would if the value were read. The coverage pass had
+nothing left to report about `artists.py` when P2-005 was found in it, and only one defensive line
+to report about `scoring.py` when an entire materialized horizon turned out to be unobserved.
+Mutation answers both questions cheaply — break the thing, see whether anything notices — and it is
+the only thing that has ever found one of these. (Figures themselves stay sealed, per §7; that they
+were near their ceiling is the whole point and is all you need.)
+
+**Where this bites next.** Session 4 is read paths, routes and templates, where the cheapest
+possible non-observation is "the page returned 200". A route test that never asserts what is *on*
+the page is the same defect as the unread `recent` column, wearing a different hat. §4.6's
+permanent layer is deliberately specified as non-5xx **plus semantic assertions** for exactly this
+reason.
 
 **All 17 specs now carry an `Audited 2026-08-17` header line.** That line is the licence to derive
 assertions from a spec. `docs/canonical-tracks/detection.md` and `review-ui.md` deliberately do
@@ -73,8 +105,10 @@ those two.** Characterization is fine there.
 - **Obtain an expected value by running the code and calling it a specification test.** See §1.
 - **Ship a test that cannot fail.** A true assertion a broken implementation would also satisfy is
   worth no more than a tautology, and is harder to spot because it is green and cites a real
-  clause. Before moving on, ask what a wrong implementation would have produced — see §1 for the
-  two that got through session 1 and how the fixtures had to change.
+  clause. Before moving on, ask **both** of §1's questions: of each test, what a wrong
+  implementation would have produced; and of each module, what it produces that no test reads at
+  all. The second is not a refinement of the first — session 3's three arrived through it, and the
+  first question cannot reach them.
 - **Weaken a test to make it pass.** If a test that should pass doesn't, that is a finding.
 - **Touch `symr.db`.** See §4.1. This is the security-grade part of P.
 - **Look at coverage, in any form.** Not the number, not the gap list, and specifically **not
