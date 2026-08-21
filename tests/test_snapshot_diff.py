@@ -275,12 +275,20 @@ def test_a_surviving_copys_added_at_is_overwritten_not_just_its_position(conn, p
 def test_ties_on_equal_added_at_keep_the_lowest_position_copy(conn, playlist):
     """Two stored copies share an `added_at`, so the ascending sort cannot
     separate them -- and being stable over an already position-sorted list, it
-    leaves the lowest-position one first, which is the one that survives."""
+    leaves the lowest-position one first, which is the one that survives.
+
+    **The higher position is inserted first, deliberately**, so that rowid
+    order and position order disagree. The stored-row query has no `ORDER BY`,
+    so inserting them the other way round hands the algorithm a list that is
+    already position-sorted for free -- and the pre-sort this test exists to
+    pin becomes unobservable. Written that way it passed with the sort
+    deleted, which is §1's "green but cannot fail" exactly.
+    """
     # source: snapshot.md pass 3 -- "ties on equal added_at keep their existing
     # position order, so the lowest-position one among a tie survives."
     track = builders.make_track(conn)
-    lower = builders.make_membership(conn, playlist, track, position=2, added_at=MID)
     higher = builders.make_membership(conn, playlist, track, position=5, added_at=MID)
+    lower = builders.make_membership(conn, playlist, track, position=2, added_at=MID)
 
     snapshot._diff_playlist_tracks(conn, playlist, [item(track, 0, OTHER)])
 

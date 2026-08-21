@@ -129,6 +129,19 @@ def test_a_playlist_captured_during_this_epoch_is_done_for_it(conn):
     assert snapshot._is_full_pull_target(stored_row(conn, playlist), False, OLD_EPOCH) is False
 
 
+def test_a_playlist_captured_exactly_at_the_epoch_is_done_for_it(conn):
+    """The boundary the clause turns on, and the one the frozen clock makes
+    ordinary rather than exotic: a playlist read during a forced pull is
+    stamped from the same `jobs.now_iso()` that minted the epoch, so equality
+    is what a completed target actually looks like. `<=` here would re-target
+    every playlist the run just finished.
+    """
+    # source: partial-pulls-J.md §2.3 -- "done for it when tracks_pulled_at
+    # >= pull_force_epoch", so equality is done, not outstanding.
+    playlist = builders.make_playlist(conn, tracks_pulled_at=OLD_EPOCH)
+    assert snapshot._is_full_pull_target(stored_row(conn, playlist), False, OLD_EPOCH) is False
+
+
 def test_a_never_captured_playlist_is_a_full_pull_target(conn):
     # source: partial-pulls-J.md §2.3 -- the NULL arm, which is why this is
     # compared in Python: `NULL < epoch` is NULL in SQL, not true.

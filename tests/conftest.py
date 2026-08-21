@@ -73,8 +73,25 @@ os.environ["SYMR_DEBUG"] = "0"
 _real_sqlite3_connect = sqlite3.connect
 
 
+def _is_coverage_db(resolved):
+    """coverage.py's own data file, which is a SQLite database it writes into
+    the repo root -- so `pytest --cov` dies on the guard below without this.
+
+    Narrow on purpose, and safe for the one reason that matters: the exemption
+    is by *basename*, and no Symr database is ever named `.coverage`. The real
+    file is `symr.db`; coverage's is `.coverage` or, under parallel runs,
+    `.coverage.<host>.<pid>.<random>`. Nothing that starts with `.coverage`
+    can be the library.
+
+    This is not an optional convenience. `P2_tests.md` §7 makes session 5 a
+    measured coverage pass, and without this the guard aborts the report --
+    the suite passes, then pytest exits INTERNALERROR.
+    """
+    return os.path.basename(resolved).startswith(".coverage")
+
+
 def _guarded_connect(*args, **kwargs):
-    """Refuses to open any database outside TMP_DIR.
+    """Refuses to open any database outside TMP_DIR, bar coverage's own file.
 
     The layer that does not depend on a caller having consulted config.DB_PATH:
     every script in `scripts/` hardcodes its own path, and a future test that
@@ -88,7 +105,9 @@ def _guarded_connect(*args, **kwargs):
     database = args[0] if args else kwargs.get("database")
     if database != ":memory:":
         resolved = os.path.realpath(os.fspath(database))
-        if not resolved.startswith(os.path.realpath(TMP_DIR) + os.sep):
+        if not resolved.startswith(os.path.realpath(TMP_DIR) + os.sep) and not _is_coverage_db(
+            resolved
+        ):
             raise RuntimeError(
                 f"Refusing to open a database outside the test temp directory.\n"
                 f"  asked for: {resolved}\n"

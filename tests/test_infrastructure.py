@@ -45,6 +45,29 @@ def test_sqlite_connect_allows_the_temp_dir():
     conn.close()
 
 
+def test_the_guard_lets_coverage_write_its_own_data_file():
+    """`pytest --cov` stores its data in a SQLite file in the repo root, so
+    without an exemption the suite passes and then pytest exits INTERNALERROR
+    on the report. Found in Verify, 2026-08-21."""
+    # source: P2_tests.md §7 -- session 5 is a measured coverage pass, so the
+    # guard has to let coverage.py through.
+    conn = sqlite3.connect(os.path.join(os.path.dirname(__file__), os.pardir, ".coverage.probe"))
+    conn.close()
+    os.remove(os.path.join(os.path.dirname(__file__), os.pardir, ".coverage.probe"))
+
+
+def test_the_coverage_exemption_does_not_open_a_door_to_the_library():
+    """The exemption is by basename, so it can only ever match a file named
+    `.coverage*` -- which the library never is. This is the assertion that
+    keeps it narrow if anyone ever widens the match."""
+    # source: P2_tests.md §4.1 -- the guard's whole purpose survives the
+    # exemption added for §7.
+    with pytest.raises(RuntimeError, match="Refusing to open a database"):
+        sqlite3.connect("symr.db")
+    with pytest.raises(RuntimeError, match="Refusing to open a database"):
+        sqlite3.connect("/tmp/coverage-but-not-really/symr.db")
+
+
 def test_credentials_are_dummies_not_the_real_ones():
     # source: P2_tests.md §4.1 step 2 -- load_dotenv() must not have overridden these
     assert config.SPOTIFY_CLIENT_ID == "test-client-id"
