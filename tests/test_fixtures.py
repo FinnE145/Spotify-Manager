@@ -210,14 +210,16 @@ def test_a_few_pages_render_on_an_empty_database(client, path):
 
 
 def _project_modules():
-    """Every top-level project module. Not tests/ (its own fakes are not the
-    subject) and not scripts/, which conftest never imports."""
+    """Every project module, with nothing filtered out.
+
+    Deliberately unfiltered: an exclusion here is a blind spot in a guard whose
+    only job is to have none, and it would be invisible -- the guard would go on
+    passing while quietly not looking at the excluded file. `os.listdir` does not
+    recurse, so tests/ and scripts/ are out of scope by structure rather than by
+    a rule someone has to keep true.
+    """
     root = os.path.join(os.path.dirname(__file__), os.pardir)
-    return sorted(
-        name[:-3]
-        for name in os.listdir(root)
-        if name.endswith(".py") and name != "config.py"
-    )
+    return sorted(name[:-3] for name in os.listdir(root) if name.endswith(".py"))
 
 
 def test_every_module_importing_get_spotify_client_is_patched():

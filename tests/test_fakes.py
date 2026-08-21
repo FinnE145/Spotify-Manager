@@ -99,6 +99,25 @@ def test_playlist_items_honours_offset():
     assert len(sp.playlist_items("p1", offset=4)["items"]) == 6
 
 
+def test_a_pages_total_is_the_collection_not_the_remainder():
+    # source: Spotify's paging object -- `total` is the size of the collection
+    # and does not move with `offset`. A fake that shrank it would make a
+    # progress figure read low and plausible rather than wrong.
+    sp = FakeSpotify()
+    sp.add_playlist("p1", tracks=[spotify_track(f"t{i}") for i in range(10)])
+    assert sp.playlist_items("p1", offset=4)["total"] == 10
+
+
+def test_reading_an_unregistered_playlist_404s_rather_than_reading_empty():
+    # source: the real endpoint -- and an empty page here would be
+    # indistinguishable from "every requested uri came back missing", which is
+    # a genuine round-trip outcome the suite has to be able to tell apart.
+    sp = FakeSpotify()
+    with pytest.raises(Exception) as raised:
+        sp.playlist_items("never-registered")
+    assert raised.value.http_status == 404
+
+
 # -- Failure modes (P2_tests.md §4.4) ---------------------------------------
 
 
@@ -142,6 +161,7 @@ def test_a_400_propagates_rather_than_being_retried():
     # source: jobs.call -- only 429 is special; a 400 on a batch is what
     # roundtrip narrows down with its off-quota probe
     sp = FakeSpotify()
+    sp.add_playlist("p1")
     sp.fail("playlist_replace_items", bad_request())
     with pytest.raises(Exception) as raised:
         jobs.call(jobs.JobStatus("test", requests=0), sp.playlist_replace_items, "p1", [])
@@ -254,6 +274,18 @@ def test_the_guard_rejects_a_playlist_owned_by_someone_else():
     assert playlist["owner"]["id"] != sp.current_user()["id"]
 
 
+def test_a_foreign_owners_display_name_is_not_the_current_users():
+    # source: snapshot._fetch_all_playlists stores owner["display_name"] as
+    # snapshot.owner while roundtrip's guard compares owner["id"]. A fixed
+    # display name would file a foreign playlist under Finn's name and no
+    # ownership test written on it would mean anything.
+    sp = FakeSpotify(user_id="finn", user_name="Finn")
+    sp.add_playlist("mine")
+    sp.add_playlist("theirs", owner_id="someone-else")
+    assert sp.playlist("mine")["owner"]["display_name"] == "Finn"
+    assert sp.playlist("theirs")["owner"]["display_name"] == "someone-else"
+
+
 # -- Wiring ------------------------------------------------------------------
 
 
@@ -340,6 +372,19 @@ def test_run_jobs_inline_passes_arguments_through(run_jobs_inline):
     received = []
     jobs.try_start("backfill", lambda *args: received.append(args), 7, "extra")
     assert received == [(7, "extra")]
+
+
+def test_run_jobs_inline_puts_the_api_context_back(run_jobs_inline):
+    # source: api_log.api_context -- the real try_start labels a *fresh thread's*
+    # context, so the label never escapes the job. Inline there is no second
+    # context, and a leaked label would file a later page's requests under the
+    # job's name.
+    import api_log
+
+    inside = []
+    jobs.try_start("snapshot", lambda: inside.append(api_log.api_context.get()))
+    assert inside == ["snapshot"]
+    assert api_log.api_context.get() is None
 
 
 def test_run_jobs_inline_releases_the_slot_when_the_job_raises(run_jobs_inline):

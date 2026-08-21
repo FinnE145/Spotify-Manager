@@ -25,7 +25,10 @@ def test_db_path_is_the_temp_database():
 
 
 def test_db_path_is_not_the_real_library():
-    # source: P2_tests.md §4.1 -- the whole reason the guard exists
+    # source: P2_tests.md §4.1 -- the whole reason the guard exists. Implied by
+    # the test above rather than independent of it, and kept for the same reason
+    # conftest keeps the check it mirrors: it names the actual disaster, and it
+    # is what stays true if the exact-path check above is ever loosened.
     real = os.path.realpath(os.path.join(os.path.dirname(__file__), os.pardir, "symr.db"))
     assert os.path.realpath(config.DB_PATH) != real
 

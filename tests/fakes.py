@@ -101,7 +101,16 @@ def spotify_track(track_id, name=None, album=None, artists=None, linked_from=Non
     return track
 
 
-def spotify_playlist(playlist_id, name=None, owner_id="finn", total=0, snapshot_id=None):
+def spotify_playlist(
+    playlist_id, name=None, owner_id="finn", owner_name=None, total=0, snapshot_id=None
+):
+    """One playlist object.
+
+    `display_name` follows `owner_id` rather than being a fixed string:
+    snapshot._fetch_all_playlists stores the *display name* as `snapshot.owner`
+    while roundtrip's guard compares the *id*, so a fake that pinned the name
+    would quietly file a foreign-owned playlist under Finn's name.
+    """
     return {
         "id": playlist_id,
         "name": name if name is not None else f"Playlist {playlist_id}",
@@ -109,7 +118,7 @@ def spotify_playlist(playlist_id, name=None, owner_id="finn", total=0, snapshot_
         "uri": f"spotify:playlist:{playlist_id}",
         "description": "",
         "snapshot_id": snapshot_id or f"snap-{playlist_id}",
-        "owner": {"id": owner_id, "display_name": "Finn"},
+        "owner": {"id": owner_id, "display_name": owner_name or owner_id},
         "images": [{"url": f"https://i.scdn.co/image/{playlist_id}", "width": 640, "height": 640}],
         "tracks": {"total": total},
     }
@@ -150,8 +159,10 @@ def not_found(message="not found"):
 
 
 class FakeSpotify:
-    def __init__(self, user_id="finn"):
-        self.user = {"id": user_id, "display_name": "Finn"}
+    def __init__(self, user_id="finn", user_name=None):
+        # display_name follows the id for the same reason spotify_playlist's
+        # does: _pull_liked_songs stores `display_name or id` as the owner.
+        self.user = {"id": user_id, "display_name": user_name or user_id}
         self.playlists = []
         self.items = {}
         self.saved_tracks = []
@@ -178,12 +189,22 @@ class FakeSpotify:
 
     # -- Setup -------------------------------------------------------
 
-    def add_playlist(self, playlist_id, name=None, owner_id=None, tracks=None, **overrides):
-        """Registers a playlist and, optionally, its contents."""
+    def add_playlist(
+        self, playlist_id, name=None, owner_id=None, owner_name=None, tracks=None, **overrides
+    ):
+        """Registers a playlist and, optionally, its contents.
+
+        Owned by the current user unless `owner_id` says otherwise -- which is
+        the state roundtrip's guard exists to refuse.
+        """
+        if owner_id is None:
+            owner_id = self.user["id"]
+            owner_name = owner_name or self.user["display_name"]
         playlist = spotify_playlist(
             playlist_id,
             name=name,
-            owner_id=owner_id if owner_id is not None else self.user["id"],
+            owner_id=owner_id,
+            owner_name=owner_name,
             total=len(tracks or []),
             **overrides,
         )
@@ -270,14 +291,22 @@ class FakeSpotify:
         raise not_found(f"playlist {playlist_id}")
 
     def playlist_items(self, playlist_id, limit=100, offset=0):
+        # 404 rather than an empty page, like the real endpoint and like
+        # playlist()/track()/album()/artist() above. An empty page for a
+        # playlist nobody registered would read as "every uri came back
+        # missing", which is a real round-trip outcome and would look like one.
         self._record("playlist_items", playlist_id, limit=limit, offset=offset)
-        return self._paginate(self.items.get(playlist_id, []), limit, offset)
+        if playlist_id not in self.items:
+            raise not_found(f"playlist {playlist_id}")
+        return self._paginate(self.items[playlist_id], limit, offset)
 
     def playlist_replace_items(self, playlist_id, uris):
         """The only write this fake has, and the only one roundtrip is allowed
         to make. Replaces -- the playlist afterwards holds exactly `uris`,
         resolved through substitutions and drops."""
         self._record("playlist_replace_items", playlist_id, uris)
+        if playlist_id not in self.items:
+            raise not_found(f"playlist {playlist_id}")
         self.replacements.append((playlist_id, list(uris)))
         self.items[playlist_id] = self._serve(uris)
         return {"snapshot_id": f"snap-{len(self.replacements)}"}
@@ -351,10 +380,15 @@ class FakeSpotify:
         it for truth and hand it back to sp.next(), which is exactly what
         spotipy's real pages support -- so a token is indistinguishable to them
         and does not invite a test to parse a URL that would not be there.
+
+        `total` is the whole collection, **not** what is left after `offset` --
+        that is what Spotify returns, and a fake that shrank it with the offset
+        would make a paging progress figure read low and correct-looking.
         """
-        window = list(items)[offset:]
+        collection = list(items)
+        window = collection[offset:]
         chunks = [window[i:i + limit] for i in range(0, len(window), limit)] or [[]]
-        pages = [{"items": chunk, "next": None, "total": len(window)} for chunk in chunks]
+        pages = [{"items": chunk, "next": None, "total": len(collection)} for chunk in chunks]
         for index, page in enumerate(pages[:-1]):
             token = f"page-{self._page_counter}"
             self._page_counter += 1

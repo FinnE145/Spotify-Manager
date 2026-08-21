@@ -144,9 +144,15 @@ import config  # noqa: E402  -- must follow the env block above, not precede it
 
 # An explicit raise, never `assert`: assert statements are stripped under
 # `python -O`, and a guard that silently disappears under an interpreter flag
-# is not a guard. Two checks, because they fail differently -- the first
-# catches the path being something else entirely, the second catches the
-# specific something else that matters.
+# is not a guard.
+#
+# The first check is the live one, and it is exact: DB_PATH is a path inside a
+# freshly-created mkdtemp, so anything else at all fails here. That makes the
+# second check **unreachable today** -- if config.DB_PATH could be `symr.db`,
+# the first would already have raised. It is kept anyway, and not as decoration:
+# the first check is the kind that gets loosened (to "anywhere under TMP_DIR",
+# say, the day a test wants a second database), and the moment it is, the second
+# becomes the live one. Same argument as layer 2 against layer 1, one level down.
 if os.path.realpath(config.DB_PATH) != os.path.realpath(DB_PATH):
     raise RuntimeError(
         "REFUSING TO RUN: config.DB_PATH is not the test database.\n"
@@ -453,6 +459,12 @@ def run_jobs_inline(monkeypatch):
     lock, refused if already held, the stop flag is cleared, api_context is
     labelled, and the slot is released in a finally.
 
+    api_context is labelled *and put back*. The real try_start runs its target
+    in a fresh thread, which gets its own contextvars Context, so the label
+    never escapes the job. Inline there is no second context, so the token is
+    reset by hand -- otherwise a page rendered later in the same test would log
+    its Spotify requests under the job's name.
+
     **One deliberate difference.** The real try_start runs the target in a
     thread, so an exception the job does not catch itself dies with that thread
     and is invisible. Here it propagates into the caller -- which surfaces as a
@@ -468,10 +480,11 @@ def run_jobs_inline(monkeypatch):
             jobs._active = name
             jobs._stop_requested = False
         started.append(name)
-        api_log.api_context.set(name)
+        token = api_log.api_context.set(name)
         try:
             target(*args)
         finally:
+            api_log.api_context.reset(token)
             with jobs._lock:
                 jobs._active = None
         return True
