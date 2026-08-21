@@ -188,6 +188,22 @@ def test_make_group_puts_tracks_in_one_group_at_every_tier(conn):
         assert row["release_id"] == groups["release"]
 
 
+def test_make_group_leaves_the_representative_unpinned(conn):
+    # source: canonical.py -- _INSERT_GROUP_SQL never writes
+    # representative_track_id, and pin_representative writes it only at song
+    # tier. A builder that pinned one would short-circuit
+    # canonical.representative() before the score election ran, so every
+    # scoring-H.md §11.3 tiebreak test would assert the pin instead. It did,
+    # until session 2.
+    groups = make_group(conn, ["t1", "t2"])
+    pins = conn.execute(
+        "SELECT DISTINCT representative_track_id FROM canonical_group"
+    ).fetchall()
+    assert [row["representative_track_id"] for row in pins] == [None]
+    # And the election still returns a member, so read paths are unaffected.
+    assert canonical.representative(conn, groups["song"]) in ("t1", "t2")
+
+
 def test_make_group_can_share_a_tier_to_build_two_versions_of_one_song(conn):
     # source: canonical-tracks.md's four tiers -- two versions under one song is
     # the shape most grouping tests need, and it must be one call to express

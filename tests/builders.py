@@ -331,6 +331,17 @@ def make_group(conn, track_ids, representative_track_id=None, **tier_ids):
     **`canonical.apply_partition` is the engine and the source of truth.** Use
     this for read-path fixtures, where the point is a group that exists; use
     the engine when the point is how grouping decides.
+
+    **`representative_track_id` defaults to NULL, and must.** This builder
+    used to default it to `track_ids[0]`, which no production path does:
+    `canonical._INSERT_GROUP_SQL` never writes the column, and
+    `pin_representative` only ever writes it at the **song** tier. A pinned
+    fixture short-circuits `canonical.representative()` before the election
+    runs at all, so every test of the score tiebreak (scoring-H.md §11.3,
+    P1-008) silently asserted the pin instead -- and passed, because the
+    pinned track was usually the one the election would have picked anyway.
+    Found while writing session 2; see P2 findings. A test that wants a pin
+    calls `canonical.pin_representative` or passes this argument.
     """
     # Tracks first: canonical_group.representative_track_id is a real foreign
     # key into track, so a group cannot be inserted before its members exist.
@@ -344,7 +355,7 @@ def make_group(conn, track_ids, representative_track_id=None, **tier_ids):
             continue
         cursor = conn.execute(
             "INSERT INTO canonical_group (tier, representative_track_id) VALUES (?, ?)",
-            (tier, representative_track_id or track_ids[0]),
+            (tier, representative_track_id),
         )
         groups[tier] = cursor.lastrowid
 
