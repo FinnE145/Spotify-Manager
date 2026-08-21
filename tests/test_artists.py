@@ -29,6 +29,10 @@ def scored_artist(conn, artist_id, name, track_ids, version_scores):
     Track *count* and score are therefore independently controllable, which is
     exactly what P1-010's tiebreak needs: the id with more `track_artist` rows
     and the id with the higher score have to be different ids.
+
+    Callers must also pick ids whose **alphabetical order** disagrees with the
+    score, or the test passes against an implementation that ignores scores and
+    falls through to `_canonical_of`'s id-ascending tiebreak (P2-005).
     """
     builders.make_artist(conn, artist_id, name=name)
     for track_id, score in zip(track_ids, version_scores):
@@ -67,26 +71,36 @@ def track_credit_counts(conn):
 def test_the_higher_scoring_id_wins_a_merge_not_the_busier_one(conn):
     """P1-010's case: score and raw credit count disagree, and score wins.
 
-    `ar-few` holds one credit and a strong version; `ar-many` holds two weak
+    `ar-strong` holds one credit and a strong version; `ar-busy` holds two weak
     ones. The pre-H rule ("the id with the most `track_artist` rows") elects
-    `ar-many`.
+    `ar-busy`.
+
+    **The ids are named so that *both* wrong rules elect `ar-busy`.** The
+    retired one does because it has more credits; a rule that dropped the score
+    term entirely and fell through to `_canonical_of`'s id-ascending tiebreak
+    would too, because `ar-busy` < `ar-strong`. Named the obvious way round
+    (`ar-few` beating `ar-many`) the winner is also the alphabetically-first
+    id, and this test passes against an implementation that never reads a score
+    at all -- it did, until Verify mutated `_canonical_of` to sort by id alone
+    and the whole suite stayed green. See P2-005.
     """
     # source: detection-artist-model.md §1 -- "canonical_artist_id was
     # originally the id with the most track_artist rows... **superseded by
     # scoring-H.md §11.3** -- it's now the id with the **highest
     # scoring.artist_scores(...)["all_time"]**, ties still broken by id
     # ascending, in artists._canonical_of()."
-    scored_artist(conn, "ar-few", "half alive", ["t1"], [90.0])
-    scored_artist(conn, "ar-many", "half alive", ["t2", "t3"], [20.0, 20.0])
+    scored_artist(conn, "ar-strong", "half alive", ["t1"], [90.0])
+    scored_artist(conn, "ar-busy", "half alive", ["t2", "t3"], [20.0, 20.0])
 
     counts = track_credit_counts(conn)
-    assert counts["ar-many"] > counts["ar-few"]  # the retired rule disagrees
+    assert counts["ar-busy"] > counts["ar-strong"]  # the retired rule disagrees
+    assert "ar-busy" < "ar-strong"  # and so does the id-ascending tiebreak
     scores = {a: artists.scoring.artist_scores(conn, [a])[a]["all_time"] for a in counts}
-    assert scores["ar-few"] > scores["ar-many"]
+    assert scores["ar-strong"] > scores["ar-busy"]
 
-    artists.mark_same(conn, "ar-few", "ar-many")
+    artists.mark_same(conn, "ar-strong", "ar-busy")
 
-    assert alias_rows(conn) == {("ar-many", "ar-few")}
+    assert alias_rows(conn) == {("ar-busy", "ar-strong")}
 
 
 def test_equal_scores_are_broken_by_id_ascending(conn):

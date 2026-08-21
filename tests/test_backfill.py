@@ -486,6 +486,50 @@ def test_a_failing_album_does_not_stop_the_run(conn, fake_spotify):
     assert any("al-1" in entry["message"] for entry in status["log"])
 
 
+def test_a_rate_limit_aborts_the_whole_run_rather_than_failing_one_album(conn, fake_spotify):
+    """A quota block is not a per-album fault, and the two `except` arms have
+    to stay in that order to say so.
+
+    `_run`'s per-album handler catches `RateLimited` **above** a generic
+    `except Exception` that logs the album and carries on. Swap them and a
+    quota block degrades into "al-1 — failed: ...", the loop moves to the next
+    album, and the job keeps spending requests against a quota that is already
+    refusing them -- while the page reports `completed`. So the discriminating
+    assertion is not the outcome string but the second album never being
+    attempted.
+    """
+    # source: backfill._run -- the per-album `except RateLimited: rollback;
+    # raise` and the outer arm setting outcome="rate_limited"/retry_at; same
+    # rule as snapshot's, tested in test_snapshot_ingest.py as
+    # test_an_app_quota_block_aborts_the_whole_run.
+    for album_id in ("al-1", "al-2"):
+        builders.make_album(conn, album_id=album_id, total_tracks=2)
+        fake_spotify.add_album(
+            fakes.spotify_album(
+                album_id,
+                total_tracks=2,
+                tracks=fake_spotify.paged(
+                    [fakes.spotify_track(f"{album_id}-t{n}") for n in (1, 2)]
+                ),
+            )
+        )
+    generation_with_album(conn, 1, "al-1", ["al-1-t1"])
+    generation_with_album(conn, 2, "al-2", ["al-2-t1"])
+    # retry_after > 30s, so jobs.call raises rather than sleeping and retrying.
+    fake_spotify.fail("album", fakes.rate_limited(retry_after=3600), times=1)
+
+    status = run_job(conn, fake_spotify)
+
+    assert status["outcome"] == "rate_limited"
+    assert status["phase"] == "error"
+    assert status["retry_at"] is not None
+    # The whole point: the run stopped. One album was attempted, not two, and
+    # nothing it would have queued was queued.
+    assert len([call for call in fake_spotify.calls if call[0] == "album"]) == 1
+    assert wanted(conn) == {}
+    assert status["albums_done"] == 0
+
+
 def test_the_job_stops_cleanly_when_asked(conn, fake_spotify, monkeypatch):
     # source: M §4.5 -- the job "commits per album and polls
     # jobs.stop_requested() between them", i.e. cooperative stopping at a safe
