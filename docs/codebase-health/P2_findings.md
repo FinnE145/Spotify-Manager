@@ -9,15 +9,15 @@ template and the same four classifications as P1 (`P1_spec_audit.md` §4).
 two sets must match exactly** — a bug in one and not the other is the failure this convention
 exists to prevent.
 
-**Status: sessions 0 (infrastructure), 1 (Ingest) and 2 (Grouping) complete; session 3 (Scoring)
-tests written, pending Verify; 6 findings.** P1's backlog was empty, so P2 started with nothing
+**Status: sessions 0 (infrastructure), 1 (Ingest), 2 (Grouping) and 3 (Scoring) complete —
+session 3 verified 2026-08-21; 7 findings.** P1's backlog was empty, so P2 started with nothing
 inherited. **No finding so far has needed an `xfail`** — every one has resolved to a fix or to a
 documentation question, so the debt ledger `codebase-health-P.md` §4 sanctions is still empty.
 
-**Three of the five are tests that could not fail** (P2-003, P2-005, plus session 1's pair, which
-`codebase-health-P.md` §10 records rather than numbering). That is now the most common defect P2
-finds, it has appeared in every session so far, and in each case the runner reported green. It is
-found by mutation and by nothing else.
+**Tests that could not fail are now the bulk of the record** — P2-003, P2-005 and P2-007's four,
+plus session 1's pair, which `codebase-health-P.md` §10 records rather than numbering. That is the
+most common defect P2 finds, it has appeared in every session so far, and in each case the runner
+reported green. It is found by mutation and by nothing else.
 
 ---
 
@@ -255,3 +255,51 @@ comments in `conftest.py`) were fixed in place rather than recorded, because tha
   bug. The correct behaviour is already covered:
   `tests/test_scoring_version.py::test_a_track_with_no_duration_contributes_a_full_play`, whose
   docstring cross-references this finding.
+
+### P2-007 — four session-3 tests could not fail; found by Verify's mutation pass
+
+- **Spec:** `codebase-health-P.md` §2's corollary and `P2_tests.md` §2 — "a true assertion a
+  broken implementation would also satisfy is worth no more than a tautology, and is harder to
+  spot because it is green and cites a real clause."
+- **Code:** the four tests below, all green, all citing real clauses, none able to distinguish the
+  implementation from a plausible wrong one. Verify ran **60 mutations** across `scoring.py` and
+  `db.py`'s `track_artist_role` view, independent of the session's own pass; 52 died, 8 survived,
+  and these are the four survivors that turned out to be real rather than equivalent mutants.
+- **Difference, one per test:**
+  - **`_artist_role_rows`' MIN → MAX survives.** `featured_only` means *every* credit tying a
+    version to an artist is featured (§5.3). No fixture in the file gave one artist two different
+    roles inside one version group, so "any" and "all" agreed everywhere. Compounding it, a
+    single-member collection cannot show the difference at all: a uniform `u` scaling cancels
+    inside `combine()`'s ratio, so the fixture needs **two** versions as well as two tracks.
+  - **`_worker`'s `return` → `continue` on a failed recompute survives.**
+    `test_a_failing_recompute_stops_the_worker_rather_than_spinning` never queued a request
+    *during* the failing pass, so `_worker_pending` was already False when it ended and the loop
+    exited on its own top-of-loop guard either way — the spin the test is named for was never
+    reachable.
+  - **Writing `all_time` into the `score` table's `recent` column survives the entire suite.**
+    Every stored-column assertion in the session read `all_time`; the one test that read `recent`
+    compared a run against itself (idempotence). The whole of §7's second horizon was
+    materialized and unobserved. The same mutation applied to the subtier rows survived too.
+  - **`tier_counts` returning `{}` instead of four zeros survives.** No test used an empty
+    library, and the one test that touched the function compared it to itself
+    (`status["counts"] == scoring.tier_counts(conn)`).
+- **Classification:** `unclear` is not the right word for any of these — the code is correct in
+  all four cases. This is a defect in the tests, the same class as P2-003 and P2-005.
+- **Ruling:** Fix in place (2026-08-21, Finn), as session 2 did for P2-003 — no production code
+  is wrong, so no `xfail` is owed and the ledger stays empty.
+- **Action:** **Fixed 2026-08-21, at Verify.** `test_a_failing_recompute_stops_the_worker_rather_than_spinning`
+  now calls `request_recompute()` from inside the failing pass. Three tests added:
+  `test_featured_only_means_every_credit_on_the_version_is_featured`,
+  `test_the_recent_column_holds_the_recent_horizon_not_a_copy_of_all_time` (asserting the version
+  *and* track rows, since §6's blend runs per horizon) and
+  `test_tier_counts_reports_a_zero_for_a_tier_with_no_rows`. All four mutations were re-run
+  afterwards and now fail.
+- **Test:** as listed above, in `tests/test_scoring_backstop.py`, `tests/test_scoring_aggregation.py`
+  and `tests/test_scoring_recompute.py`.
+
+**The generalization worth carrying forward**, on top of P2-005's: three of these four are about
+an observation that was never made rather than a fixture that was too simple. The `recent` column
+and `tier_counts` were not asserted *at all*, and the worker test asserted a count whose value was
+forced by something other than the rule under test. Ask of a green suite not only "would this
+notice a wrong answer?" but "is there a column, a return value or a code path here that nothing
+reads?" — the second question is what mutation answers cheaply and review does not.

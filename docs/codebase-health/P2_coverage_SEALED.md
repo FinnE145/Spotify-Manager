@@ -185,3 +185,70 @@ one mutation found it immediately. Session 5 should read its own consolidated nu
 — a high figure here bought exactly one item (the `backfill` gap above), while the mutation pass
 bought the only real defect in the session. This is the concrete evidence for §7's "gap-finder, not
 a gate", and it is stronger evidence than the argument §7 makes from first principles.
+
+---
+
+## Session 3 — Scoring (measured 2026-08-21, at Verify)
+
+`--cov=scoring`, **after** Verify's gap fill, against 600 passing tests. (As handed over, at 596
+tests: 2 missed statements, 2 partial branches, same 99%.)
+
+| module | statements | miss | branch | partial | cover |
+|---|---|---|---|---|---|
+| `scoring.py` | 339 | 1 | 90 | 1 | **99%** |
+
+One module, so there is no shape to read off the table. What is worth recording is that **coverage
+found one of this session's five gaps and mutation found the other four** — the same split session
+2 saw, and for the same reason: every one of the four was a *green test that could not fail*, which
+by construction executes the code it fails to check.
+
+**Mutation check run at Verify (the session ran none of its own).** 60 mutations across `scoring.py`
+and `db.py`'s `track_artist_role` view — `_sat`'s half-value, `_raw`'s per-term weights, `combine`'s
+exponent / membership weights / tail floor, `_display` and `_undisplay` both ways, exposure's floor
+and its recent-horizon clamp (including inverted), the play-weight `CASE` (both the prototype's
+NULLIF form and an uncapped one), `R`'s ×30, buckets from windowed inputs, `_recent_ordinals`'
+began-within rule, the baseline's median (as mean, and as a median of output *scores*), shrinkage
+uncapped and constant, the §7.1a blend, the subtier blend and `SUBTIER_W`, wholesale replace,
+`_observe()`'s ordering, all four backstop deferrals and both `_failed_fingerprint` arms, five
+worker behaviours, album padding, the playlist live filter, `artist_group_score`'s AND-merge,
+`FEATURED_WEIGHT`, `group_score`'s space, and the role view's VA fallback. **52 killed, 8
+survived** — four real (recorded as **P2-007**), four equivalent or invalid.
+
+**Record the equivalent mutants so nobody re-hunts them.** Each looks like a survivor and is not:
+
+- **`album_scores`' `max(pad, 0)`** — deleting the guard changes nothing, because `[0.0] * -1` is
+  already `[]`. The test is *not* un-failable: `abs(...)` in place of `max(..., 0)` fails it, which
+  was confirmed. A note now sits in the test saying so.
+- **`str(vid)` on the `score` insert** — SQLite applies TEXT affinity to the column, so an int is
+  stored as `'5'` either way and `scores_for_tier`'s `str(g)` lookup still matches.
+- **Row order in `_own_tier_to_version`** — a recording/release group belongs to exactly one
+  version, so the dict cannot depend on ordering.
+- One mutation of mine was a no-op (a stray comment) and proves nothing.
+
+### Gaps found, and filled at Verify
+
+- **`_weighted_score:834`** — the `if vid not in maps[h]: continue` skip, for an artist credited on
+  a version with no materialized `score` row: the state between a grouping change and the next
+  recompute. Counting it as 0.0 instead would drag an artist down on evidence that does not exist
+  yet, which is §4.6's rule. **Filled** by
+  `test_a_version_with_no_materialized_score_drops_out_rather_than_counting_zero`; the mutation
+  that appends `0.0` was confirmed to fail afterwards.
+- The other four gaps this Verify filled were mutation-found, not coverage-found — see **P2-007**.
+
+### Deliberately not worth filling
+
+- **`scoring.py:118`** — `combine()`'s `if total == 0: return 0.0`. Unreachable at the shipped
+  `TAIL_FLOOR = 1.0`: every tail weight is at least `1.0 × uᵢ`, and the empty case returns one line
+  earlier. Reaching it needs `TAIL_FLOOR` monkeypatched to 0 *and* an all-zero collection, which
+  tests a parameter combination §5.2 says should not be moved. Same class as session 2's defensive
+  `if x is None: continue` guards.
+
+### The one thing this measurement is worth remembering for
+
+Session 2's lesson was that `artists.py` scored 100% and still hid P2-005. Session 3 sharpens it:
+`scoring.py` reached 99% **while the `score` table's entire `recent` column went unasserted** — 8,950
+versions' worth of the second horizon, materialized by covered lines, read by no test. Coverage
+cannot see an unmade observation, because the code that produces it runs regardless. Session 5
+should read the consolidated number knowing that the two highest-coverage sessions are also the two
+where mutation found the most.
+
