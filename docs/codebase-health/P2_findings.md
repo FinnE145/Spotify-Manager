@@ -9,10 +9,10 @@ template and the same four classifications as P1 (`P1_spec_audit.md` §4).
 two sets must match exactly** — a bug in one and not the other is the failure this convention
 exists to prevent.
 
-**Status: sessions 0 (infrastructure), 1 (Ingest) and 2 (Grouping) complete, 5 findings** — the
-fifth added by session 2's Verify. P1's backlog was empty, so P2 started with nothing inherited.
-**No finding so far has needed an `xfail`** — every one has resolved to a fix or to a documentation
-question, so the debt ledger `codebase-health-P.md` §4 sanctions is still empty.
+**Status: sessions 0 (infrastructure), 1 (Ingest) and 2 (Grouping) complete; session 3 (Scoring)
+tests written, pending Verify; 6 findings.** P1's backlog was empty, so P2 started with nothing
+inherited. **No finding so far has needed an `xfail`** — every one has resolved to a fix or to a
+documentation question, so the debt ledger `codebase-health-P.md` §4 sanctions is still empty.
 
 **Three of the five are tests that could not fail** (P2-003, P2-005, plus session 1's pair, which
 `codebase-health-P.md` §10 records rather than numbering). That is now the most common defect P2
@@ -217,3 +217,41 @@ comments in `conftest.py`) were fixed in place rather than recorded, because tha
 - **Test:** the renamed
   `tests/test_artists.py::test_the_higher_scoring_id_wins_a_merge_not_the_busier_one`. The
   score-blind mutation was re-run after the fix and now fails.
+
+---
+
+## Session 3 — Scoring
+
+### P2-006 — `tuning_prototype.py`'s play-weight formula silently zeroes a NULL/0-duration play, contradicting the spec it is meant to certify
+
+- **Spec:** `scoring-H.md` §4.2 — "Tracks with `duration_ms` of 0 or NULL contribute their raw play
+  at weight 1.0 rather than dividing by zero." §12 declares
+  `docs/scoring/tuning_prototype.py` the executable reference `scoring.py` "must reproduce ...
+  If the two disagree, one of them is wrong."
+- **Code:** `scoring.py`'s `_PLAY_WEIGHT_SQL` implements §4.2 correctly, with an explicit `CASE WHEN
+  t.duration_ms IS NULL OR t.duration_ms = 0 THEN 1.0 ELSE MIN(...) END` and a comment naming the
+  trap it avoids. `tuning_prototype.py`'s `fetch()` instead computes
+  `MIN(p.ms_played*1.0/NULLIF(t.duration_ms,0), 1.0)`.
+- **Difference:** for a NULL or 0 `duration_ms`, `NULLIF(duration_ms, 0)` evaluates to NULL, the
+  division is NULL, and SQLite's two-argument scalar `MIN` returns NULL if either argument is NULL
+  — so that play's weight is NULL. `fetch()`'s own outer `COALESCE(pl.w, 0.0)` then turns a version
+  whose *only* evidence is such a play into `W = 0`, i.e. "never played," the exact opposite of
+  §4.2's rule. Confirmed rather than inferred:
+  `tests/test_scoring_version.py::test_a_track_with_no_duration_contributes_a_full_play` asserts the
+  spec's correct behaviour against `scoring.py` and passes; hand-tracing the same fixture through
+  `tuning_prototype.py`'s formula gives the wrong answer (0.0, not 1.0) for both the NULL-duration
+  and the 0-duration case. So the code is right and the executable reference §12 calls authoritative
+  is wrong.
+- **Classification:** `code-wrong` (the prototype script, not production code — no shipped behaviour
+  is affected; every parameter in §10.1 was tuned before this particular formula's divergence would
+  have mattered, since it only bites on the rare NULL/0-duration track).
+- **Ruling:** Leave as-is (2026-08-21, Finn) — the prototype is a frozen historical record
+  (`scoring-H.md` §12: "kept, not deleted... the only evidence for *why* the parameters are what
+  they are") that Finn does not expect to run again; editing it buys no future benefit and only adds
+  git churn to a script whose value is as a snapshot of the tuning session, not as live tooling.
+  Recorded here instead, per this file's own purpose.
+- **Action:** None — not fixed, per the ruling. `scoring.py` needs no change; it was already correct.
+- **Test:** No `xfail` is owed — production code isn't wrong, so there's nothing to mark as a known
+  bug. The correct behaviour is already covered:
+  `tests/test_scoring_version.py::test_a_track_with_no_duration_contributes_a_full_play`, whose
+  docstring cross-references this finding.
