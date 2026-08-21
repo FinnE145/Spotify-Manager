@@ -28,6 +28,29 @@ source: the spec clause it derives from, or `characterization`. That comment is 
 is what makes review a scan of (assertion, cited clause) pairs, and during P3 it is what says at a
 glance which tests may legitimately be regenerated and which must never be.
 
+**A second failure mode, and it is quieter than the first (learned in session 1, 2026-08-20).**
+The tautology §2 prohibits at least *looks* wrong on the page. This one does not: a test can cite
+a real spec clause, assert something perfectly true, pass — and still be unable to fail if the
+code were wrong. Two of session 1's did.
+
+- A relink test asserted that `roundtrip` pairs each requested uri with the substitute Spotify
+  actually served. True, and cited. But the fake returns tracks in request order, so a purely
+  *positional* read — the exact bug the assertion exists to catch, the one that once rewrote 1,250
+  uri→track mappings — would have produced the same answer. It discriminates only once the
+  read-back is made *shorter* than the request, so every surviving track sits one index earlier
+  than the uri that asked for it.
+- A NULL-`added_at` test named the identity pass and exercised pass 2, because
+  `make_membership(added_at=None)` meant "use the default" and could not express a SQL NULL at
+  all. It passed on a dated row. (`builders.py` now has an `UNSET` sentinel for that parameter.)
+
+**Neither was caught by the runner, and neither would ever be** — a green suite is exactly what
+both look like. What caught them was one question, asked at write time: *what would a broken
+implementation have produced here, and would this assertion have told the difference?* Where the
+answer is "the same thing", the fixture is wrong, not the test — the discriminating case usually
+needs one more element, a shift, or a value the builders could not previously express. Ask it of
+every test that turns on an ordering, a fallback, or which of several passes handled a case; those
+are where two mechanisms agree on the easy input and diverge only on the awkward one.
+
 **All 17 specs now carry an `Audited 2026-08-17` header line.** That line is the licence to derive
 assertions from a spec. `docs/canonical-tracks/detection.md` and `review-ui.md` deliberately do
 **not** carry it — they were read during P1's blind audit but produced no findings of their own, so
@@ -48,6 +71,10 @@ those two.** Characterization is fine there.
   says "remove this marker". **The findings doc and the xfail set must match exactly** — a bug in
   one and not the other is the failure this convention exists to prevent.
 - **Obtain an expected value by running the code and calling it a specification test.** See §1.
+- **Ship a test that cannot fail.** A true assertion a broken implementation would also satisfy is
+  worth no more than a tautology, and is harder to spot because it is green and cites a real
+  clause. Before moving on, ask what a wrong implementation would have produced — see §1 for the
+  two that got through session 1 and how the fixtures had to change.
 - **Weaken a test to make it pass.** If a test that should pass doesn't, that is a finding.
 - **Touch `symr.db`.** See §4.1. This is the security-grade part of P.
 - **Look at coverage before §7.** Deliberate — see there.
