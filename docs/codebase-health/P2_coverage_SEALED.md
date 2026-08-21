@@ -110,3 +110,78 @@ the dedup hash, the queue partition — is at or near full coverage. What is mis
 `roundtrip.py`'s 59% is the lowest number here and the least alarming: three of its six gaps are
 page-facing reads and writes that **session 4** covers by definition. Re-measure it then before
 treating it as a session-1 shortfall.
+
+---
+
+## Session 2 — Grouping (measured 2026-08-21, at Verify)
+
+`--cov=canonical --cov=canonical_detect --cov=canonical_autogroup --cov=artists --cov=backfill`,
+**after** Verify's gap fill, against 511 passing tests. (As handed over, at 510 tests:
+`backfill.py` 96%, total 99% with 12 missed statements.)
+
+| module | statements | miss | branch | partial | cover |
+|---|---|---|---|---|---|
+| `artists.py` | 82 | 0 | 24 | 0 | **100%** |
+| `canonical_autogroup.py` | 62 | 0 | 18 | 0 | **100%** |
+| `backfill.py` | 122 | 1 | 26 | 0 | **99%** |
+| `canonical_detect.py` | 353 | 3 | 158 | 2 | **99%** |
+| `canonical.py` | 223 | 3 | 108 | 2 | **98%** |
+| **total** | **842** | **7** | **334** | **4** | **99%** |
+
+**Read the difference from session 1 as a property of the code, not of the session.** Session 1's
+modules are job loops that drive Spotify; session 2's are pure computation over SQLite, which the
+builders reach directly. The one session-2 module shaped like session 1's — `backfill.py`, the
+fourth job — carries this session's only real gap, and it is the same *kind* of gap session 1 has.
+Nothing here should be used to rank the two sessions' thoroughness; the mutation results below are
+the honest comparison, and both sessions look the same on those.
+
+**Mutation check run at Verify (independent of the session's own 31).** 23 mutations across the
+five modules plus the `app.py` call site — the P1-013 `neutral` exclusion, `_clean_explicit_pair`'s
+version veto and explicit-flag term, P1-018's pair ordering, the `representative()` NULL-`added_at`
+sentinel, `cross_component_pairs`' component filter (and its `app.py` caller reverted to
+`mark_reviewed`), `pending_song_ids`' ≥2-member filter, `filter_groups`' `%` wildcard, the duration
+tolerance, `_has_keyword`'s whole-token rule, `_order`'s score key, `_cleanup_tier`'s orphan sweep,
+`apply_partition` committing and writing to `membership`, `undo`'s snapshot wipe, and four of
+`backfill`'s arithmetic and paging rules. **22 killed, 1 survived** — the survivor is the P1-010
+fixture recorded as P2-005.
+
+### Gaps found, and filled at Verify
+
+- **`backfill.py:254-255, 272-277`** — the `RateLimited` path, both arms, was never executed. The
+  inner per-album `except RateLimited: conn.rollback(); raise` sits *above* a generic
+  `except Exception` that logs the album and continues, so the ordering is load-bearing: swap them
+  and a quota block silently degrades into a per-album failure while the job keeps spending
+  requests against a quota already refusing them — and the page reports `completed`. The outer arm
+  is what sets `phase="error"` / `outcome="rate_limited"` / `retry_at`. Session 1 covered exactly
+  this shape for `snapshot.py` (`test_an_app_quota_block_aborts_the_whole_run`), so this was an
+  inconsistency between the two sessions rather than a house style.
+
+  **Filled** by `test_a_rate_limit_aborts_the_whole_run_rather_than_failing_one_album`. Its
+  discriminating assertion is deliberately *not* the outcome string, which the outer arm would set
+  either way — it is that the **second album is never attempted**, which is the only observation
+  that separates the correct `except` ordering from the swapped one. Both mutations (removing the
+  per-album arm; blanking the outer arm's `outcome`/`retry_at`) were confirmed to fail afterwards.
+
+### Deliberately not worth filling
+
+- **`canonical_detect.all_candidate_groups`** (`613-614`) — uncovered because it is dead. P1-009
+  condemned it for removal on a full-codebase caller search; a test would only preserve it.
+- **`canonical.py:177, 190` and `canonical_detect.py:830`** — `if x is None: continue` guards
+  against states their own comments say the callers prevent (`830` says so explicitly: the
+  singleton check belongs to `pending_song_ids`). Same class as P2-004's stale-pin branch: cheap,
+  defensive, and not worth a fixture that has to fake an impossible state to reach.
+- **`canonical.nested_tree`** (`364`) — a one-line `subtree(conn, "song", …)` wrapper; the viewer
+  page that calls it is session 4's.
+- **`backfill.start`** (`48`) — the `jobs.try_start` one-liner, and after the fill the only missed
+  statement left in the module. `jobs.try_start` itself is covered by session 1, and session 4's
+  route tests execute this for free.
+
+### The one thing this measurement is worth remembering for
+
+**`artists.py` scored 100% on lines *and* branches, and `artists.py` is where P2-005 lived.** Every
+line of `_canonical_of` executed, both branches of its sort exercised, and the suite still could not
+tell "highest score" from "lowest id". Coverage was structurally incapable of finding that defect;
+one mutation found it immediately. Session 5 should read its own consolidated number in that light
+— a high figure here bought exactly one item (the `backfill` gap above), while the mutation pass
+bought the only real defect in the session. This is the concrete evidence for §7's "gap-finder, not
+a gate", and it is stronger evidence than the argument §7 makes from first principles.

@@ -9,10 +9,15 @@ template and the same four classifications as P1 (`P1_spec_audit.md` §4).
 two sets must match exactly** — a bug in one and not the other is the failure this convention
 exists to prevent.
 
-**Status: sessions 0 (infrastructure), 1 (Ingest) and 2 (Grouping) complete, 4 findings.** P1's
-backlog was empty, so P2 started with nothing inherited. **No finding so far has needed an
-`xfail`** — every one has resolved to a fix or to a documentation question, so the debt ledger
-`codebase-health-P.md` §4 sanctions is still empty.
+**Status: sessions 0 (infrastructure), 1 (Ingest) and 2 (Grouping) complete, 5 findings** — the
+fifth added by session 2's Verify. P1's backlog was empty, so P2 started with nothing inherited.
+**No finding so far has needed an `xfail`** — every one has resolved to a fix or to a documentation
+question, so the debt ledger `codebase-health-P.md` §4 sanctions is still empty.
+
+**Three of the five are tests that could not fail** (P2-003, P2-005, plus session 1's pair, which
+`codebase-health-P.md` §10 records rather than numbering). That is now the most common defect P2
+finds, it has appeared in every session so far, and in each case the runner reported green. It is
+found by mutation and by nothing else.
 
 ---
 
@@ -170,3 +175,45 @@ comments in `conftest.py`) were fixed in place rather than recorded, because tha
   does not go through `apply_partition`. Its sibling
   `test_a_pin_survives_a_change_that_keeps_the_pinned_track_in_the_group` covers the negative case,
   which *is* reachable normally. No `xfail` is owed: nothing is asserted to be broken.
+
+---
+
+### P2-005 — the P1-010 tiebreak test named its ids so that a score-blind implementation also passed
+
+- **Spec:** `detection-artist-model.md` §1 as rewritten under P1-010 — the canonical artist is "the
+  id with the **highest `scoring.artist_scores(...)["all_time"]`**, ties still broken by id
+  ascending, in `artists._canonical_of()`". `P2_tests.md` §5's session-2 floor calls this out by
+  name and warns about the fixture: "**Build the fixture from two unmerged ids**, or it does not
+  test what it means to."
+- **Code:** `tests/test_artists.py::test_the_higher_scoring_id_wins_a_merge_not_the_busier_one`, as
+  written in session 2. Not production code — `artists._canonical_of` is correct.
+- **Difference:** the test built `ar-few` (score 90, one credit) against `ar-many` (score 20, two
+  credits) and asserted `ar-few` wins. That discriminates against the **retired** count rule, which
+  is the half the floor asked for. But `_canonical_of` falls through to **id ascending** on a tie,
+  and `ar-few` < `ar-many`, so the winner was also the alphabetically-first id. An implementation
+  that never reads a score at all — `sorted(artist_ids, key=lambda a: (a,))` — passes this test, and
+  passed the entire suite.
+- **How it was found:** Verify's independent mutation pass, 23 mutations across session 2's five
+  modules plus the `app.py` call site. It was the only survivor. Confirmed rather than inferred:
+  renaming the ids so score and alphabetical order disagree leaves the real code passing and makes
+  the score-blind mutant fail, which is the four-way check that separates a fixture defect from a
+  guess.
+- **Why it matters beyond this test:** it is P2-003's failure mode a second time — a true assertion,
+  a real cited clause, green, and unable to fail — and it survived a session that had *already found
+  and written up* that exact shape, plus 31 mutations of its own. The lesson is narrower than "check
+  your fixtures": **the floor's own wording can be satisfied and still leave a hole**, because it
+  named one wrong rule (count) and the code contains two (count, and the id-ascending tail). A
+  fixture has to disagree with **every** rule the implementation could fall back on, not just the
+  one the spec discusses.
+- **Classification:** `code-wrong` (test, not production — no shipped behaviour is affected).
+- **Ruling:** Fix in Verify, 2026-08-21 (Finn), same disposition as P2-003 and as session 1's two
+  Verify-found equivalents.
+- **Action:** **Fixed, session 2's Verify.** Ids renamed `ar-strong` (high score, one credit) and
+  `ar-busy` (low score, two credits), so `ar-busy` sorts first and **both** wrong rules now elect
+  the loser. The test carries an explicit `assert "ar-busy" < "ar-strong"` so the property the names
+  encode is asserted rather than left to whoever reads them, and `scored_artist`'s docstring — the
+  shared helper sessions 3–5 will reuse — now states the id-ordering requirement alongside the
+  count-vs-score one.
+- **Test:** the renamed
+  `tests/test_artists.py::test_the_higher_scoring_id_wins_a_merge_not_the_busier_one`. The
+  score-blind mutation was re-run after the fix and now fails.
