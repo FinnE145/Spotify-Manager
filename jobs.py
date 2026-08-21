@@ -1,13 +1,13 @@
 """One background job at a time: the single lock, the single active-job
-name, and the status/event-log plumbing all three jobs share.
+name, and the status/event-log plumbing all four jobs share.
 
-Symr runs three long jobs -- the snapshot pull, the play-history import and
-the foreign-track round-trip -- and exactly one may run at a time: they all
-write the same SQLite file, and two of them spend the same Spotify request
-budget. Claiming the slot is one atomic check-and-set under one lock, so
-there is no lock ordering, no deadlock, and no window in which two starters
-both see "nothing running". (The modules previously each held their own
-lock and checked the other's status without one, which raced.)"""
+Symr runs four long jobs -- the snapshot pull, the play-history import, the
+foreign-track round-trip and the album backfill -- and exactly one may run at
+a time: they all write the same SQLite file, and three of them spend the same
+Spotify request budget. Claiming the slot is one atomic check-and-set under
+one lock, so there is no lock ordering, no deadlock, and no window in which
+two starters both see "nothing running". (The modules previously each held
+their own lock and checked the other's status without one, which raced.)"""
 
 import threading
 import time

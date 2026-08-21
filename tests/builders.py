@@ -29,6 +29,11 @@ from datetime import datetime, timedelta, timezone
 
 _counters = defaultdict(int)
 
+# For the one parameter whose None is a meaningful value rather than "give me
+# the default" -- see make_membership's added_at. Everywhere else None-means-
+# default is fine, because NULL there is either impossible or uninteresting.
+UNSET = object()
+
 
 def reset_ids():
     """Called per test by conftest's _clean_slate, so ids restart at 1."""
@@ -226,13 +231,22 @@ def make_playlist(conn, playlist_id=None, name=None, **overrides):
 
 
 def make_membership(
-    conn, playlist_id=None, track_id=None, position=0, added_at=None, removed_at=None, **overrides
+    conn, playlist_id=None, track_id=None, position=0, added_at=UNSET, removed_at=None, **overrides
 ):
     """One `membership` row. Returns its rowid.
 
     `membership` is an append-only log: a track that left a playlist keeps its
     row and gains a `removed_at`. "Live" everywhere in this codebase means
     `removed_at IS NULL`, which is this builder's default.
+
+    **`added_at` defaults through UNSET, not through None**, unlike every other
+    builder here. A NULL `added_at` is a real state with its own documented
+    behaviour in `_diff_playlist_tracks` -- two NULL rows exact-match each
+    other in the identity pass, and a NULL sorts as oldest and so never departs
+    by the fallback (`snapshot.md`, "Change detection & diffing") -- so a test
+    has to be able to ask for one. Under the usual None-means-default rule it
+    could not, and a test that asked for NULL would silently get a timestamp
+    and pass by exercising a different pass than it named.
     """
     playlist_id = make_playlist(conn, playlist_id)
     track_id = make_track(conn, track_id)
@@ -240,7 +254,7 @@ def make_membership(
         "playlist_id": playlist_id,
         "track_id": track_id,
         "position": position,
-        "added_at": added_at if added_at is not None else days_ago(30),
+        "added_at": days_ago(30) if added_at is UNSET else added_at,
         "removed_at": removed_at,
     }
     row.update(overrides)

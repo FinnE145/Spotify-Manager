@@ -661,12 +661,15 @@ def ensure_fresh():
     edit shows scores one edit stale regardless, and is correct on the next
     load."""
     # While a job holds the slot, defer -- do NOT check, and do not remember
-    # anything. All three jobs commit continuously as they run (per playlist,
-    # per batch, per chunk) while their page polls status every second, so
-    # checking here would recompute the whole library on every poll and fight
-    # the job for SQLite's single writer -- all of it thrown away, since every
-    # job ends with a recompute of its own on the success path and both
-    # failure paths.
+    # anything. All four jobs commit continuously as they run (per playlist,
+    # per batch, per chunk, per album) while their page polls status every
+    # second, so checking here would recompute the whole library on every poll
+    # and fight the job for SQLite's single writer -- all of it thrown away,
+    # since every job but the backfill ends with a recompute of its own on the
+    # success path and both failure paths. The backfill is the one exception
+    # (it doesn't import this module at all -- documented in
+    # docs/specs/grouping-fixes-backfill-M.md §4.5 via finding P1-017), and it
+    # is precisely this backstop that catches it on the next request.
     #
     # This defers the check; it never skips it. Nothing below runs, so the
     # remembered state stays exactly where it was before the job started: the
