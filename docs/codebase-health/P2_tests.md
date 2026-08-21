@@ -191,6 +191,13 @@ Per `codebase-health-P.md` §4:
   feature branch for legitimate reasons, and a test that routinely fails legitimately gets
   regenerated reflexively — at which point it protects nothing.
 
+  **The golden tooling belongs to session 4, not session 0** (decided 2026-08-20, while building
+  session 0). This §4 is headed "Infrastructure — session 0", which reads as though it does — but
+  capture has to enumerate the 69 routes as *concrete URLs carrying real ids*, and that is session
+  4's knowledge and P3's sampled DB. Building it in session 0 means guessing that strategy blind.
+  Session 0 built the route *harness* — the `app` / `client` fixtures and the auth bypass — which
+  is what every route test needs regardless.
+
 **The gitignored sampled DB is P3's, not P2's.** It exists only so snapshot capture renders real
 pages — a byte-exact snapshot of a page rendering "no results" proves nothing. The ordinary suite
 runs on §4.2's builders and needs it not at all. Its committed build script is written on P3's
