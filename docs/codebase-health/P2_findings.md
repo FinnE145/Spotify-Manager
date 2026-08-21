@@ -9,8 +9,10 @@ template and the same four classifications as P1 (`P1_spec_audit.md` §4).
 two sets must match exactly** — a bug in one and not the other is the failure this convention
 exists to prevent.
 
-**Status: sessions 0 (infrastructure) and 1 (Ingest) complete, 2 findings.** P1's backlog was
-empty, so P2 started with nothing inherited.
+**Status: sessions 0 (infrastructure), 1 (Ingest) and 2 (Grouping) complete, 4 findings.** P1's
+backlog was empty, so P2 started with nothing inherited. **No finding so far has needed an
+`xfail`** — every one has resolved to a fix or to a documentation question, so the debt ledger
+`codebase-health-P.md` §4 sanctions is still empty.
 
 ---
 
@@ -93,3 +95,78 @@ comments in `conftest.py`) were fixed in place rather than recorded, because tha
   work list is exactly the failing playlist (the "nothing else re-enters" claim, in the run where
   it holds), and `test_excluding_the_failing_playlist_lets_the_epoch_complete` asserts only that a
   fresh epoch is minted. Both in `tests/test_snapshot_targets.py`.
+
+---
+
+## Session 2 — Grouping
+
+### P2-003 — `builders.make_group` pinned a representative on every group, silently defeating every P1-008 tiebreak test
+
+- **Spec:** none directly — this is P2's own test infrastructure. The behaviour it contradicts is
+  `canonical.py`'s: `_INSERT_GROUP_SQL` never writes `representative_track_id`, and
+  `pin_representative` writes it **only at the song tier**. `canonical-tracks.md`'s "Representative
+  track" section is what the affected tests derive from.
+- **Code:** `tests/builders.py`'s `make_group`, as landed in session 0 —
+  `(tier, representative_track_id or track_ids[0])`, applied at **all four tiers**.
+- **Difference:** every group a fixture built was pinned, at every tier. `canonical.representative()`
+  returns the pin before the election runs at all, so a test of the score tiebreak asserted the pin
+  instead. It is not a hypothetical: the first version of
+  `test_a_higher_score_beats_more_live_memberships` **passed against the pin**, because the pinned
+  track (`track_ids[0]`) happened to be the one the score would also have elected. Four further
+  tests in the same file failed outright once written, which is what exposed it.
+- **Why it matters beyond this session:** this is exactly `P2_tests.md` §1's second failure mode,
+  reached through the *fixture* rather than the assertion — a true assertion, a real cited clause,
+  green, and unable to fail. Sessions 3 and 4 both use `make_group`; anything they assert about a
+  representative would have inherited it.
+- **Classification:** `code-wrong` (test infrastructure, not production code — no shipped behaviour
+  is affected).
+- **Ruling:** Fix in place, session 2 (2026-08-21) — same disposition as session 0's own
+  infrastructure defects, which `P2-001`'s closing note records as fixed rather than queued, on the
+  grounds that this infrastructure *is* a P2 deliverable.
+- **Action:** **Fixed, session 2.** `make_group`'s `representative_track_id` now defaults to NULL,
+  matching what `canonical.py` writes. A test that wants a pin calls `canonical.pin_representative`
+  or passes the argument. The builder's docstring carries the reasoning so the default is not
+  "tidied" back. No existing test depended on the pin —
+  `test_canonical_read_paths_accept_a_built_group` asserts only that the election returns *some*
+  member, which still holds.
+- **Test:** `tests/test_builders.py::test_make_group_leaves_the_representative_unpinned`, plus the
+  six tiebreak tests in `tests/test_canonical_read.py` that now discriminate. All four
+  `representative()` mutations (elect by live-membership count; join `score` on the group's own
+  tier; sort a membership-less track first; re-filter `oldest_added` to live rows) were confirmed
+  to fail the suite afterwards.
+
+---
+
+### P2-004 — `_cleanup_tier`'s stale-pin branch may be unreachable through `apply_partition`
+
+- **Spec:** `docs/canonical-tracks/grouping-engine.md`, "Reconciliation algorithm" step 6 — "For a
+  surviving group whose membership changed, clear `representative_track_id` to NULL if the pinned
+  track is no longer a member."
+- **Code:** `canonical.py`, `_cleanup_tier`'s second loop (the `reps` query and the `UPDATE ... SET
+  representative_track_id = NULL`).
+- **Difference:** the clause describes a state that `apply_partition` appears unable to produce.
+  Step 4 reuses an existing group id only when a part's members cover that group's **full** current
+  membership — which includes the pinned track — so a group that *survives* still contains its pin.
+  A group that loses its pinned track is one the item genuinely split, and that group yields new
+  ids for both halves and is deleted as an orphan. Three adjacent routes were checked and none
+  reaches it either: upward closure (step 3) drags a pinned track's group-mates along with it
+  rather than leaving them behind; under `cleanup=False` batching an emptied group is removed by
+  `_cleanup_tier`'s **first** loop, which runs before the rep check in the same pass; and
+  `canonical_autogroup.undo()` restores `canonical_group` and `track_group` together from one
+  consistent snapshot, so it cannot strand a pin either.
+- **Not claimed:** that it is definitely dead. This is a reading of the algorithm plus three
+  checked callers, not an exhaustive proof, and the branch is cheap and defensive. Recorded so P3
+  — which moves code and would otherwise have to re-derive this — has the question written down.
+- **Classification:** `unclear` (possibly-dead defensive code; no behaviour is wrong either way).
+- **Ruling:** Leave as `unclear` (2026-08-21). **Not a P3 deletion candidate** — explicitly
+  distinguished from `all_candidate_groups`, which P1-009 *did* flag for removal on the strength of
+  a full-codebase search for callers. The reasoning is asymmetric on purpose: the cost of keeping a
+  cheap defensive branch is nothing, and the cost of removing one that turns out to be load-bearing
+  is a silent wrong pin. A reading of an algorithm is not the same evidence as a caller search, so
+  it does not license the same action. Recorded so P3 inherits the question rather than
+  re-deriving it, and so nobody deletes it as "obviously dead" while moving code.
+- **Test:** `tests/test_canonical_engine.py::test_cleanup_clears_a_pin_whose_track_is_no_longer_a_member`
+  drives `cleanup_all_tiers` **directly** on a hand-built stale pin, and its docstring says why it
+  does not go through `apply_partition`. Its sibling
+  `test_a_pin_survives_a_change_that_keeps_the_pinned_track_in_the_group` covers the negative case,
+  which *is* reachable normally. No `xfail` is owed: nothing is asserted to be broken.
