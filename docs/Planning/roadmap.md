@@ -679,11 +679,19 @@ answered in `codebase-health-P.md` §9.
   coverage discipline) and `docs/codebase-health/P2_findings.md` (**10 findings**, all ruled; the
   `xfail` ledger is empty, so nothing is deferred). Two findings are carried forward deliberately
   as `unclear` and are **explicitly not P3 deletion candidates** — P2-004 and P2-009.
-- **P3 — refactor. ← next.** The pre-spec's four findings, verified against P2 by byte-exact HTML
-  golden snapshots over all 69 routes (the tooling is committed and inert in `tests/golden.py`;
-  P3 captures before, diffs after, deletes). Strictly behaviour-preserving. One deletion is
-  already queued and evidenced: `canonical_detect.all_candidate_groups`, condemned by P1-009 on a
-  full caller search.
+- **P3 — refactor. ← next, planned 2026-08-22 → `docs/codebase-health/P3_refactor.md` is
+  authoritative.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
+  snapshots (the tooling is committed and inert in `tests/golden.py`; P3 captures before, diffs
+  after, deletes). Strictly behaviour-preserving. **Three sessions**: golden harness + the small
+  fixes, the six entity pages, the three dev pages + close-out. **Nine views extracted, ~583
+  sloc** — `create_app` 1,620 → ~1,130, and `app.py`'s `conn.execute` **42 → 12**, which is the
+  number to judge it by, since 69 routes at ~10 lines each is a ~700-line floor extraction cannot
+  beat. Golden runs against a **plain copy** of `symr.db` under pytest (not a sampled DB, not the
+  standalone CLI), captured **once**; §3.2 of that file names the four things that must be dead
+  first, the async scoring worker above all. One deletion, already queued and evidenced:
+  `canonical_detect.all_candidate_groups`, condemned by P1-009 on a full caller search — and a
+  seven-category sweep re-run 2026-08-22 found **nothing else dead in the tree**, so there is no
+  cleanup backlog beyond it.
 
 The four original findings, in the order they'd bite:
 
