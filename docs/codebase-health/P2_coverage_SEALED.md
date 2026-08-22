@@ -306,3 +306,130 @@ and this is the cleanest example P2 has produced.
   same three-line shape repeated. Low value individually, cheap in bulk at session 5.
 - **`app.py:496`** — `representative()` returning None inside a listing loop; the same defensive
   `continue` class session 2 and 3 both declined to chase.
+
+---
+
+## Session 5 — the consolidated whole-suite pass (measured 2026-08-21)
+
+The first whole-repo measurement, and the last one P2 takes. Every root module, `--cov-branch`,
+against the suite as session 5 inherited it (**715 tests**) and again as it left it (**754**).
+
+| module | stmts | miss | branch | partial | at 715 | at 754 |
+|---|---|---|---|---|---|---|
+| `api_log.py` | 43 | 0 | 2 | 0 | 100% | **100%** |
+| `artists.py` | 82 | 0 | 24 | 0 | 100% | **100%** |
+| `backfill.py` | 122 | 0 | 26 | 0 | 100% | **100%** |
+| `canonical_autogroup.py` | 62 | 0 | 18 | 0 | 100% | **100%** |
+| `config.py` | 14 | 0 | 0 | 0 | 100% | **100%** |
+| `generations.py` | 95 | 0 | 28 | 0 | 100% | **100%** |
+| `grouping.py` | 63 | 0 | 24 | 0 | 100% | **100%** |
+| `canonical_detect.py` | 353 | 3 | 158 | 2 | 99% | **99%** |
+| `entities.py` | 71 | 0 | 20 | 1 | 99% | **99%** |
+| `scoring.py` | 339 | 1 | 90 | 1 | 99% | **99%** |
+| `canonical.py` | 223 | 3 | 108 | 2 | 98% | **98%** |
+| `jobs.py` | 95 | 1 | 14 | 1 | 98% | **98%** |
+| `roundtrip.py` | 317 | 20 | 88 | 9 | 62% | **93%** |
+| `snapshot.py` | 360 | 26 | 112 | 14 | 83% | **92%** |
+| `db.py` | 89 | 5 | 40 | 7 | 91% | **91%** |
+| `app.py` | 825 | 59 | 200 | 33 | 85% | **90%** |
+| `history_import.py` | 134 | 35 | 28 | 3 | 73% | **74%** |
+| `spotify_client.py` | 20 | 6 | 2 | 1 | 68% | **68%** |
+| **total** | **3307** | **159** | **982** | **74** | **89%** | **94%** |
+
+### What the consolidated pass found that a per-session one could not
+
+**1. Session 1's one prediction did not come true, and only a later measurement could say so.**
+Session 1 recorded `roundtrip.py` at 59% and wrote: "three of its six gaps are page-facing reads
+and writes that **session 4** covers by definition. Re-measure it then before treating it as a
+session-1 shortfall." Re-measured after session 4: **62%**. Eleven statements. All three functions
+session 1 named under *Gaps worth filling* — `_match_substitutes`, `set_manual_aliases`,
+`_reconcile_batch` — were still entirely uncovered, on the one module that writes to the real
+library. Session 5 filled them (62% → 93%).
+
+The lesson is about the deferral, not about session 4: **"a later session will cover this" is a
+prediction, and an unrecorded prediction is a gap that quietly stops being anyone's.** Where a
+session defers a gap to a named later session, the later session's Verify has to check it, or the
+consolidated pass is the first thing that notices — five sessions late.
+
+**2. The permanent route sweep has a structural blind spot, and it is invisible to its own
+completeness check.** `routes_catalog.py` compares itself against `app.url_map` in both directions,
+so no *route* can escape. But `catalog_rules()` keys on `(endpoint, method)`, and a query string is
+neither — so every alternate render path behind a query param was unswept, while the check that
+exists to catch exactly this reported complete. Session 4's Verify hit one instance (`?generation=1`
+on the playlist page, filled as a one-off); the consolidated pass showed it was systematic, at
+**39 of `app.py`'s 92 missed statements from one cause**: `/dev/canonical`'s `?q=` / `?cross=` /
+`?search=` / `?singletons=` / `?expand=`, `/api/canonical/queue`'s `?tracks=` and `?queue=pending`,
+`/api/canonical/cross`'s `?tracks=`, `/dev/canonical/review`'s `?tracks=`, `/dev/snapshot`'s `?q=`,
+`/dev/generations{,/tenure}`'s `?tier=` / `?sort=` / `?page=`, `/api/export`'s `?cutoff=`, and
+`/callback`'s two argument-driven refusals. Fixed structurally: 21 variant cases now live in the
+shared catalog, so the golden capture gets them too.
+
+**3. Coverage found gap 2 and mutation did not — which is the first time in P2 that has happened.**
+Sessions 2, 3 and 4 all recorded the opposite (a high figure buying one item while mutation found
+the real defect), and this file's session-2 entry argues from that evidence that coverage is a
+gap-finder and not a gate. Session 5 is the counter-example that keeps the argument honest: you
+cannot mutate a branch no test reaches, so on **never-executed** code coverage is the tool and
+mutation has nothing to work with. The two answer different questions — *is this code reached?*
+and *would anything notice if it were wrong?* — and P2 has now been bitten by each. Mutation
+remained the tool that verified the fills: 22 mutations across `roundtrip.py`, `app.py` and
+`snapshot.py`, of which **two survived on the first pass and both were the session's own fixtures**
+(the evidence-guard test whose candidate was not itself evidence-free — P2-005's shape again — and
+the unauthenticated-run test, which asserted an outcome both implementations produce).
+
+### Gaps found here, and filled
+
+- **`roundtrip.py`'s three write paths** (above), plus `_run`'s circuit breaker, its cooperative
+  stop between batches, and both terminal-state arms. The breaker's discriminating case is
+  `F,F,T,F,F` — four failures in five batches, never three consecutive — which is the only
+  sequence separating "consecutive" from "total" and is impossible to produce by contriving real
+  batch failures, so `_run_batch` is stubbed there and only there.
+- **`snapshot._run_backfill`** (55 statements, entirely unreached) — the track-metadata refill job,
+  one `GET /v1/tracks/{id}` per track. It carries the **same load-bearing `except` ordering**
+  session 2's Verify found in `backfill.py`: a per-item `except RateLimited: rollback; raise` above
+  a generic `except Exception` that logs and continues. Session 2 noted the shape was covered for
+  `snapshot._run_pull` and called `backfill.py`'s absence "an inconsistency between the two sessions
+  rather than a house style" — it was in a third place too. The arm exists in four jobs and was
+  tested in two. Now four.
+- **The 21 query-string variants** and six semantic assertions over what the filtered pages
+  actually render.
+- **The seven job-start routes' `already_running` 409 arm**, in one test.
+- **The entity pages' 404 branches** and the `/artist/<alias_id>` → canonical redirect, which
+  session 4 explicitly deferred here.
+
+### Deliberately not filled, ruled 2026-08-21
+
+- **`history_import._run_import` + `_finish`** (35 statements) — the import job loop. Unlike the
+  other three job loops it makes **no Spotify calls at all**, so it has no quota stakes and no
+  library-write stakes; the worst case is a wasted re-import. Parsing, dedup, field handling and
+  the coverage counts are all covered. This is the only "middling" label from session 1 that
+  survived re-examination.
+- **`spotify_client.get_spotify_client`** (6 statements) — uncovered *by design*, and this is the
+  one figure in the table that should never move. `conftest.py` monkeypatches it away in every test
+  and blocks outbound HTTP and sockets outright (§4.1), so covering it would mean building a real
+  authed client, which the suite exists to make structurally impossible. A test asserting it
+  returns `None` without a cached token already exists in `test_infrastructure.py`; that is the
+  right amount.
+- **`canonical.nested_tree`** — a one-line `subtree(conn, "song", …)` wrapper.
+- **`db._migrate`'s single-`ALTER` arms** — unchanged from session 1's ruling.
+- **The defensive-guard class**, re-confirmed whole: `canonical.py:177,190`,
+  `canonical_detect.py:830`, `app.py:496,618`, `app.py:130-131` (the error handler's own fallback
+  for an error *while rendering the error page*), `jobs.py:131` (a literal
+  `raise AssertionError("unreachable")`), `scoring.py:118` (unreachable at the shipped
+  `TAIL_FLOOR = 1.0`), `entities.py:126` (a tracklist where no item has an `id`). Each guards a
+  state its callers prevent; reaching one needs a fixture faking an impossible state.
+- **`canonical_detect.all_candidate_groups`** — not a guard: dead, condemned by P1-009 on a full
+  caller search, and a **P3 deletion**. A test would only preserve it.
+- **`app.py`'s `<module>` lines 1674-1675** — the `if __name__ == "__main__"` block.
+- **`callback`'s token-exchange arm** — the only path that would reach Spotify.
+
+### What this measurement is worth remembering for
+
+`P2_tests.md` §7 says coverage is "a gap-finder, not a gate", with no numeric threshold. Session 5
+is the entry that shows both halves of that in one pass. The gap-finder half found the query-string
+blind spot, which nothing else could have — the sweep's own completeness check reported complete,
+and there was no test to mutate. The not-a-gate half is the table: `entities.py`, `generations.py`
+and `grouping.py` sat at 100% while P2-008's six real gaps lived in them, and `artists.py` sat at
+100% with P2-005 inside it. **Both facts are in the same file and neither cancels the other.**
+The number went 89% → 94% and that is not the result; the result is 39 tests, 22 mutations, and one
+finding.
+

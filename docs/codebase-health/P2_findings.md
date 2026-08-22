@@ -12,7 +12,8 @@ exists to prevent.
 **Status: sessions 0 (infrastructure), 1 (Ingest), 2 (Grouping) and 3 (Scoring) complete —
 session 3 verified 2026-08-21; 7 findings.** Session 4 (Read paths & UI) written and verified
 2026-08-21; the session found none of its own, and **Verify found P2-008** — six gaps, all in
-tests rather than in production code, all fixed in place. **8 findings.**
+tests rather than in production code, all fixed in place. Session 5 (coverage + workflow) ran
+2026-08-21 and found **P2-009**. **9 findings.**
 P1's backlog was empty, so P2 started with nothing inherited. **No finding so far has needed an
 `xfail`** — every one has resolved to a fix or to a documentation question, so the debt ledger
 `codebase-health-P.md` §4 sanctions is still empty.
@@ -437,3 +438,41 @@ path is now safe to run by hand.
   suite checks. Where a spec's rule is split across a function and its caller — a stamp written in
   one place and read in another — **the test has to cross the seam too**, or it pins the half that
   cannot enforce the rule alone.
+
+---
+
+## Session 5 — Coverage pass + workflow changes
+
+### P2-009 — the tier guard's second clause cannot change what an entity-group route returns
+
+- **Spec:** `docs/specs/entity-pages-K.md` / `CLAUDE.md`'s codebase map — `/song/<id>`,
+  `/version/<id>`, `/recording/<id>` and `/release/<id>` are "four `@app.route` decorators on
+  **one** view function, each supplying its tier". The tier is therefore the only thing separating
+  the four routes, and the guard that enforces it reads as the load-bearing part.
+- **Code:** `app.py`, `group_page`'s
+  `if row is None or row["tier"] != tier: abort(404, description="No such group.")`, and the guard
+  three lines below it, `if not track_ids: abort(404, description="Group has no members.")`.
+- **Difference:** the `row["tier"] != tier` half cannot affect the status code. `canonical_group.id`
+  is a single id space across all four tiers, so a release-tier id can never appear in
+  `track_group.song_id` — which means `group_tree(conn, "song", <release id>)` always returns an
+  empty member list and the *second* guard 404s it anyway. Verified empirically, not by reading:
+  with the clause deleted, `/song/<version id>`, `/song/<recording id>` and `/song/<release id>` all
+  still return 404. The only observable difference is which description the error page renders.
+- **Not claimed:** that the clause is pointless. It is a cheap early exit that avoids building a
+  tree, and it produces the honest message ("No such group." rather than "Group has no members.",
+  which would be actively misleading for a wrong-tier id). The finding is that **nothing about the
+  status code depends on it**, so a test asserting only the status code is one that cannot fail —
+  which is how it was found.
+- **Classification:** `unclear` — same shape as P2-004: a guard that reads as load-bearing, whose
+  removal changes no status code, recorded so P3 does not delete it as obviously redundant while
+  moving code. The asymmetry P2-004 states applies unchanged: a reading plus an empirical check of
+  today's id space is weaker evidence than a caller search, and the cost of keeping it is nothing.
+- **Ruling:** Leave as `unclear` (2026-08-21, Finn). **Not a P3 deletion candidate** — same
+  disposition and the same asymmetry as P2-004: keeping a cheap guard that produces the honest
+  message costs nothing, and removing one that turns out to matter costs a wrong page. The
+  empirical check establishes what is true of *today's* id space, not that nothing could ever
+  reach it. Recorded so P3 inherits the question rather than re-deriving it.
+- **Test:** `tests/test_routes.py::test_a_group_id_of_the_wrong_tier_is_a_404_not_someone_elses_page`
+  asserts the **description** rather than the status code, and its docstring says why — the status
+  code alone is the un-failable assertion. Deleting the clause fails it. No `xfail` is owed:
+  nothing is asserted to be broken.
