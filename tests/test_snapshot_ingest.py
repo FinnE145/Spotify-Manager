@@ -481,3 +481,113 @@ def test_a_stop_ends_the_run_cleanly_and_does_not_claim_a_pull_date(conn, librar
     assert conn.execute(
         "SELECT COUNT(*) FROM snapshot WHERE tracks_pulled_at IS NOT NULL"
     ).fetchone()[0] == 1
+
+
+# -- `_run_backfill`: the track-metadata refill job -------------------------
+#
+# Distinct from `backfill.py`, which is the *album* backfill. This one spends
+# one `GET /v1/tracks/{id}` per track with a NULL `raw_json`, which makes it
+# the most request-hungry loop in the tree and the one where the `except`
+# ordering below matters most.
+
+
+def raw_json_ids(conn):
+    return {
+        row["track_id"]
+        for row in conn.execute("SELECT track_id FROM track WHERE raw_json IS NOT NULL")
+    }
+
+
+def track_calls(sp):
+    return [call for call in sp.calls if call[0] == "track"]
+
+
+def test_the_backfill_fills_raw_json_for_every_track_missing_it(conn, fake_spotify):
+    # source: CLAUDE.md's codebase map -- the backfill is a "raw_json mop-up",
+    # one GET /v1/tracks/{id} per track; snapshot._run_backfill selects
+    # exactly `WHERE raw_json IS NULL`.
+    builders.make_track(conn, "tb1")
+    builders.make_track(conn, "tb2")
+    builders.make_track(conn, "tb-done", raw_json='{"id": "tb-done"}')
+    for track_id in ("tb1", "tb2"):
+        fake_spotify.add_track(fakes.spotify_track(track_id))
+    conn.commit()
+
+    snapshot._run_backfill()
+
+    assert snapshot._status.get()["phase"] == "done"
+    assert raw_json_ids(conn) == {"tb1", "tb2", "tb-done"}
+    # The already-filled track was not re-fetched: the selection is the budget.
+    assert sorted(call[1][0] for call in track_calls(fake_spotify)) == ["tb1", "tb2"]
+
+
+def test_a_quota_block_aborts_the_backfill_rather_than_failing_one_track(conn, fake_spotify):
+    """The `except` ordering in the per-track loop is load-bearing.
+
+    `except RateLimited: rollback; raise` sits *above* the generic
+    `except Exception` that records the track and carries on. Swap them and a
+    quota block degrades into a per-track failure while the job keeps
+    spending -- one request per track, against a quota already refusing them,
+    and the page still reports `done`.
+
+    **The discriminating assertion is that the second track is never
+    attempted**, not the phase: the outer handler sets `phase="error"` either
+    way once the loop finally ends, so a swapped ordering still looks like an
+    error at the end while having burned the whole queue getting there. Same
+    shape as `backfill.py`'s
+    `test_a_rate_limit_aborts_the_whole_run_rather_than_failing_one_album`.
+    """
+    # source: snapshot._run_backfill's own comment -- "An app-level quota
+    # block affects every request, not just this track -- abort rather than
+    # burning the rest", and partial-pulls-J.md §3.1.
+    builders.make_track(conn, "tb1")
+    builders.make_track(conn, "tb2")
+    for track_id in ("tb1", "tb2"):
+        fake_spotify.add_track(fakes.spotify_track(track_id))
+    conn.commit()
+    # retry_after > 30s, so jobs.call raises rather than sleeping and retrying.
+    fake_spotify.fail("track", fakes.rate_limited(retry_after=3600), times=1)
+
+    snapshot._run_backfill()
+
+    status = snapshot._status.get()
+    assert status["phase"] == "error"
+    assert status["retry_at"] is not None
+    assert len(track_calls(fake_spotify)) == 1
+    assert raw_json_ids(conn) == set()
+
+
+def test_one_unavailable_track_is_recorded_and_the_run_carries_on(conn, fake_spotify):
+    """The other half of the same ordering: a fault that really is per-track
+    must not stop the run. Without this the test above passes against an
+    implementation that aborts on everything.
+    """
+    # source: snapshot._run_backfill -- the generic `except Exception` arm
+    # records the track and continues; only RateLimited re-raises.
+    builders.make_track(conn, "tb1")
+    builders.make_track(conn, "tb2")
+    # tb1 is never registered with the fake, so sp.track() 404s on it.
+    fake_spotify.add_track(fakes.spotify_track("tb2"))
+    conn.commit()
+
+    snapshot._run_backfill()
+
+    status = snapshot._status.get()
+    assert status["phase"] == "done"
+    assert len(track_calls(fake_spotify)) == 2
+    assert raw_json_ids(conn) == {"tb2"}
+    assert [f["playlist_id"] for f in status["failed_playlists"]] == ["tb1"]
+
+
+def test_a_stop_ends_the_backfill_as_stopped_not_as_an_error(conn, fake_spotify, monkeypatch):
+    # source: snapshot._run_backfill's own comment -- "A deliberate stop is
+    # not a fault and must not render as one", the same rule _run_pull has.
+    builders.make_track(conn, "tb1")
+    fake_spotify.add_track(fakes.spotify_track("tb1"))
+    conn.commit()
+    monkeypatch.setattr(jobs, "stop_requested", lambda: True)
+
+    snapshot._run_backfill()
+
+    assert snapshot._status.get()["phase"] == "stopped"
+    assert snapshot._status.get()["error"] is None

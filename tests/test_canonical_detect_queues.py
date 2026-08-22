@@ -618,6 +618,8 @@ def test_a_saved_recording_group_the_rules_would_refuse_is_reported(conn):
 def test_a_recording_group_the_rules_still_agree_with_is_not_stale(conn):
     # The control: same shape, but the pair still satisfies recording
     # identity, so nothing is reported.
+    # characterization -- the negative control for stale-group detection: a group
+    # the rules would still propose today is not offered back for review.
     make(conn, "ta", "Willow", isrc="ISRC-SAME", duration_ms=200_000)
     make(conn, "tb", "Willow", isrc="ISRC-SAME", duration_ms=200_000, album="Album Two")
     builders.make_group(conn, ["ta", "tb"])

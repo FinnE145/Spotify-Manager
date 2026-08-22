@@ -135,6 +135,7 @@ def test_play_stats_aggregates_across_multiple_track_ids(conn):
 
 
 def test_playlists_for_tracks_empty_input(conn):
+    # characterization -- the empty-list early return, before any SQL is built.
     assert entities.playlists_for_tracks(conn, []) == []
 
 
@@ -266,6 +267,8 @@ def test_fetch_album_tracklist_never_pages_past_the_first_page(conn, fake_spotif
 
 
 def test_queue_wanted_uris_no_tracklist_queues_nothing(conn):
+    # source: grouping-fixes-backfill-M.md §4.4 -- queuing runs off the *stored*
+    # tracklist, so an album with none queues nothing and spends nothing.
     builders.make_album(conn, "al-1")
 
     assert entities.queue_wanted_uris(conn, "al-1", source="album") == 0
@@ -382,6 +385,8 @@ def test_fetch_artist_image_missing_width_treated_as_zero(conn, fake_spotify):
 
 
 def test_fetch_artist_image_no_images_leaves_url_null_but_stamps(conn, fake_spotify):
+    # source: entity-pages-K.md, via P1-016 -- a fetch that returns no usable
+    # image still stamps `detail_pulled_at`, or the page retries forever.
     builders.make_artist(conn, "ar-1")
     fake_spotify.add_artist({"id": "ar-1", "images": []})
 

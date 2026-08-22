@@ -483,3 +483,527 @@ def test_the_request_estimate_is_two_per_batch_plus_three(conn):
     assert counts["remaining_uris"] == roundtrip.BATCH_SIZE + 1
     assert counts["batches"] == 2
     assert counts["requests_estimate"] == 2 * 2 + 3
+
+
+# -- Reconciliation's matching rule (§4.5) ----------------------------------
+#
+# The highest-corruption-risk decision in the module: it writes
+# `track_uri_alias` rows off *inferred* pairings. §4.5 permits that only on
+# evidence -- normalized full title AND album artist, 1:1 in both directions --
+# because guessing an unstated pairing is what silently corrupted 1,250 rows.
+# Every test below is therefore built to fail against one specific weaker rule.
+
+
+def played_as(conn, requested_uri, name, artist):
+    """A uri the export labelled but Spotify won't serve -- §4.5's only
+    independent evidence about it."""
+    builders.make_play(
+        conn, uri=requested_uri, reported_track_name=name, reported_artist_name=artist
+    )
+
+
+def substitute_track(track_id, name, album_artist):
+    """A returned track nothing else accounts for. `_album_artist_keys` reads
+    the *album's* artists, not the track's, because that is what the export's
+    reported_artist_name is."""
+    return fakes.spotify_track(
+        track_id,
+        name=name,
+        album=fakes.spotify_album(
+            f"{track_id}-album", artists=[fakes.spotify_artist(f"{track_id}-ar", album_artist)]
+        ),
+    )
+
+
+def test_a_substitute_is_matched_on_evidence_and_never_on_position(conn):
+    """The positive case, built so a positional read gets it exactly wrong.
+
+    The candidates are returned in the opposite order to the uris that asked
+    for them, so `zip(unresolved, candidates)` -- the tempting implementation
+    §4.5 explicitly forbids -- produces the inverted mapping rather than this
+    one. Without the crossover this test passes against position.
+    """
+    # source: foreign-roundtrip-D.md §4.5 -- "Auto-alias only when the
+    # normalized full title *and* the album artist both match", and "Position
+    # is deliberately not used, even here."
+    played_as(conn, uri("x"), "Alpha", "Artist One")
+    played_as(conn, uri("y"), "Beta", "Artist Two")
+    candidates = [
+        substitute_track("tB", "Beta", "Artist Two"),
+        substitute_track("tA", "Alpha", "Artist One"),
+    ]
+
+    matched = roundtrip._match_substitutes(conn, [uri("x"), uri("y")], candidates)
+
+    assert matched == {uri("x"): "tA", uri("y"): "tB"}
+
+
+def test_a_title_match_with_a_different_album_artist_is_not_evidence(conn):
+    """Half the rule is not the rule. A title-only implementation matches here."""
+    # source: foreign-roundtrip-D.md §4.5 -- title *and* album artist must
+    # both match.
+    played_as(conn, uri("x"), "Alpha", "Artist One")
+
+    matched = roundtrip._match_substitutes(
+        conn, [uri("x")], [substitute_track("tA", "Alpha", "Someone Else")]
+    )
+
+    assert matched == {}
+
+
+def test_an_album_artist_match_with_a_different_title_is_not_evidence(conn):
+    """The other half, for the same reason."""
+    # source: foreign-roundtrip-D.md §4.5 -- title *and* album artist.
+    played_as(conn, uri("x"), "Alpha", "Artist One")
+
+    matched = roundtrip._match_substitutes(
+        conn, [uri("x")], [substitute_track("tA", "Something Else", "Artist One")]
+    )
+
+    assert matched == {}
+
+
+def test_two_remixes_sharing_a_base_title_do_not_match_each_other(conn):
+    """§4.5's own named counter-example, and the reason `_title_key` keeps the
+    suffix. The precondition assertion is the point of the test: without it
+    this passes for free the moment the two names stop sharing a base, and it
+    would no longer say anything about suffix handling at all.
+    """
+    # source: foreign-roundtrip-D.md §4.5 -- "The title key must keep its
+    # suffix -- on `normalize_title`'s base alone, `Opalite`, `Opalite - BUNT.
+    # Remix` and `Opalite - Chris Lake Remix` collapse into one key and all
+    # three go ambiguous."
+    played_as(conn, uri("x"), "Opalite - BUNT. Remix", "Yungblud")
+    candidate = substitute_track("tA", "Opalite - Chris Lake Remix", "Yungblud")
+
+    # Same base, different suffix -- so a base-only key matches and the real
+    # full key does not.
+    assert (
+        roundtrip._title_key("Opalite - BUNT. Remix")[0]
+        == roundtrip._title_key("Opalite - Chris Lake Remix")[0]
+    )
+
+    assert roundtrip._match_substitutes(conn, [uri("x")], [candidate]) == {}
+
+
+def test_one_candidate_claimed_by_two_uris_is_written_for_neither(conn):
+    """1:1 in *both* directions. Two uris the export labelled identically both
+    evidence the same returned track, so neither pairing is safe."""
+    # source: foreign-roundtrip-D.md §4.5 -- "the pairing is 1:1 in both
+    # directions", and the code's own note that a candidate claimed by two
+    # uris is ambiguous in the other direction.
+    played_as(conn, uri("x"), "Alpha", "Artist One")
+    played_as(conn, uri("y"), "Alpha", "Artist One")
+
+    matched = roundtrip._match_substitutes(
+        conn, [uri("x"), uri("y")], [substitute_track("tA", "Alpha", "Artist One")]
+    )
+
+    assert matched == {}
+
+
+def test_one_uri_matching_two_candidates_is_written_for_neither(conn):
+    """The same ambiguity from the other side: the evidence does not single
+    out a track, so nothing is written."""
+    # source: foreign-roundtrip-D.md §4.5 -- "Everything else is flagged
+    # `needs a manual alias`, never guessed."
+    played_as(conn, uri("x"), "Alpha", "Artist One")
+
+    matched = roundtrip._match_substitutes(
+        conn,
+        [uri("x")],
+        [
+            substitute_track("tA1", "Alpha", "Artist One"),
+            substitute_track("tA2", "Alpha", "Artist One"),
+        ],
+    )
+
+    assert matched == {}
+
+
+def test_a_uri_the_export_never_labelled_cannot_be_matched(conn):
+    """No evidence, no pairing -- and the candidate here is *equally*
+    evidence-free, which is the only fixture that tests the guard.
+
+    Against a candidate with a real name, dropping the guard changes nothing:
+    the unlabelled uri's empty key matches no real title, so the test passes
+    either way and says nothing (the P2-005 shape). Give the returned track an
+    empty name and an unnamed album artist and both sides normalize to the
+    same empty key -- so without the guard, absence of evidence on both sides
+    reads as agreement and writes a `track_uri_alias` row on nothing at all.
+    """
+    # source: foreign-roundtrip-D.md §4.5 -- the export's reported names are
+    # "the only independent evidence available about a uri Spotify won't
+    # serve", and everything unevidenced "is flagged `needs a manual alias`,
+    # never guessed".
+    builders.make_play(conn, uri=uri("x"))  # reported_* default to NULL
+
+    matched = roundtrip._match_substitutes(
+        conn, [uri("x")], [substitute_track("tA", "", "")]
+    )
+
+    assert matched == {}
+
+
+# -- The manual alias step (§4.6) -------------------------------------------
+
+
+def needs_review(conn, requested_uri, name, artist, plays=1):
+    """A uri §4.5 declined to decide, sitting in the review table with the
+    export's labels behind it."""
+    for _ in range(plays):
+        played_as(conn, requested_uri, name, artist)
+    roundtrip._fail_uris(conn, [requested_uri], roundtrip.STATE_NEEDS_REVIEW)
+    conn.commit()
+
+
+def alias_target(conn, requested_uri):
+    row = conn.execute(
+        "SELECT track_id FROM track_uri_alias WHERE requested_uri = ?", (requested_uri,)
+    ).fetchone()
+    return row["track_id"] if row else None
+
+
+def test_manual_candidates_are_offered_on_the_title_base_alone(conn):
+    """Deliberately *looser* than §4.5's automatic rule, and the inverse of
+    `test_two_remixes_sharing_a_base_title_do_not_match_each_other`: the exact
+    pairing the automatic rule must refuse is the one a human is here to
+    judge. An implementation that reused §4.5's full key offers nothing.
+    """
+    # source: foreign-roundtrip-D.md §4.6 -- "Candidates are matched on the
+    # normalized title **base only** -- looser than §4.5's automatic rule,
+    # which also requires the suffix to match. That looseness is the entire
+    # point of the manual step."
+    needs_review(conn, uri("x"), "Opalite", "Yungblud")
+    builders.make_track(conn, "remix", name="Opalite - BUNT. Remix")
+
+    rows = roundtrip.manual_alias_rows(conn)
+
+    assert [r["requested_uri"] for r in rows] == [uri("x")]
+    assert [c["track_id"] for c in rows[0]["candidates"]] == ["remix"]
+
+
+def test_a_track_sharing_no_base_is_not_offered_as_a_candidate(conn):
+    """The negative control: base matching is still matching, not "offer
+    everything"."""
+    # source: foreign-roundtrip-D.md §4.6 -- candidates are matched, and the
+    # real four offered "exactly one candidate each".
+    needs_review(conn, uri("x"), "Opalite", "Yungblud")
+    builders.make_track(conn, "unrelated", name="Something Else Entirely")
+
+    rows = roundtrip.manual_alias_rows(conn)
+
+    assert rows[0]["candidates"] == []
+
+
+def test_saving_a_manual_alias_records_it_and_closes_the_review_row(conn):
+    """The whole point of the step: the uri resolves from here on, and stops
+    being listed as unresolved."""
+    # source: foreign-roundtrip-D.md §4.6 -- the endpoint "writes the aliases
+    # and drops those uris from `roundtrip_failed_uri`".
+    needs_review(conn, uri("x"), "Opalite", "Yungblud")
+    builders.make_track(conn, "remix", name="Opalite - BUNT. Remix")
+
+    assert roundtrip.set_manual_aliases(conn, [(uri("x"), "remix")]) == 1
+
+    assert alias_target(conn, uri("x")) == "remix"
+    assert failed_state(conn, uri("x")) is None
+    # And it now resolves the way any other alias does.
+    assert roundtrip._unresolved(conn, [uri("x")]) == []
+
+
+def test_one_bad_pair_leaves_every_other_pair_unwritten(conn):
+    """§4.6's all-or-nothing clause, and the ordering is the test: the *good*
+    pair comes first, so an implementation that validated and wrote in one
+    pass would already have written it before reaching the bad one. Put the
+    bad pair first and this passes against that implementation.
+    """
+    # source: foreign-roundtrip-D.md §4.6 -- the endpoint "validates every
+    # pair before writing any of them (one stale row can't leave the rest
+    # half-applied)".
+    needs_review(conn, uri("good"), "Alpha", "Artist One")
+    builders.make_track(conn, "tA", name="Alpha")
+
+    with pytest.raises(ValueError):
+        roundtrip.set_manual_aliases(
+            conn, [(uri("good"), "tA"), (uri("never-reviewed"), "tA")]
+        )
+
+    assert alias_target(conn, uri("good")) is None
+    assert failed_state(conn, uri("good")) == roundtrip.STATE_NEEDS_REVIEW
+
+
+def test_a_uri_not_awaiting_review_cannot_be_aliased(conn):
+    """Not a general "rewrite any mapping" lever -- it only ever resolves a
+    uri the round-trip already flagged for a human."""
+    # source: foreign-roundtrip-D.md §4.6 -- the table is "one row per uri
+    # awaiting review"; roundtrip.set_manual_aliases' docstring makes the
+    # restriction explicit.
+    roundtrip._fail_uris(conn, [uri("dead")], roundtrip.STATE_DEAD)
+    conn.commit()
+    builders.make_track(conn, "tA")
+
+    with pytest.raises(ValueError):
+        roundtrip.set_manual_aliases(conn, [(uri("dead"), "tA")])
+
+    assert alias_target(conn, uri("dead")) is None
+
+
+def test_an_unknown_track_id_is_refused(conn):
+    """The other validation arm. An alias to a track that does not exist would
+    make the uri resolve through `played_uri_track` to nothing."""
+    # source: foreign-roundtrip-D.md §4.6 -- every pair is validated before
+    # any is written.
+    needs_review(conn, uri("x"), "Alpha", "Artist One")
+
+    with pytest.raises(ValueError):
+        roundtrip.set_manual_aliases(conn, [(uri("x"), "no-such-track")])
+
+    assert alias_target(conn, uri("x")) is None
+
+
+# -- `_reconcile_batch`: what one reconciliation batch decides (§4.5) -------
+
+
+def test_a_uri_spotify_serves_this_time_stops_being_a_failure(conn, loader):
+    """§4.5's last paragraph. The row has to go, not just stop being selected:
+    a resolved uri never returns to this pass, so a row left behind would sit
+    there claiming it wasn't returned for good.
+    """
+    # source: foreign-roundtrip-D.md §4.5 -- "Leaving the row behind would
+    # strand it -- a resolved uri never returns to this pass, so it would sit
+    # in the failures table claiming it wasn't returned, permanently."
+    roundtrip._fail_uris(conn, [uri("back")], roundtrip.STATE_NOT_RETURNED)
+    conn.commit()
+
+    roundtrip._reconcile_batch(conn, loader, 1, 1, [uri("back")])
+
+    assert failed_state(conn, uri("back")) is None
+    assert roundtrip._unresolved(conn, [uri("back")]) == []
+
+
+def test_a_batch_aliases_the_evidenced_substitute_and_flags_the_rest(conn, loader):
+    """Both outcomes in one batch, so neither can pass by the other's route.
+
+    `sub` comes back as an unlabelled substitute the export's own labels
+    identify; `mystery` comes back as one they don't. §4.5 writes an alias for
+    the first and refuses to guess the second.
+    """
+    # source: foreign-roundtrip-D.md §4.5 -- auto-alias only on matching title
+    # and album artist; "Everything else is flagged `needs a manual alias`,
+    # never guessed."
+    played_as(conn, uri("sub"), "Alpha", "Artist One")
+    played_as(conn, uri("mystery"), "Beta", "Artist Two")
+    roundtrip._fail_uris(
+        conn, [uri("sub"), uri("mystery")], roundtrip.STATE_NOT_RETURNED
+    )
+    conn.commit()
+
+    loader.add_track(substitute_track("tA", "Alpha", "Artist One"))
+    loader.add_track(substitute_track("tZ", "Nothing Like It", "Nobody"))
+    loader.substitute(uri("sub"), "tA", linked_from=False)
+    loader.substitute(uri("mystery"), "tZ", linked_from=False)
+
+    roundtrip._reconcile_batch(conn, loader, 1, 1, [uri("sub"), uri("mystery")])
+
+    assert alias_target(conn, uri("sub")) == "tA"
+    assert failed_state(conn, uri("sub")) is None
+
+    assert alias_target(conn, uri("mystery")) is None
+    assert failed_state(conn, uri("mystery")) == roundtrip.STATE_NEEDS_REVIEW
+
+
+# -- The circuit breaker (§5) ----------------------------------------------
+
+
+def scripted_batches(monkeypatch, results):
+    """Drives `_run` over one batch per uri with a fixed pass/fail script.
+
+    `_run`'s breaker is its own logic -- count consecutive failures, reset on
+    success, stop at three -- so the batch body is stubbed rather than
+    contrived into failing, which is the only way to state the F,F,T,F,F
+    sequence the consecutive-vs-total distinction needs.
+    """
+    attempted = []
+
+    def fake_run_batch(conn, sp, index, total, batch):
+        attempted.append(batch)
+        return results[index - 1]
+
+    monkeypatch.setattr(roundtrip, "BATCH_SIZE", 1)
+    monkeypatch.setattr(roundtrip, "_run_batch", fake_run_batch)
+    return attempted
+
+
+def last_outcome(conn):
+    return conn.execute(
+        "SELECT outcome FROM roundtrip_run ORDER BY id DESC LIMIT 1"
+    ).fetchone()["outcome"]
+
+
+def test_three_consecutive_failed_batches_stop_the_run(conn, loader, monkeypatch):
+    """Without the breaker a systemic fault -- a bad token, a revoked scope --
+    fails every batch and fires a public probe per uri for nothing."""
+    # source: foreign-roundtrip-D.md §5 -- "Three consecutive failed batches
+    # stop the run... The run ends in the normal stopped-early state with the
+    # reason logged."
+    for n in range(5):
+        builders.make_play(conn, uri=uri(f"u{n}"))
+    attempted = scripted_batches(monkeypatch, [False] * 5)
+
+    roundtrip._run()
+
+    assert last_outcome(conn) == "breaker"
+    # It stopped at the third, rather than running the remaining two.
+    assert len(attempted) == 3
+
+
+def test_scattered_failures_never_trip_the_breaker(conn, loader, monkeypatch):
+    """The discriminating case for "consecutive". Four of these five batches
+    fail -- more than the limit -- but never three in a row, so an
+    implementation counting *total* failures stops the run and this fails.
+    """
+    # source: foreign-roundtrip-D.md §5 -- "The count resets on any successful
+    # batch, so scattered dead uris never trip it."
+    for n in range(5):
+        builders.make_play(conn, uri=uri(f"u{n}"))
+    attempted = scripted_batches(monkeypatch, [False, False, True, False, False])
+
+    roundtrip._run()
+
+    assert last_outcome(conn) == "completed"
+    assert len(attempted) == 5
+
+
+def test_a_track_that_already_named_its_uri_is_not_reused_as_a_candidate(conn, loader):
+    """"Nothing else accounts for it" is a real filter, not a formality.
+
+    `labelled` comes back as an honestly-labelled substitute, so the batch
+    already writes it a real alias off `linked_from`. That same track also
+    matches what the export recorded for `other`, which came back from
+    nothing. Without the filter it is offered as evidence a second time and
+    `other` is aliased to it too -- one track claimed by two requested uris,
+    on a pairing that was already spoken for.
+    """
+    # source: foreign-roundtrip-D.md §4.5 -- reconciliation considers only
+    # "each returned track that nothing else accounts for (not one of the
+    # requested uris, no `linked_from`)".
+    played_as(conn, uri("other"), "Alpha", "Artist One")
+    roundtrip._fail_uris(
+        conn, [uri("labelled"), uri("other")], roundtrip.STATE_NOT_RETURNED
+    )
+    conn.commit()
+
+    loader.add_track(substitute_track("tA", "Alpha", "Artist One"))
+    loader.substitute(uri("labelled"), "tA", linked_from=True)
+    loader.drop(uri("other"))
+
+    roundtrip._reconcile_batch(conn, loader, 1, 1, [uri("labelled"), uri("other")])
+
+    # tA belongs to `labelled`, stated by Spotify itself.
+    assert alias_target(conn, uri("labelled")) == "tA"
+    # ...so it is not also evidence for `other`, which stays for a human.
+    assert alias_target(conn, uri("other")) is None
+    assert failed_state(conn, uri("other")) == roundtrip.STATE_NEEDS_REVIEW
+
+
+# -- `_run`'s terminal states ----------------------------------------------
+
+
+def test_a_rate_limit_ends_the_run_as_rate_limited_and_skips_the_clear(conn, loader, monkeypatch):
+    """A quota block is the one terminal state with a spend consequence: the
+    clear (§4.4) is another request against a quota already refusing them.
+    """
+    # source: foreign-roundtrip-D.md §5 -- "**Anything else** -- the usual
+    # `except` -> `phase="error"`, message in the status, committed work
+    # kept", and §6.1's `retry_at` on the terminal state.
+    builders.make_play(conn, uri=uri("u0"))
+
+    def blocked(*args):
+        raise jobs.RateLimited(3600)
+
+    monkeypatch.setattr(roundtrip, "BATCH_SIZE", 1)
+    monkeypatch.setattr(roundtrip, "_run_batch", blocked)
+
+    roundtrip._run()
+
+    status = roundtrip._status.get()
+    assert status["phase"] == "error"
+    assert status["outcome"] == "rate_limited"
+    assert status["retry_at"] is not None
+    assert last_outcome(conn) == "rate_limited"
+    # No clear -- that is a request, and the quota is what just refused one.
+    assert loader.replacements == []
+
+
+def test_any_other_failure_ends_the_run_as_an_error_with_the_work_kept(conn, loader, monkeypatch):
+    """The generic arm. It must stay distinguishable from the rate-limited one
+    -- `retry_at` is what the page offers, and there is nothing to offer here.
+    """
+    # source: foreign-roundtrip-D.md §5 -- "**Anything else** ... committed
+    # work kept".
+    builders.make_play(conn, uri=uri("u0"))
+
+    def broken(*args):
+        raise RuntimeError("something went wrong")
+
+    monkeypatch.setattr(roundtrip, "BATCH_SIZE", 1)
+    monkeypatch.setattr(roundtrip, "_run_batch", broken)
+
+    roundtrip._run()
+
+    status = roundtrip._status.get()
+    assert status["phase"] == "error"
+    assert status["outcome"] == "error"
+    assert status["retry_at"] is None
+    assert last_outcome(conn) == "error"
+
+
+def test_a_stop_between_batches_finishes_the_current_one_and_skips_the_clear(
+    conn, loader, monkeypatch
+):
+    """Cooperative stopping: the flag is polled at a batch boundary, so the
+    batch already in flight completes and commits rather than being killed.
+
+    The stop is armed *after* the first poll, so batch 1 runs and batch 2 does
+    not -- a fixture that stopped from the start would exercise the same code
+    path as `reconcile_only` and never show that work in progress survives.
+    """
+    # source: foreign-roundtrip-D.md §6.1 -- "the run finishes its current
+    # batch, commits, skips the clear (§4.4), and ends in the stopped-early
+    # state".
+    for n in range(3):
+        builders.make_play(conn, uri=uri(f"u{n}"))
+    attempted = scripted_batches(monkeypatch, [True, True, True])
+
+    polls = []
+
+    def stop_after_the_first_batch():
+        polls.append(1)
+        return len(polls) > 1
+
+    monkeypatch.setattr(jobs, "stop_requested", stop_after_the_first_batch)
+
+    roundtrip._run()
+
+    assert last_outcome(conn) == "stopped"
+    assert len(attempted) == 1
+    assert loader.replacements == []
+
+
+def test_a_run_with_no_client_is_an_error_not_a_crash(conn, monkeypatch):
+    """The guard runs before anything is written, so an unauthenticated run
+    must cost nothing and record itself honestly."""
+    # source: roundtrip._run -- `if sp is None: raise
+    # RuntimeError("not_authenticated")`, before _guard and before any write.
+    monkeypatch.setattr(roundtrip, "get_spotify_client", lambda: None)
+
+    roundtrip._run()
+
+    assert roundtrip._status.get()["phase"] == "error"
+    assert last_outcome(conn) == "error"
+    # The *message* is the discriminating part. Without the explicit check
+    # `_guard(conn, None)` is reached and dies on an attribute of None, which
+    # is still an "error" run -- so asserting the outcome alone is a test that
+    # cannot fail. What the page shows has to say which of the two happened.
+    assert "not_authenticated" in roundtrip._status.get()["error"]

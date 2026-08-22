@@ -123,3 +123,72 @@ def test_upload_root_is_redirected_away_from_the_real_exports():
     assert os.path.realpath(history_import.UPLOAD_ROOT).startswith(
         os.path.realpath(conftest.TMP_DIR)
     )
+
+
+# -- The suite's own conventions --------------------------------------------
+
+
+def _test_functions():
+    """Every `def test_*` in `tests/`, with the file and line it is on."""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).parent
+    for path in sorted(root.glob("test_*.py")):
+        source = path.read_text()
+        lines = source.splitlines()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+                body = "\n".join(lines[node.lineno - 1: node.end_lineno])
+                yield path.name, node.lineno, node.name, body
+
+
+#: What a source line may cite: a spec file, a numbered section, a P1/P2
+#: finding, or the literal word `characterization`.
+_SOURCE_MARKERS = ("# source:", "characterization")
+
+
+def test_every_test_declares_where_its_expected_value_came_from():
+    """P2's central convention, made mechanical.
+
+    `codebase-health-P.md` §2 requires a one-line source comment on every test
+    naming the spec clause it derives from, or `characterization` -- and §2
+    says why it is not decoration: it makes review a scan of (assertion, cited
+    clause) pairs, and during P3 it is what says at a glance which tests may
+    legitimately be regenerated and which must never be.
+
+    A convention that is only checked by eye drifts, and this one had: session
+    5's consolidated pass found 32 tests carrying no source line at all. That
+    is exactly the kind of thing a test can hold in place for free, so it does.
+    """
+    # source: codebase-health-P.md §2 -- "Every test carries a one-line source
+    # comment"; P2_tests.md §9 item 2 makes it a completion criterion.
+    missing = [
+        f"{name}:{line} {func}"
+        for name, line, func, body in _test_functions()
+        if not any(marker in body for marker in _SOURCE_MARKERS)
+    ]
+
+    assert missing == [], (
+        f"{len(missing)} test(s) with no source comment. Add a one-line "
+        "`# source: <spec> §<n> -- <clause>` naming what the expected value "
+        "derives from, or the word `characterization` where the expected "
+        "value *is* the current behaviour:\n  " + "\n  ".join(missing)
+    )
+
+
+def test_the_source_convention_check_can_actually_fail():
+    """The check above is the sort that quietly stops testing anything if its
+    own scan breaks -- an `ast.walk` that found no functions, or a glob that
+    matched no files, both report zero violations and pass forever.
+    """
+    # source: P2_tests.md §2 -- "Ship a test that cannot fail" is prohibited;
+    # a whole-suite scan asserting an empty list is the shape most at risk of
+    # it, so this pins that the scan sees the suite at all.
+    found = list(_test_functions())
+
+    assert len(found) > 500, "the scan is not seeing the suite"
+    assert any(func == "test_every_test_declares_where_its_expected_value_came_from"
+               for _, _, func, _ in found)
+    # And a body with no marker is genuinely detected as missing.
+    assert not any(marker in "def test_x():\n    assert True" for marker in _SOURCE_MARKERS)

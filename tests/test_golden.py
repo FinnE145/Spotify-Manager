@@ -35,6 +35,8 @@ def _corpus(conn):
 
 
 def test_compare_reports_no_diff_immediately_after_capture(client, conn, tmp_path):
+    # source: P2_tests.md §4.6 -- the ephemeral layer is "captured immediately
+    # before P3, diffed after"; a capture must compare clean against itself.
     _corpus(conn)
 
     written = golden.capture(client, conn, str(tmp_path))
@@ -48,6 +50,8 @@ def test_compare_detects_a_real_content_change(client, conn, tmp_path):
     # This is the test that matters: compare() must be able to fail. Capture
     # first, then change something that alters rendered output, then compare
     # again and confirm the affected case is named.
+    # source: P2_tests.md §4.6 -- byte-exact snapshots; the whole point is that
+    # a changed page is reported.
     t1, playlist = _corpus(conn)
 
     golden.capture(client, conn, str(tmp_path))
@@ -63,6 +67,8 @@ def test_compare_detects_a_real_content_change(client, conn, tmp_path):
 
 
 def test_compare_reports_a_case_missing_its_snapshot(client, conn, tmp_path):
+    # characterization -- a route added between capture and compare has nothing
+    # to diff against, and must be reported rather than silently skipped.
     _corpus(conn)
 
     diffs = golden.compare(client, conn, str(tmp_path))
@@ -71,6 +77,7 @@ def test_compare_reports_a_case_missing_its_snapshot(client, conn, tmp_path):
 
 
 def test_compare_reports_a_stale_snapshot_no_longer_in_the_catalog(client, conn, tmp_path):
+    # characterization -- the other direction: a snapshot whose route is gone.
     _corpus(conn)
     golden.capture(client, conn, str(tmp_path))
 

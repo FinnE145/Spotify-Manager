@@ -102,6 +102,8 @@ def pair_rule(conn, rule, a, b):
     ],
 )
 def test_normalize_title_splits_base_from_suffix(title, base, suffix):
+    # source: docs/canonical-tracks/grouping-engine.md -- normalize_title returns
+    # (base, suffix); the suffix is what suffix classification then reads.
     assert detect.normalize_title(title) == (base, suffix)
 
 
@@ -545,6 +547,8 @@ def test_without_the_saved_grouping_the_same_pair_splits(conn):
     # the heuristics decide and a version-classified suffix stands alone.
     # Without this pair, the test above would pass for a prefill that ignored
     # suffix class entirely.
+    # characterization -- the negative control for the test above: the saved
+    # grouping is what joins the pair, not the titles alone.
     make(conn, "ta", "Willow", isrc="ISRC-A")
     make(conn, "tb", "Willow (Live)", isrc="ISRC-B", album="Album Two")
 

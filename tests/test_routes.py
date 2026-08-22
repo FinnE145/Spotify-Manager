@@ -114,6 +114,8 @@ def test_every_case_slug_is_unique():
 
 
 def test_every_route_returns_non_5xx(client, corpus, conn, stub_jobs, fake_spotify):
+    # source: P2_tests.md §4.6 -- the permanent layer: "every one of the 69
+    # routes returns non-5xx".
     for case in routes_catalog.cases_for(conn):
         resp = routes_catalog.issue(client, case)
         assert resp.status_code < 500, f"{case.slug} ({case.method} {case.path}) -> {resp.status_code}"
@@ -123,6 +125,8 @@ def test_every_route_returns_non_5xx(client, corpus, conn, stub_jobs, fake_spoti
 
 
 def test_track_page_shows_track_and_artist_names(client, corpus):
+    # source: P2_tests.md §1 -- a route test that never asserts what is *on*
+    # the page is the same defect as an unread column.
     resp = client.get(f"/track/{corpus['tracks'][0]}")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
@@ -131,6 +135,8 @@ def test_track_page_shows_track_and_artist_names(client, corpus):
 
 
 def test_album_page_shows_album_and_track_names(client, corpus):
+    # source: P2_tests.md §1 -- a route test that never asserts what is *on*
+    # the page is the same defect as an unread column.
     resp = client.get(f"/album/{corpus['album']}")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
@@ -139,18 +145,22 @@ def test_album_page_shows_album_and_track_names(client, corpus):
 
 
 def test_artist_page_shows_artist_name(client, corpus):
+    # source: P2_tests.md §1 -- as above; "returned 200" is not an observation.
     resp = client.get(f"/artist/{corpus['artist']}")
     assert resp.status_code == 200
     assert "Corpus Artist" in resp.get_data(as_text=True)
 
 
 def test_playlist_page_shows_playlist_name(client, corpus):
+    # source: P2_tests.md §1 -- as above; "returned 200" is not an observation.
     resp = client.get(f"/playlist/{corpus['playlist']}")
     assert resp.status_code == 200
     assert "Corpus Playlist" in resp.get_data(as_text=True)
 
 
 def test_version_page_shows_a_member_track_name(client, corpus):
+    # source: P2_tests.md §1 -- as above, and entity-pages-K.md: a group page
+    # renders its members.
     resp = client.get(f"/version/{corpus['groups']['version']}")
     assert resp.status_code == 200
     assert "Corpus Track One" in resp.get_data(as_text=True)
@@ -159,6 +169,7 @@ def test_version_page_shows_a_member_track_name(client, corpus):
 def test_search_finds_a_matching_track_and_not_a_non_matching_one(client, corpus, conn):
     # The negative half is the discriminating one -- a search page that just
     # dumps every track would pass a positive-only assertion too.
+    # source: P2_tests.md §4.6 -- "plus a handful of semantic assertions".
     builders.make_track(conn, "t-decoy", name="Totally Unrelated Song")
     conn.commit()
 
@@ -171,6 +182,7 @@ def test_search_finds_a_matching_track_and_not_a_non_matching_one(client, corpus
 
 
 def test_dev_generations_renders_generation_names(client, corpus):
+    # source: generations-B.md '/dev/generations -- the generation list'.
     resp = client.get("/dev/generations")
     assert resp.status_code == 200
     assert "v1.0.0" in resp.get_data(as_text=True)
@@ -235,6 +247,8 @@ def test_fully_backfilled_album_renders_no_first_n_note(client, conn, fake_spoti
 def test_partially_fetched_album_renders_the_first_n_note(client, conn, fake_spotify):
     # Positive half of the same clause -- an album whose fetch only got the
     # first page of a larger total must show the note.
+    # source: entity-pages-K.md, via P1-016 -- the "first N of total" note, and
+    # entities.fetch_album_tracklist never pages past the first 50 items.
     import entities
 
     album = builders.make_album(conn, "al-partial", name="Partial Album", total_tracks=60)
@@ -412,3 +426,188 @@ def test_playlist_generation_view_renders_the_generation_split(client, corpus):
 
     tiered = client.get(f"/playlist/{corpus['gen_playlist']}?generation=1&tier=song")
     assert tiered.status_code == 200
+
+
+# -- Semantic assertions for the query-string variants ----------------------
+#
+# The catalog's variant cases (routes_catalog.py) prove those branches respond;
+# these prove they respond with the right thing. Same split as the sweep above,
+# and the same reason: a filter that ignored its own argument would return 200
+# on every one of the catalog cases.
+
+
+def test_the_canonical_groups_filter_actually_filters(client, corpus, conn):
+    # source: P2_tests.md §4.6 -- the permanent layer is non-5xx "plus a
+    # handful of semantic assertions". The negative half is the discriminating
+    # one: `?q=` is a LIKE over the listing, and a page that ignored the
+    # parameter would still contain the matching track.
+    decoy = builders.make_track(conn, "t-filter-decoy", name="Totally Unrelated Song")
+    builders.make_group(conn, [decoy, builders.make_track(conn, "t-filter-decoy-2",
+                                                          name="Totally Unrelated Song (Live)")])
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    body = client.get("/dev/canonical?q=Corpus").get_data(as_text=True)
+
+    assert "Corpus Track One" in body
+    assert "Totally Unrelated Song" not in body
+
+
+def test_the_ad_hoc_queue_serves_exactly_the_requested_tracks(client, corpus):
+    # source: app.py's `?tracks=` arm -- "tracks= needs at least 2 track ids",
+    # then one ad-hoc group over exactly those. Asserting the *ids* rather
+    # than the item count is what separates it from the main queue, which
+    # would also return one item here.
+    t1, t2 = corpus["tracks"]
+
+    resp = client.get(f"/api/canonical/queue?tracks={t1},{t2}")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["queue"] == "ad-hoc"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["track_ids"] == sorted([t1, t2])
+
+
+def test_the_ad_hoc_queue_refuses_a_single_track(client, corpus):
+    # source: app.py -- a one-track ad-hoc group is a 400, not an empty queue.
+    # Without this, the arm above could pass while `len(track_ids) < 2` was
+    # never enforced.
+    resp = client.get(f"/api/canonical/queue?tracks={corpus['tracks'][0]}")
+
+    assert resp.status_code == 400
+    assert set(resp.get_json()) == {"error", "detail"}
+
+
+def test_the_ad_hoc_queue_refuses_an_unknown_track_id(client, corpus):
+    # source: app.py -- "unknown track ids: ...". A queue built over an id with
+    # no `track` row would render a group with a blank member.
+    t1 = corpus["tracks"][0]
+
+    resp = client.get(f"/api/canonical/queue?tracks={t1},no-such-track")
+
+    assert resp.status_code == 400
+
+
+def test_the_pending_queue_is_a_different_queue_from_the_main_one(client, corpus):
+    # source: canonical_detect.pending_tier_items -- `?queue=pending` serves
+    # the cross-artist assignments owing a tier pass. Naming the queue back is
+    # what distinguishes it; the corpus has none pending, so the item list is
+    # empty and only the label discriminates.
+    resp = client.get("/api/canonical/queue?queue=pending")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["queue"] == "pending"
+
+
+def test_the_tenure_page_rejects_an_unwhitelisted_sort_instead_of_using_it(client, corpus):
+    # source: app.py -- `sort` is looked up in _TENURE_SORT_KEYS and falls back
+    # to "tenure", never interpolated into the ORDER BY. The assertion is that
+    # a SQL fragment as `sort` renders the page rather than reaching SQLite.
+    resp = client.get("/dev/generations/tenure?sort=;drop table generation")
+
+    assert resp.status_code == 200
+    # The table is still there afterwards, which a successful injection would
+    # have changed.
+    assert client.get("/dev/generations").status_code == 200
+
+
+# -- The entity pages' 404 branches -----------------------------------------
+#
+# Each is three lines and individually dull; together they are the difference
+# between "unknown id" and "500". The wrong-tier case is the one with real
+# content: the four tier routes are four decorators on one view function, so
+# nothing but this check stops /song/<id> rendering a release group.
+
+
+def test_an_unknown_id_is_a_404_on_every_entity_page(client, corpus):
+    # source: app.py's four `abort(404, ...)` guards. A missing row must not
+    # reach the render and raise.
+    for path in ("/track/nope", "/album/nope", "/artist/nope", "/playlist/nope"):
+        assert client.get(path).status_code == 404, path
+
+
+def test_a_group_id_of_the_wrong_tier_is_a_404_not_someone_elses_page(client, corpus):
+    """The four tier routes are four decorators on one view function, so this
+    is what keeps /song/<id> from rendering a release group.
+
+    **The status code alone cannot discriminate here, and the message is why
+    this test asserts one** (P2-009). `canonical_group.id` is globally unique
+    across tiers, so a release-tier id can never appear in
+    `track_group.song_id` -- deleting the `row["tier"] != tier` clause still
+    404s, one guard later, on "Group has no members". The description is the
+    only observable difference, so asserting the status code would be a test
+    that cannot fail.
+    """
+    # source: app.py -- `if row is None or row["tier"] != tier: abort(404,
+    # description="No such group.")`, and the four-decorators-one-view
+    # structure in CLAUDE.md's codebase map.
+    release_id = corpus["groups"]["release"]
+
+    assert client.get(f"/release/{release_id}").status_code == 200
+
+    resp = client.get(f"/song/{release_id}")
+    assert resp.status_code == 404
+    assert "No such group." in resp.get_data(as_text=True)
+    assert "Group has no members." not in resp.get_data(as_text=True)
+
+
+def test_an_unknown_group_id_is_a_404(client, corpus):
+    # source: app.py -- the `row is None` half of the same guard.
+    assert client.get("/song/999999").status_code == 404
+
+
+def test_an_aliased_artist_id_redirects_to_the_canonical_artist(client, corpus, conn):
+    """Artist identity is many-ids-to-one (`artist_alias`), so a link built
+    from a track credit can name an id that has no page of its own."""
+    # source: app.py's artist_page alias branch, and the artist-identity rule
+    # that every artist-level page resolves through `artist_alias`.
+    builders.make_artist(conn, "ar-dupe", name="Corpus Artist (dupe)")
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, ?)",
+        ("ar-dupe", corpus["artist"]),
+    )
+    conn.commit()
+
+    resp = client.get("/artist/ar-dupe")
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/artist/{corpus['artist']}")
+
+
+# -- Job-start routes reject a second start ---------------------------------
+
+
+def test_every_job_start_route_reports_the_slot_is_taken(client, corpus, conn, monkeypatch):
+    """One job slot, four jobs, seven start routes. Each must refuse cleanly
+    with a 409 rather than starting a second job or 500ing.
+
+    `jobs.try_start` is stubbed to *fail*, which is what a claimed slot looks
+    like to a route -- the slot mechanics themselves are session 1's.
+    """
+    # source: async-recompute-N.md's premise and jobs.py -- a single module
+    # lock guards a single `_active` job name, so a second start cannot
+    # succeed; app.py answers `api_error("already_running", 409)`.
+    monkeypatch.setattr(jobs, "try_start", lambda *a, **k: False)
+    # /api/history/reimport checks it has something to re-read *before* the
+    # slot, so without a usable upload row it 400s and never reaches the 409.
+    conn.execute(
+        "INSERT INTO play_import (kind, folder, original_name, files_parsed) "
+        "VALUES ('upload', '/tmp/nonexistent-export', 'export.zip', 1)"
+    )
+    conn.commit()
+
+    starts = [
+        ("/api/snapshot/pull", None),
+        ("/api/snapshot/refresh", None),
+        ("/api/snapshot/backfill", None),
+        ("/api/roundtrip/start", None),
+        ("/api/roundtrip/reconcile", None),
+        ("/api/backfill/start", {"generations": 2}),
+        ("/api/history/reimport", None),
+    ]
+    for path, body in starts:
+        resp = client.post(path, json=body) if body else client.post(path)
+        assert resp.status_code == 409, f"{path} -> {resp.status_code}"
+        assert set(resp.get_json()) == {"error", "detail"}, path
+        assert resp.get_json()["error"] == "already_running", path

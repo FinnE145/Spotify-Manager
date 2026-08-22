@@ -88,6 +88,11 @@ def discover(conn):
 
     return {
         "track": one("SELECT track_id FROM track ORDER BY track_id", "track"),
+        # The ?tracks= variants need a *pair*, and an ad-hoc group of one id
+        # is rejected with a 400 before it reaches the code being swept.
+        "track2": one(
+            "SELECT track_id FROM track ORDER BY track_id LIMIT 1 OFFSET 1", "second track"
+        ),
         "album": one("SELECT album_id FROM album ORDER BY album_id", "album"),
         "artist": one("SELECT artist_id FROM artist ORDER BY artist_id", "artist"),
         "playlist": one("SELECT playlist_id FROM snapshot ORDER BY playlist_id", "snapshot"),
@@ -234,6 +239,82 @@ CASES = (
     Case("create_label", "POST", "/api/label", json={"text": "New", "x": 5, "y": 6}),
     Case("update_label", "PATCH", "/api/label/{label}", json={"text": "Renamed"}),
     Case("delete_label", "DELETE", "/api/label/{label}"),
+    # -- Query-string variants --------------------------------------------
+    #
+    # Every case above issues a query-string-free path, so an alternate render
+    # path behind a query param is invisible to the sweep -- not because it was
+    # forgotten, but because `catalog_rules()` keys on (endpoint, method) and a
+    # query string is neither. `test_catalog_covers_every_registered_route`
+    # therefore cannot catch it: the route *is* covered, one of its two bodies
+    # is not. Session 4 hit one instance of this (`?generation=1`) and filled it
+    # as a one-off; session 5's consolidated pass found it was systematic, so
+    # the variants live here, in the shared catalog, where the golden capture
+    # gets them too.
+    #
+    # Values are deliberately **fixture-independent** -- a filter that matches
+    # nothing still takes the branch, and baking corpus strings in here would
+    # break against P3's sampled DB. What the *content* of a filtered page
+    # should be is asserted in `test_routes.py`, not here.
+    Case("playlist_page", "GET", "/playlist/{playlist}?generation=1", variant="generation"),
+    Case(
+        "playlist_page",
+        "GET",
+        "/playlist/{playlist}?generation=1&tier=song",
+        variant="generation_song",
+    ),
+    Case("dev_canonical", "GET", "/dev/canonical?q=zzz", variant="q"),
+    Case("dev_canonical", "GET", "/dev/canonical?cross=zzz", variant="cross"),
+    Case("dev_canonical", "GET", "/dev/canonical?search=zzz", variant="search"),
+    Case("dev_canonical", "GET", "/dev/canonical?singletons=1", variant="singletons"),
+    Case("dev_canonical", "GET", "/dev/canonical?expand={song}", variant="expand"),
+    Case(
+        "canonical_review",
+        "GET",
+        "/dev/canonical/review?tracks={track},{track2}",
+        variant="tracks",
+    ),
+    Case(
+        "api_canonical_queue",
+        "GET",
+        "/api/canonical/queue?tracks={track},{track2}",
+        variant="tracks",
+    ),
+    Case("api_canonical_queue", "GET", "/api/canonical/queue?queue=pending", variant="pending"),
+    Case(
+        "api_canonical_cross",
+        "GET",
+        "/api/canonical/cross?tracks={track},{track2}",
+        variant="tracks",
+    ),
+    Case(
+        "api_canonical_cross_listing",
+        "GET",
+        "/api/canonical/cross/listing?cross=zzz",
+        variant="cross",
+    ),
+    Case("dev_snapshot", "GET", "/dev/snapshot?q=zzz", variant="q"),
+    Case("dev_generations", "GET", "/dev/generations?tier=song", variant="song"),
+    Case("dev_generations_tenure", "GET", "/dev/generations/tenure?tier=song", variant="song"),
+    Case(
+        "dev_generations_tenure",
+        "GET",
+        "/dev/generations/tenure?sort=score&page=2",
+        variant="sorted",
+    ),
+    # An unrecognised sort falls back to "tenure" rather than reaching SQL --
+    # the whitelist is what keeps `sort` out of an interpolated ORDER BY.
+    Case(
+        "dev_generations_tenure",
+        "GET",
+        "/dev/generations/tenure?sort=;drop",
+        variant="bad_sort",
+    ),
+    Case("export", "GET", "/api/export?cutoff=100", variant="cutoff"),
+    # /callback's two argument-driven refusals. Neither reaches Spotify: both
+    # abort before the token exchange, which is why the third arm (a valid
+    # state carrying a code) is deliberately absent.
+    Case("callback", "GET", "/callback?error=access_denied", golden=False, variant="error"),
+    Case("callback", "GET", "/callback?state=mismatched", golden=False, variant="bad_state"),
 )
 
 

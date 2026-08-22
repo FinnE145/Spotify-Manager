@@ -124,6 +124,8 @@ def test_generation_spans_ordered_by_ordinal_not_by_name_or_playlist_id(conn):
 
 
 def test_generation_spans_name_comes_from_snapshot(conn):
+    # source: generations-B.md 'Display resolution' -- a generation's name is
+    # the playlist's, resolved from `snapshot`, not stored on `generation`.
     p1 = builders.make_generation(conn, ordinal=1, playlist_id="p-named")
     conn.execute("UPDATE snapshot SET name = 'v1.0.0' WHERE playlist_id = ?", (p1,))
     conn.commit()
@@ -160,6 +162,9 @@ def test_generations_carried_in_counts_a_different_track_id_of_same_version(conn
 
 
 def test_generations_new_in_is_group_count_minus_carried_in(conn):
+    # source: generations-B.md 'Runs, and the three numbers' / the
+    # /dev/generations list -- carried/new is a split of the same total, so
+    # new_in is whatever carried_in is not.
     ta = builders.make_track(conn, "ta")
     tb = builders.make_track(conn, "tb")
     builders.make_group(conn, [ta])
@@ -251,14 +256,20 @@ def test_runs_matches_the_specs_own_example(conn):
 
 
 def test_runs_single_ordinal():
+    # source: generations-B.md 'Runs, and the three numbers' -- a single
+    # ordinal is a run of length 1, which is what "two length-1 runs" needs.
     assert generations.runs({5}) == [(5, 5)]
 
 
 def test_runs_unsorted_input_still_collapses_correctly():
+    # source: generations-B.md 'Runs, and the three numbers' -- runs are over a
+    # *set* of ordinals, so input order cannot matter.
     assert generations.runs({10, 5, 7, 6}) == [(5, 7), (10, 10)]
 
 
 def test_runs_all_consecutive_is_one_run():
+    # source: generations-B.md 'Runs, and the three numbers' -- "a group present
+    # in 5, 6, 7, 10 has two runs"; fully consecutive is the one-run case.
     assert generations.runs({1, 2, 3, 4}) == [(1, 4)]
 
 
@@ -390,6 +401,8 @@ def test_tenures_active_generation_ended_at_falls_back_to_now(conn):
 
 
 def test_tenures_tier_parameter_selects_song_or_version(conn):
+    # source: generations-B.md 'Rollup tier' -- tenure is reported at version or
+    # song tier, and two versions of one song collapse to a single song row.
     ta = builders.make_track(conn, "ta")
     tb = builders.make_track(conn, "tb")
     groups = builders.make_group(conn, [ta])
@@ -411,10 +424,14 @@ def test_tenures_tier_parameter_selects_song_or_version(conn):
 
 
 def test_presence_for_tracks_empty_input(conn):
+    # characterization -- the empty-list early return that keeps the IN ()
+    # placeholder list from being built at all.
     assert generations.presence_for_tracks(conn, []) == []
 
 
 def test_presence_for_tracks_returns_sorted_distinct_ordinals(conn):
+    # source: generations-B.md 'What counts as present' -- presence is a set of
+    # ordinals; the entity pages render it as a strip, so it must be ordered.
     ta = builders.make_track(conn, "ta")
     p3 = _gen(conn, 3)
     p1 = _gen(conn, 1)
@@ -427,6 +444,8 @@ def test_presence_for_tracks_returns_sorted_distinct_ordinals(conn):
 
 
 def test_presence_for_tracks_a_track_with_no_membership_is_absent(conn):
+    # source: generations-B.md 'What counts as present' -- presence comes from
+    # `membership`, so a track in no generation playlist is present nowhere.
     ta = builders.make_track(conn, "ta")
     canonical.ensure_track_groups(conn)
     conn.commit()
@@ -451,6 +470,8 @@ def test_pending_new_generation_surfaces_lowest_major_first(conn):
 
 
 def test_pending_new_generation_excludes_existing_ordinal(conn):
+    # source: generations-B.md 'Detecting a new generation' -- a candidate's
+    # major must be "not already a `generation.ordinal`".
     builders.make_generation(conn, ordinal=37, playlist_id="p-existing")
     conn.execute("UPDATE snapshot SET name = 'v37.0.0' WHERE playlist_id = 'p-existing'")
     conn.commit()
@@ -459,6 +480,8 @@ def test_pending_new_generation_excludes_existing_ordinal(conn):
 
 
 def test_pending_new_generation_excludes_declined(conn):
+    # source: generations-B.md 'Detecting a new generation' -- "whose
+    # `generation_declined` is 0"; No means "stop asking".
     builders.make_playlist(conn, "p-declined", name="v37.0.0")
     generations.decline_generation(conn, "p-declined")
     conn.commit()
@@ -478,6 +501,8 @@ def test_pending_new_generation_regex_is_anchored(conn, name):
 
 
 def test_pending_new_generation_none_when_no_candidates(conn):
+    # source: generations-B.md 'Detecting a new generation' -- detection is a
+    # query over `snapshot`, so with no matching name there is no candidate.
     assert generations.pending_new_generation(conn) is None
 
 
@@ -499,11 +524,15 @@ def test_confirm_generation_derives_ordinal_from_playlist_name(conn):
 
 
 def test_confirm_generation_raises_for_missing_snapshot_row(conn):
+    # source: generations-B.md 'Detecting a new generation' -- the ordinal comes
+    # from the playlist's name, so a playlist with no snapshot row has none.
     with pytest.raises(ValueError):
         generations.confirm_generation(conn, "no-such-playlist")
 
 
 def test_confirm_generation_raises_for_non_matching_name(conn):
+    # source: generations-B.md 'Detecting a new generation' -- the name must
+    # match `^v(\d+)\.\d+\.\d+$`; the ordinal is read out of it.
     builders.make_playlist(conn, "p-bad", name="Not A Generation")
 
     with pytest.raises(ValueError):
@@ -547,6 +576,8 @@ def test_confirm_generation_does_not_commit(conn):
 
 
 def test_decline_generation_stops_it_being_surfaced_again(conn):
+    # source: generations-B.md 'Detecting a new generation' -- "**No** -> set
+    # `snapshot.generation_declined = 1`, and stop asking".
     builders.make_playlist(conn, "p-37", name="v37.0.0")
     assert generations.pending_new_generation(conn) is not None
 
@@ -557,6 +588,8 @@ def test_decline_generation_stops_it_being_surfaced_again(conn):
 
 
 def test_decline_generation_does_not_commit(conn):
+    # source: generations.py's module contract (CLAUDE.md codebase map) --
+    # "callers commit those"; a second connection must not see the write.
     import db
 
     builders.make_playlist(conn, "p-37", name="v37.0.0")
