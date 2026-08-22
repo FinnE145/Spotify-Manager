@@ -412,20 +412,47 @@ def test_album_page_requeues_a_cleared_wanted_uri_on_every_view(client, conn, fa
     assert conn.execute("SELECT COUNT(*) FROM wanted_uri").fetchone()[0] == 1
 
 
-def test_playlist_generation_view_renders_the_generation_split(client, corpus):
-    # source: CLAUDE.md's route map -- "/playlist/<id> (?generation=1
-    # renders the generation view, ?tier= toggles it)". A whole alternate
-    # render path on an already-swept route: the catalog issues the bare
-    # path, so nothing exercised this branch at all (P2-008). Asserts the
-    # view's own content, not just a 200 -- P2_tests.md §1's warning.
+def test_playlist_generation_view_renders_the_generation_split(client, corpus, conn):
+    """The generation view is a whole alternate render path on an
+    already-swept route (P2-008).
+
+    **The assertions are the carried/new headings and their counts, because
+    nothing else here discriminates.** This test used to assert a member
+    track's name, which the *ordinary* playlist render also contains -- so
+    `if False:` on the `?generation=1` branch passed it. The headings exist
+    only in the generation view, and the counts are what `?tier=` changes:
+    the two tracks below are two versions of one song, so version tier sees
+    two groups and song tier sees one.
+    """
+    # source: CLAUDE.md's route map -- "/playlist/<id> (?generation=1 renders
+    # the generation view, ?tier= toggles it)"; generations-B.md's
+    # carried/new split and its rollup tier.
+    tb = builders.make_track(conn, "t-gen-second", name="Second Version")
+    builders.make_group(conn, [tb], song=corpus["groups"]["song"])
+    builders.make_membership(
+        conn,
+        playlist_id=corpus["gen_playlist"],
+        track_id=tb,
+        added_at=builders.days_ago(9),
+    )
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    plain = client.get(f"/playlist/{corpus['gen_playlist']}").get_data(as_text=True)
+    assert "New in this generation" not in plain
+
     resp = client.get(f"/playlist/{corpus['gen_playlist']}?generation=1")
 
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert "Corpus Track One" in body
+    # Generation 1 is the first, so nothing can have been carried into it.
+    assert "Carried forward (0)" in body
+    assert "New in this generation (2)" in body
 
     tiered = client.get(f"/playlist/{corpus['gen_playlist']}?generation=1&tier=song")
+
     assert tiered.status_code == 200
+    assert "New in this generation (1)" in tiered.get_data(as_text=True)
 
 
 # -- Semantic assertions for the query-string variants ----------------------
@@ -578,9 +605,20 @@ def test_an_aliased_artist_id_redirects_to_the_canonical_artist(client, corpus, 
 # -- Job-start routes reject a second start ---------------------------------
 
 
+def _zip_upload():
+    """The multipart body `/api/history/import` needs to get past its two
+    format guards. Never opened -- the slot is refused first."""
+    import io
+
+    return {
+        "data": {"file": (io.BytesIO(b"not really a zip"), "export.zip")},
+        "content_type": "multipart/form-data",
+    }
+
+
 def test_every_job_start_route_reports_the_slot_is_taken(client, corpus, conn, monkeypatch):
-    """One job slot, four jobs, seven start routes. Each must refuse cleanly
-    with a 409 rather than starting a second job or 500ing.
+    """One job slot, four jobs, **eight** start routes. Each must refuse
+    cleanly with a 409 rather than starting a second job or 500ing.
 
     `jobs.try_start` is stubbed to *fail*, which is what a claimed slot looks
     like to a route -- the slot mechanics themselves are session 1's.
@@ -598,16 +636,405 @@ def test_every_job_start_route_reports_the_slot_is_taken(client, corpus, conn, m
     conn.commit()
 
     starts = [
-        ("/api/snapshot/pull", None),
-        ("/api/snapshot/refresh", None),
-        ("/api/snapshot/backfill", None),
-        ("/api/roundtrip/start", None),
-        ("/api/roundtrip/reconcile", None),
-        ("/api/backfill/start", {"generations": 2}),
-        ("/api/history/reimport", None),
+        ("/api/snapshot/pull", {}),
+        ("/api/snapshot/refresh", {}),
+        ("/api/snapshot/backfill", {}),
+        ("/api/roundtrip/start", {}),
+        ("/api/roundtrip/reconcile", {}),
+        ("/api/backfill/start", {"json": {"generations": 2}}),
+        ("/api/history/reimport", {}),
+        # The eighth, and the one an endpoint-keyed list keeps losing: it
+        # needs a body to reach its slot check at all.
+        ("/api/history/import", _zip_upload()),
     ]
-    for path, body in starts:
-        resp = client.post(path, json=body) if body else client.post(path)
+    for path, kwargs in starts:
+        resp = client.post(path, **kwargs)
         assert resp.status_code == 409, f"{path} -> {resp.status_code}"
         assert set(resp.get_json()) == {"error", "detail"}, path
         assert resp.get_json()["error"] == "already_running", path
+
+
+def test_the_upload_route_refuses_a_taken_slot_before_it_saves_the_body(
+    client, conn, monkeypatch
+):
+    """`/api/history/import`'s *first* 409 arm, and the reason it is first.
+
+    `history_import.busy()` is checked before `save_upload`, so a rejected
+    import never copies a ~66 MB export to disk. Move the check below the save
+    and the response is still an identical 409 -- **the discriminating
+    assertion is that no upload folder appeared**, which is the only thing the
+    ordering changes.
+    """
+    # source: app.py's own comment on that guard -- "Checked before the file
+    # is copied anywhere, so a rejected import doesn't leave a ~66 MB orphan
+    # folder behind", and history_import.busy()'s docstring.
+    #
+    # **Asserted on the call, not on the filesystem**, which was the first
+    # attempt and could not fail: `save_upload` names its folder from the
+    # clock, `UPLOAD_ROOT` is redirected once for the whole session, and the
+    # autouse freezegun clock never moves -- so every upload in the run lands
+    # on one constant path and `os.makedirs(exist_ok=True)` reuses it. A
+    # before/after listing is therefore identical whether or not this request
+    # saved anything.
+    import history_import
+
+    monkeypatch.setattr(jobs, "active", lambda: "snapshot")
+    saves = []
+    monkeypatch.setattr(
+        history_import, "save_upload", lambda upload: saves.append(upload.filename)
+    )
+
+    resp = client.post("/api/history/import", **_zip_upload())
+
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == "already_running"
+    assert saves == [], "the body was saved before the slot was checked"
+
+
+# -- The OAuth callback ------------------------------------------------------
+#
+# `/callback` is the one route where P2's "would this notice a wrong answer?"
+# question has a security answer, and where the status code cannot supply it.
+# Every refusal here is a 400 and so is the guard *after* it, so deleting the
+# state check outright still returns 400 -- on "Missing authorization code",
+# one guard later. The catalog's two variant cases assert non-5xx and
+# therefore cannot fail. What discriminates is the description, and whether
+# the token exchange was reached at all.
+
+
+@pytest.fixture
+def auth_spy(monkeypatch):
+    """Records every token exchange, and performs none.
+
+    Also load-bearing as a *negative* signal: the real exchange is a network
+    call that conftest blocks outright, so without this a guard that wrongly
+    let a request through would surface as a connection error -- which reads
+    like a refusal and would let a broken guard pass.
+    """
+    exchanges = []
+
+    class _AuthManager:
+        def get_access_token(self, code, as_dict=False):
+            exchanges.append(code)
+            return "an-access-token"
+
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "get_auth_manager", lambda: _AuthManager())
+    return exchanges
+
+
+def test_a_matching_state_completes_the_exchange(client, auth_spy):
+    # source: app.py's callback -- the state set by /login is compared, then
+    # `auth_manager.get_access_token(code)` and a redirect home. The positive
+    # control: without it every assertion below is satisfied by a route that
+    # refuses everything.
+    with client.session_transaction() as sess:
+        sess["oauth_state"] = "the-real-state"
+
+    resp = client.get("/callback?state=the-real-state&code=an-auth-code")
+
+    assert resp.status_code == 302
+    assert auth_spy == ["an-auth-code"]
+
+
+def test_a_forged_state_is_refused_before_the_token_exchange(client, auth_spy):
+    """CSRF protection on the OAuth flow: a callback the app did not initiate
+    must not be exchanged for a token.
+
+    The `code` is supplied deliberately, so that removing the state check
+    doesn't merely change which 400 is returned -- it completes the flow. That
+    is what `auth_spy` is asserting on.
+    """
+    # source: app.py -- `if not expected or request.args.get("state") !=
+    # expected: abort(400, description="Invalid OAuth state.")`, and
+    # CLAUDE.md's rule that auth and session handling are done fully.
+    with client.session_transaction() as sess:
+        sess["oauth_state"] = "the-real-state"
+
+    resp = client.get("/callback?state=forged&code=an-auth-code")
+
+    assert resp.status_code == 400
+    assert "Invalid OAuth state." in resp.get_data(as_text=True)
+    assert auth_spy == []
+
+
+def test_a_callback_carrying_no_state_at_all_is_refused(client, auth_spy):
+    """The `not expected` half of the same guard, and the only fixture that
+    reaches it.
+
+    With no `oauth_state` in the session and no `state` argument, the
+    comparison is `None != None` -- which is False. So the second half of the
+    condition *passes a forged callback*, and only `not expected` refuses it.
+    A mismatched-state test cannot show this: there the comparison already
+    fails on its own.
+    """
+    # source: app.py -- the `not expected` disjunct; an unsolicited callback
+    # is one that names no state at all.
+    resp = client.get("/callback?code=an-auth-code")
+
+    assert resp.status_code == 400
+    assert "Invalid OAuth state." in resp.get_data(as_text=True)
+    assert auth_spy == []
+
+
+def test_the_state_is_single_use_so_a_replayed_callback_is_refused(client, auth_spy):
+    # source: app.py -- `session.pop("oauth_state", None)`. A pop, not a get:
+    # a captured callback url must not be replayable against a live session.
+    with client.session_transaction() as sess:
+        sess["oauth_state"] = "the-real-state"
+
+    assert client.get("/callback?state=the-real-state&code=first").status_code == 302
+    replay = client.get("/callback?state=the-real-state&code=second")
+
+    assert replay.status_code == 400
+    assert "Invalid OAuth state." in replay.get_data(as_text=True)
+    assert auth_spy == ["first"]
+
+
+def test_an_authorization_error_is_reported_and_stops_the_flow(client, auth_spy):
+    """Spotify's own refusal, checked before anything else.
+
+    The session state matches and a `code` is present, so without this arm the
+    request would run to a completed exchange rather than to a different 400.
+    """
+    # source: app.py -- `abort(400, description=f"Spotify authorization
+    # failed: {error}")`, the first guard in the route.
+    with client.session_transaction() as sess:
+        sess["oauth_state"] = "the-real-state"
+
+    resp = client.get("/callback?error=access_denied&state=the-real-state&code=an-auth-code")
+
+    assert resp.status_code == 400
+    assert "access_denied" in resp.get_data(as_text=True)
+    assert auth_spy == []
+
+
+def test_a_missing_code_is_refused_after_the_state_check_passes(client, auth_spy):
+    # source: app.py -- `if not code: abort(400, description="Missing
+    # authorization code.")`. The description is what separates this from the
+    # state refusal, which is the whole reason those tests assert on it.
+    with client.session_transaction() as sess:
+        sess["oauth_state"] = "the-real-state"
+
+    resp = client.get("/callback?state=the-real-state")
+
+    assert resp.status_code == 400
+    assert "Missing authorization code." in resp.get_data(as_text=True)
+    assert auth_spy == []
+
+
+# -- The remaining query-string variants, made observable --------------------
+#
+# The catalog's variant cases prove these branches respond. Eight of them
+# could ignore their own argument entirely and no test would notice, which is
+# `P2_tests.md` §1's cheapest non-observation wearing the newest hat. Two are
+# P2-008's seam exactly: `include_singletons` and `render_export_text`'s
+# `cutoff` are both well tested as functions, and only the route's *wiring*
+# of the parameter was unobserved.
+
+
+def test_singleton_groups_are_hidden_until_asked_for(client, corpus, conn):
+    # source: canonical.song_group_rows' `include_singletons` -- a group of one
+    # is a track the engine has not grouped with anything, not a grouping
+    # decision, so the listing omits it unless `?singletons=1` asks.
+    solo = builders.make_track(conn, "t-solo", name="Solo Singleton Track")
+    builders.make_group(conn, [solo])
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    assert "Solo Singleton Track" not in client.get("/dev/canonical").get_data(as_text=True)
+    assert "Solo Singleton Track" in client.get(
+        "/dev/canonical?singletons=1"
+    ).get_data(as_text=True)
+
+
+def test_the_canonical_search_box_finds_a_track_the_listing_omits(client, corpus, conn):
+    """`?search=` is a track search beside the group listing, not a filter on
+    it. The target is a singleton *on purpose*: the listing can never render
+    it, so only the search block can, and the two cannot be confused.
+    """
+    # source: app.py's dev_canonical -- `search_q` builds `search_results`,
+    # a LIKE over track and artist names, separately from the group listing.
+    solo = builders.make_track(conn, "t-searchable", name="Solo Searchable Track")
+    builders.make_group(conn, [solo])
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    assert "Solo Searchable Track" not in client.get("/dev/canonical").get_data(as_text=True)
+    assert "Solo Searchable Track" in client.get(
+        "/dev/canonical?search=Searchable"
+    ).get_data(as_text=True)
+
+
+def test_a_deep_linked_group_is_shown_even_when_the_cap_excludes_it(client, corpus, monkeypatch):
+    """`?expand=` must survive the listing cap, or a deep link to a group past
+    it lands on a page that doesn't contain it.
+
+    The cap is set to zero rather than to a number just below the fixture's
+    size: what is under test is that `expand` re-adds a group the cap dropped,
+    and zero makes "the cap dropped it" unconditional instead of dependent on
+    where the fixture happens to rank.
+    """
+    # source: app.py -- "A deep link to a group past the cap would otherwise
+    # land on a page that doesn't contain it", and CLAUDE.md's `_LISTING_CAP`
+    # note that an unfiltered load renders 50 rows.
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "_LISTING_CAP", 0)
+    song_id = corpus["groups"]["song"]
+
+    assert "Corpus Track One" not in client.get("/dev/canonical").get_data(as_text=True)
+    assert "Corpus Track One" in client.get(
+        f"/dev/canonical?expand={song_id}"
+    ).get_data(as_text=True)
+
+
+def test_the_snapshot_page_track_search_finds_a_library_track(client, corpus):
+    """`?q=` drives the "Find a track" panel.
+
+    **A track's name is not a usable assertion on this page** -- the Recent
+    changes panel renders member names too, so a search that ignored `q`
+    would still show one. The search block's own per-row suffix is what only
+    the search can produce, and the miss case pins that `q` reached the LIKE
+    rather than merely opening the panel.
+    """
+    # source: app.py's dev_snapshot -- `?q=` builds `track_matches`, a LIKE
+    # over tracks with a live membership, rendered with their playlist count.
+    hit = client.get("/dev/snapshot?q=Corpus Track One").get_data(as_text=True)
+    miss = client.get("/dev/snapshot?q=zzz-nothing-matches-this").get_data(as_text=True)
+
+    assert "— Corpus Artist (2 playlists)" in hit
+    assert "No tracks match" in miss
+    assert "(2 playlists)" not in miss
+
+
+def _one_generation_with_two_versions_of_one_song(conn):
+    """Two version groups, one song group, both present in generation 1 --
+    the smallest fixture on which the two tiers disagree."""
+    ta = builders.make_track(conn, "t-tier-a", name="Tier Version A")
+    tb = builders.make_track(conn, "t-tier-b", name="Tier Version B")
+    groups = builders.make_group(conn, [ta])
+    builders.make_group(conn, [tb], song=groups["song"])
+    playlist = builders.make_playlist(conn, "p-tier-gen", name="v1.0.0")
+    builders.make_generation(conn, ordinal=1, playlist_id=playlist)
+    for track_id in (ta, tb):
+        builders.make_membership(conn, playlist_id=playlist, track_id=track_id)
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+
+def test_the_tenure_tier_toggle_rolls_two_versions_into_one_song(client, conn):
+    # source: generations-B.md 'Rollup tier' -- tenure is reported at version
+    # or song tier, and two versions of one song collapse to a single song
+    # row. The rendered total is what the toggle changes.
+    _one_generation_with_two_versions_of_one_song(conn)
+
+    version = client.get("/dev/generations/tenure?tier=version").get_data(as_text=True)
+    song = client.get("/dev/generations/tenure?tier=song").get_data(as_text=True)
+
+    assert "2 groups ever present in a generation" in version
+    assert "1 group ever present in a generation" in song
+
+
+def test_the_generations_list_tier_toggle_counts_songs_not_versions(client, conn):
+    # source: generations-B.md 'Rollup tier' -- the same parameter, on the
+    # other page that reads `_generations_tier_arg`. Both routes share one
+    # helper, so this is what stops the list page's half going unobserved.
+    _one_generation_with_two_versions_of_one_song(conn)
+
+    version = client.get("/dev/generations?tier=version").get_data(as_text=True)
+    song = client.get("/dev/generations?tier=song").get_data(as_text=True)
+
+    assert version != song
+
+
+def test_the_tenure_sort_actually_reorders_the_table(client, conn):
+    """`?sort=` is a whitelist lookup, and the existing test only proves an
+    unrecognised value is refused. This is the other half: a recognised one
+    changes the order.
+
+    The fixture is built so tenure and score *disagree* -- the long-tenured
+    group has no plays and the newcomer has many -- so an implementation
+    ignoring `sort` puts the same row first both times.
+    """
+    # source: app.py -- `sort_key = _TENURE_SORT_KEYS[sort]` then
+    # `all_tenures.sort(...)`, which scoring-H.md §11.1 requires to run before
+    # pagination.
+    veteran = builders.make_track(conn, "t-veteran", name="Veteran Track")
+    newcomer = builders.make_track(conn, "t-newcomer", name="Newcomer Track")
+    builders.make_group(conn, [veteran])
+    builders.make_group(conn, [newcomer])
+    for ordinal in (1, 2, 3):
+        playlist = builders.make_playlist(conn, f"p-sort-{ordinal}", name=f"v{ordinal}.0.0")
+        builders.make_generation(conn, ordinal=ordinal, playlist_id=playlist)
+        builders.make_membership(conn, playlist_id=playlist, track_id=veteran)
+        if ordinal == 3:
+            builders.make_membership(conn, playlist_id=playlist, track_id=newcomer)
+    for _ in range(40):
+        builders.make_play(conn, track_id=newcomer, ts=builders.days_ago(1))
+    canonical.ensure_track_groups(conn)
+    scoring.recompute(conn)
+    conn.commit()
+
+    by_tenure = client.get("/dev/generations/tenure?sort=tenure").get_data(as_text=True)
+    by_score = client.get("/dev/generations/tenure?sort=score").get_data(as_text=True)
+
+    assert by_tenure.index("Veteran Track") < by_tenure.index("Newcomer Track")
+    assert by_score.index("Newcomer Track") < by_score.index("Veteran Track")
+
+
+def test_the_tenure_page_paginates_at_a_hundred_rows(client, conn):
+    """`?page=` is only observable past `_TENURE_PAGE_SIZE`, which is a
+    closure local and so cannot be lowered from a test -- the fixture has to
+    be genuinely bigger than a page.
+
+    Every group scores 0, so the sort falls through to its `group_id`
+    tiebreak, which is what makes "the last one" a fixed, nameable row rather
+    than whichever way the scores happened to land.
+    """
+    # source: app.py -- `_TENURE_PAGE_SIZE = 100`, `page_slice = all_tenures[
+    # start : start + _TENURE_PAGE_SIZE]`, and the "group_id as the tiebreak
+    # keeps paging stable across requests" comment above the sort.
+    playlist = builders.make_playlist(conn, "p-paged", name="v1.0.0")
+    builders.make_generation(conn, ordinal=1, playlist_id=playlist)
+    for n in range(101):
+        track_id = builders.make_track(conn, f"t-paged-{n:03d}", name=f"Paged Track {n:03d}")
+        builders.make_group(conn, [track_id])
+        builders.make_membership(conn, playlist_id=playlist, track_id=track_id)
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    page1 = client.get("/dev/generations/tenure?page=1").get_data(as_text=True)
+    page2 = client.get("/dev/generations/tenure?page=2").get_data(as_text=True)
+
+    assert "Page 1 of 2" in page1
+    assert "Paged Track 000" in page1
+    assert "Paged Track 100" not in page1
+    assert "Paged Track 100" in page2
+
+
+def _export_section_of(text, card_name):
+    """Which `## heading` a card is listed under in the export text."""
+    section = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            section = line[3:]
+        elif card_name in line:
+            return section
+    return None
+
+
+def test_the_export_cutoff_decides_what_groups_under_a_label(client, conn):
+    # source: app.py -- `cutoff = float(request.args.get("cutoff", 300))`,
+    # passed straight into grouping.render_export_text. The function is
+    # covered; this is the route's wiring of the argument (P2-008's seam).
+    builders.make_label(conn, x=0.0, y=0.0, text="Cutoff Label")
+    builders.make_card(conn, x=200.0, y=0.0, display_name="Distant Card")
+    conn.commit()
+
+    wide = client.get("/api/export?cutoff=300").get_json()["text"]
+    narrow = client.get("/api/export?cutoff=100").get_json()["text"]
+
+    assert _export_section_of(wide, "Distant Card").startswith("Cutoff Label")
+    assert _export_section_of(narrow, "Distant Card") == "Ungrouped"

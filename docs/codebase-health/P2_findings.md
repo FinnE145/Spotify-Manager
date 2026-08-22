@@ -9,19 +9,24 @@ template and the same four classifications as P1 (`P1_spec_audit.md` §4).
 two sets must match exactly** — a bug in one and not the other is the failure this convention
 exists to prevent.
 
-**Status: sessions 0 (infrastructure), 1 (Ingest), 2 (Grouping) and 3 (Scoring) complete —
-session 3 verified 2026-08-21; 7 findings.** Session 4 (Read paths & UI) written and verified
-2026-08-21; the session found none of its own, and **Verify found P2-008** — six gaps, all in
-tests rather than in production code, all fixed in place. Session 5 (coverage + workflow) ran
-2026-08-21 and found **P2-009**. **9 findings.**
+**Status: all six sessions complete; P2 verified 2026-08-22.** Sessions 0 (infrastructure),
+1 (Ingest), 2 (Grouping) and 3 (Scoring) — session 3 verified 2026-08-21; 7 findings. Session 4
+(Read paths & UI) written and verified 2026-08-21; the session found none of its own, and
+**Verify found P2-008** — six gaps, all in tests rather than in production code, all fixed in
+place. Session 5 (coverage + workflow) ran 2026-08-21 and found **P2-009**; P2's own Verify pass
+found **P2-010**, four more gaps of the same kind one layer out, at the route boundary.
+**10 findings.**
 P1's backlog was empty, so P2 started with nothing inherited. **No finding so far has needed an
 `xfail`** — every one has resolved to a fix or to a documentation question, so the debt ledger
 `codebase-health-P.md` §4 sanctions is still empty.
 
-**Tests that could not fail are now the bulk of the record** — P2-003, P2-005 and P2-007's four,
-plus session 1's pair, which `codebase-health-P.md` §10 records rather than numbering. That is the
-most common defect P2 finds, it has appeared in every session so far, and in each case the runner
-reported green. It is found by mutation and by nothing else.
+**Tests that could not fail are now the bulk of the record** — P2-003, P2-005, P2-007's four,
+P2-008's six and P2-010's four, plus session 1's pair, which `codebase-health-P.md` §10 records
+rather than numbering. That is the most common defect P2 finds, it appeared in **every** session
+without exception, and in each case the runner reported green. It is found by mutation and by
+nothing else. P2-008 and P2-010 add the closing refinement: by the last two sessions the defect
+had **moved out of the unit tests and into the route layer**, where a status code both
+implementations produce is the cheapest un-failable assertion there is.
 
 ---
 
@@ -476,3 +481,75 @@ path is now safe to run by hand.
   asserts the **description** rather than the status code, and its docstring says why — the status
   code alone is the un-failable assertion. Deleting the clause fails it. No `xfail` is owed:
   nothing is asserted to be broken.
+
+### P2-010 — session 5's own un-failable route tests: the OAuth guards, the eighth start route, and eight unwired query parameters
+
+- **Spec:** `P2_tests.md` §1's two questions, asked of session 5's output during P2's Verify pass.
+  Plus the clauses each affected guard implements: `CLAUDE.md`'s "**Security is the one exception
+  to KISS** — never do the bare minimum here… the implementation of things like login, auth, and
+  session handling"; `jobs.py`'s single-slot invariant; `app.py`'s own comment that the upload
+  route's slot check is "checked before the file is copied anywhere, so a rejected import doesn't
+  leave a ~66 MB orphan folder behind"; `generations-B.md`'s rollup tier; `scoring-H.md` §11.1's
+  sort-before-cap rule; and `grouping-fixes-backfill-M.md`'s canvas export cutoff.
+- **Code:** test code only, plus `tests/test_routes.py`'s catalog-adjacent assertions. **No
+  production code was wrong** — every mutation below was reverted and every guard behaves exactly
+  as its spec says.
+- **How it was found:** Verify's independent mutation pass — 40 mutations, against the session's
+  own 22. **26 killed, 14 survived, and all 14 were real.** Every mutation aimed at the session's
+  *new* unit tests died: all seven of `_match_substitutes`' evidence rules, both circuit-breaker
+  properties, all four `set_manual_aliases` arms, `_reconcile_batch`'s three, all four of
+  `_run_backfill`'s including the `except` swap, and P2-009's tier clause. **The survivors were,
+  without exception, at the route layer** — which is the finding's shape.
+
+- **The four gaps:**
+  1. **The OAuth state check was entirely unobserved, and it is the security-grade one.** Deleting
+     `if not expected or request.args.get("state") != expected: abort(400)` outright passed all 754
+     tests. So did dropping only the `not expected` disjunct — which is the worse of the two, since
+     with no state in the session *and* none in the query the comparison is `None != None`, so that
+     half alone lets an unsolicited callback through. So did deleting the `error` arm, and turning
+     the `session.pop` into a `get` (making a captured callback url replayable). The catalog's two
+     `/callback` variant cases assert non-5xx, and **every refusal on this route is a 400, as is the
+     guard after it** — a forged-state request still 400s one guard later on "Missing authorization
+     code". P2-009's own reasoning, unapplied one route over: the status code cannot discriminate,
+     so only the description and *whether the token exchange happened* can. Six tests now assert
+     both, through an `auth_spy` fixture that is also load-bearing as a negative signal — the real
+     exchange is a network call `conftest.py` blocks, so without it a guard that wrongly let a
+     request through would surface as a connection error, which reads like a refusal.
+  2. **`/api/history/import` is the eighth job-start route and the new test covered seven.** Its
+     docstring said "seven start routes"; there are eight `already_running` sites and this route
+     owns two of them. Both survived. The first is *ordering*-sensitive in exactly the way session
+     5 tested three other jobs for: `history_import.busy()` sits above `save_upload`, so a rejected
+     import never copies a ~66 MB export to disk. It went missing because the catalog case posts no
+     file and 400s on the format guard long before the slot, and because an endpoint-keyed list of
+     start routes silently loses the one that needs a request body.
+  3. **Eight query-string variants respond but ignore their own argument undetected** —
+     `?singletons=1`, `?expand=` and `?search=` on `/dev/canonical`; `?q=` on `/dev/snapshot`;
+     `?tier=` on both generations pages; `?sort=` and `?page=` on tenure; `?cutoff=` on
+     `/api/export`. This is the session's own structural fix landing half-done: 21 variant cases
+     were added to the catalog and six semantic assertions written over them, which leaves eight
+     branches proven to *respond* and not to *do* anything. Two are P2-008's seam verbatim —
+     `include_singletons` and `render_export_text`'s `cutoff` are both thoroughly covered as
+     functions, and only the route's wiring of the parameter was unobserved.
+  4. **A session-4 test claimed to discriminate and did not.**
+     `test_playlist_generation_view_renders_the_generation_split` asserted a member track's name,
+     which the *ordinary* playlist render also contains — so `if False:` on the `?generation=1`
+     branch passed it. Its own comment read "Asserts the view's own content, not just a 200 —
+     P2_tests.md §1's warning." It now asserts the carried/new headings and their counts, which
+     exist only in the generation view, and a second version group makes `?tier=` change them.
+
+- **One of the fixes was itself un-failable on the first attempt**, and it is the most transferable
+  thing here. Gap 2's ordering test originally compared a listing of `UPLOAD_ROOT` before and
+  after, on the reasoning that a save creates a folder. It passed, and the mutant that moves
+  `busy()` below `save_upload` passed too: `save_upload` names its folder from the clock, the
+  autouse freezegun clock never moves, and `UPLOAD_ROOT` is redirected once for the whole session —
+  so every upload in the run lands on one constant path that `os.makedirs(exist_ok=True)` quietly
+  reuses. **A frozen clock turns a timestamped path into a constant**, and any test whose evidence
+  is "a new file appeared" is blind to whatever already put one there. Rewritten to assert on the
+  call, which is what the rule is actually about. Same family as the standing note that an agent
+  cannot feel elapsed time.
+- **Classification:** `gap` — missing tests, no behaviour change.
+- **Ruling:** Fix all of it in Verify (2026-08-22, Finn). Same disposition as P2-008: every fix is
+  a new test or a rewritten assertion, no production code is touched.
+- **Test:** 16 new tests in `tests/test_routes.py`; 754 → 770. All 14 surviving mutants now die,
+  plus three further OAuth mutations written after the fix (`pop`→`get`, the missing-code guard,
+  and moving `busy()` below the save). No `xfail` is owed — nothing here is asserted to be broken.

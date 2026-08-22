@@ -420,7 +420,7 @@ the unauthenticated-run test, which asserted an outcome both implementations pro
 - **`canonical_detect.all_candidate_groups`** — not a guard: dead, condemned by P1-009 on a full
   caller search, and a **P3 deletion**. A test would only preserve it.
 - **`app.py`'s `<module>` lines 1674-1675** — the `if __name__ == "__main__"` block.
-- **`callback`'s token-exchange arm** — the only path that would reach Spotify.
+- ~~**`callback`'s token-exchange arm** — the only path that would reach Spotify.~~ **Superseded at P2's Verify, 2026-08-22 (P2-010).** The premise was wrong: the arm is reachable without Spotify, because `get_auth_manager` can be monkeypatched the way `get_spotify_client` already is. It is now covered — and had to be, since the *spy* on that exchange is the only thing that discriminates a working OAuth state check from a deleted one. `get_spotify_client` above is genuinely uncoverable; this was not, and the two got filed together on a resemblance.
 
 ### What this measurement is worth remembering for
 
