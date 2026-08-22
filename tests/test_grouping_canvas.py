@@ -136,12 +136,39 @@ def test_a_tied_label_and_card_the_label_wins(conn):
     # label-before-card, then lower id." A label and a card at IDENTICAL
     # distance from A: the label must win the tie, so A never even
     # considers the card.
-    cutoff = 30
+    #
+    # The tied card has to lead to a DIFFERENT label, or the assertion
+    # cannot fail (found in session 4's Verify, P2-008). With only one label
+    # on the board, losing the tie costs nothing: resolve() backtracks, so A
+    # reaches that same label one hop later through the card, and a
+    # card-before-label tie-break produces the identical answer. Here the
+    # tied card c2 sits next to its own label M, out of A's cutoff -- so the
+    # wrong tie-break lands A in M rather than in L.
+    cutoff = 15
     a = card("a", 0, 0)
-    c2 = card("c2", 0, 10)  # dist 10, same as the label
-    lbl = label("l", 10, 0)  # dist 10
+    c2 = card("c2", 0, 10)  # dist 10 from A, same as label L
+    lbl_l = label("L", 10, 0)  # dist 10 from A
+    lbl_m = label("M", 0, 20)  # dist 10 from c2; dist 20 from A, outside cutoff
 
-    result = group_cards([a, c2], [lbl], cutoff)
+    result = group_cards([a, c2], [lbl_l, lbl_m], cutoff)
+
+    assert a in group_for(result, "L")
+    assert c2 in group_for(result, "M")
+
+
+def test_a_card_exactly_at_the_cutoff_distance_still_links(conn):
+    # source: org-canvas.md -- "The max-distance cutoff applies to each link
+    # -- a gap larger than the cutoff breaks the chain." Larger than, so the
+    # boundary itself is inside: group_cards compares `> cutoff`. Pinned
+    # because nothing else here sits on the boundary, and `>=` -- the
+    # off-by-one a reader could introduce in either direction -- passed the
+    # whole suite otherwise (P2-008), exactly as the play_stats week
+    # boundary would have.
+    cutoff = 50
+    a = card("a", 0, 0)
+    lbl = label("l", 50, 0)  # distance exactly == cutoff
+
+    result = group_cards([a], [lbl], cutoff)
 
     assert a in group_for(result, "l")
 
@@ -262,8 +289,6 @@ def test_card_note_never_appears_in_the_export_text(app, client, conn):
     # /api/export route so the card dict genuinely carries `note` (a
     # SELECT * row) -- a hand-built dict omitting the key would pass this
     # assertion vacuously.
-    import db
-
     builders.make_card(
         conn, x=5, y=5, display_name="Real Card", note="a distinctive secret note xyz123"
     )

@@ -35,15 +35,22 @@ def _gen(conn, ordinal, playlist_id=None):
 # -- generation_spans -----------------------------------------------------
 
 
-def test_generation_spans_started_at_ignores_removed_memberships(conn):
-    # source: generations-B.md §Spans -- "starts at the earliest added_at of
-    # its live memberships." A removed row with an EARLIER added_at must not
-    # win -- an implementation missing removed_at IS NULL would pick it.
+def test_generation_spans_started_at_is_the_earliest_live_membership(conn):
+    # source: generations-B.md §Spans -- "starts at the EARLIEST added_at of
+    # its LIVE memberships." Both halves of that need their own fixture row,
+    # and the second was missing until session 4's Verify (P2-008): with one
+    # live membership, MIN and MAX are the same row, so `MAX(m.added_at)` --
+    # the plain misreading of "starts at" -- passed the whole suite. So:
+    # a removed row EARLIER than every live one (which a missing
+    # `removed_at IS NULL` would wrongly pick), and two live rows at
+    # different dates (so only MIN gets the answer right).
     p1 = _gen(conn, 1)
     t1 = builders.make_track(conn, "t1")
     t2 = builders.make_track(conn, "t2")
+    t3 = builders.make_track(conn, "t3")
     _present(conn, p1, t1, added_at="2026-01-01T00:00:00Z", removed_at="2026-01-02T00:00:00Z")
     _present(conn, p1, t2, added_at="2026-03-01T00:00:00Z")
+    _present(conn, p1, t3, added_at="2026-05-01T00:00:00Z")
 
     spans = generations.generation_spans(conn)
 
@@ -84,19 +91,36 @@ def test_generation_spans_skips_a_mid_sequence_empty_generation(conn):
     assert by_ordinal[2]["ended_at"] == "2026-06-01T00:00:00Z"
 
 
-def test_generation_spans_ordered_by_ordinal_not_insertion_order(conn):
+def test_generation_spans_ordered_by_ordinal_not_by_name_or_playlist_id(conn):
     # source: generations.py's generation_spans docstring -- "Ordered
-    # per-generation rows." Insert ordinal 3 before ordinal 1 to prove the
-    # ordering comes from the ORDER BY, not from insertion order.
-    p3 = _gen(conn, 3)
-    p1 = _gen(conn, 1)
-    p2 = _gen(conn, 2)
-    for p, o in ((p1, 1), (p2, 2), (p3, 3)):
-        _present(conn, p, builders.make_track(conn, f"t{o}"), added_at=f"2026-0{o}-01T00:00:00Z")
+    # per-generation rows", ordered by ordinal.
+    #
+    # Not "not insertion order", which this cannot test and no fixture can
+    # (P2-008): `generation.ordinal` is INTEGER PRIMARY KEY, so it *is* the
+    # rowid, and a bare table scan comes back in ordinal order however the
+    # rows went in -- dropping the ORDER BY entirely passes. What can go
+    # wrong is ordering by one of the other two columns in the query, so the
+    # names and playlist ids here sort in the exact reverse of the ordinals
+    # and the assertion names both.
+    for ordinal, playlist_id in ((1, "zzz-playlist"), (2, "mmm-playlist"), (3, "aaa-playlist")):
+        _gen(conn, ordinal, playlist_id=playlist_id)
+        conn.execute(
+            "UPDATE snapshot SET name = ? WHERE playlist_id = ?",
+            (f"v{4 - ordinal}.0.0", playlist_id),
+        )
+        _present(
+            conn,
+            playlist_id,
+            builders.make_track(conn, f"t{ordinal}"),
+            added_at=f"2026-0{ordinal}-01T00:00:00Z",
+        )
+    conn.commit()
 
     spans = generations.generation_spans(conn)
 
     assert [s["ordinal"] for s in spans] == [1, 2, 3]
+    assert [s["playlist_id"] for s in spans] == ["zzz-playlist", "mmm-playlist", "aaa-playlist"]
+    assert [s["name"] for s in spans] == ["v3.0.0", "v2.0.0", "v1.0.0"]
 
 
 def test_generation_spans_name_comes_from_snapshot(conn):

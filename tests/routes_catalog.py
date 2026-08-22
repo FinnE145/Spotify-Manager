@@ -34,8 +34,9 @@ _IMPLICIT_METHODS = {"HEAD", "OPTIONS"}
 class Case:
     """One issuable request against one route rule.
 
-    `endpoint` + `method` is the key back to `app.url_map`, which is what lets
-    `missing_rules()` prove the catalog is complete.
+    `endpoint` + `method` is the key back to `app.url_map`, which is what
+    `catalog_rules()` compares against `app_rules()` to prove the catalog is
+    complete.
     """
 
     endpoint: str
@@ -46,11 +47,20 @@ class Case:
     #: False for the routes whose response is not a stable document -- see
     #: `golden_cases()`.
     golden: bool = True
+    #: Set only where one endpoint+method carries two rules and so two cases
+    #: (today: roundtrip start/reconcile, one view function under two
+    #: @app.route decorators). Without it both cases produce the same slug,
+    #: which is a snapshot filename -- so a capture covering POSTs would
+    #: silently write one over the other and compare() would report no diff
+    #: for a route it never actually compared (P2-008).
+    variant: str | None = None
 
     @property
     def slug(self):
-        """A filename-safe name for this case, unique across the catalog."""
-        return f"{self.method.lower()}_{self.endpoint}"
+        """A filename-safe name for this case, unique across the catalog
+        (asserted by test_routes.py)."""
+        suffix = f"_{self.variant}" if self.variant else ""
+        return f"{self.method.lower()}_{self.endpoint}{suffix}"
 
 
 def discover(conn):
@@ -179,7 +189,7 @@ CASES = (
     # -- Round-trip API ---------------------------------------------------
     Case("roundtrip_status", "GET", "/api/roundtrip/status"),
     Case("start_roundtrip", "POST", "/api/roundtrip/start"),
-    Case("start_roundtrip", "POST", "/api/roundtrip/reconcile"),
+    Case("start_roundtrip", "POST", "/api/roundtrip/reconcile", variant="reconcile"),
     Case("stop_roundtrip", "POST", "/api/roundtrip/stop"),
     Case("alias_roundtrip_uris", "POST", "/api/roundtrip/alias", json={"aliases": []}),
     Case("clear_roundtrip_failures", "POST", "/api/roundtrip/clear-failures"),
@@ -249,6 +259,7 @@ def cases_for(conn):
             json=_fill(case.json, ids),
             form=_fill(case.form, ids),
             golden=case.golden,
+            variant=case.variant,
         )
         for case in CASES
     ]

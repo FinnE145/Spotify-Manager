@@ -252,3 +252,57 @@ cannot see an unmade observation, because the code that produces it runs regardl
 should read the consolidated number knowing that the two highest-coverage sessions are also the two
 where mutation found the most.
 
+
+---
+
+## Session 4 — Read paths & UI (measured at Verify, 2026-08-21)
+
+Command: `venv/bin/python -m pytest -q --cov=entities --cov=generations --cov=grouping --cov=app
+--cov-report=term-missing`, measured against the session's 708-test suite **before** Verify's own
+fixes.
+
+| module | stmts | miss | cover |
+|---|---|---|---|
+| `entities.py` | 71 | 0 | **100%** |
+| `generations.py` | 95 | 0 | **100%** |
+| `grouping.py` | 63 | 0 | **100%** |
+| `app.py` | 825 | 110 | 87% |
+
+`app.py`'s figure is not session 4's to own — it is the shared surface every session has been
+adding to, and session 5 takes the consolidated pass. The three modules that *are* session 4's are
+at 100%.
+
+### What this measurement is worth, which is the point of recording it
+
+**All three of session 4's own modules were at 100% lines while six real gaps sat in them.**
+Verify's 66-mutation pass found the canvas tie-break test could not fail, `generation_spans`'
+`MIN` was unasserted, both entity-page first-view guards were unobserved, and `queue_wanted_uris`'
+route wiring was unobserved — see **P2-008**. Not one of those is visible to coverage, and the
+reason is now three-for-three across sessions 2, 3 and 4: the producing code runs identically
+whether or not anything reads what it produces.
+
+Session 4 adds a *new* reason coverage misses things, and it is worth carrying to session 5. The
+guards at `app.py:310` and `app.py:459` are **covered lines** — every route test executes them.
+Deleting them still passed all 708 tests. Coverage confirmed the line ran; nothing confirmed the
+line *mattered*. A line-coverage number cannot distinguish "executed" from "executed and observed",
+and this is the cleanest example P2 has produced.
+
+### Gaps found here, and filled at Verify
+
+- **`app.py:593-622`** — the playlist page's entire `?generation=1` view, plus its `?tier=` toggle.
+  A whole alternate render path on a route the permanent sweep already covers: `routes_catalog`
+  issues query-string-free paths, so nothing reached it. **Filled** by
+  `test_playlist_generation_view_renders_the_generation_split`, which asserts the view's content
+  rather than its status code.
+- The other five gaps Verify filled were mutation-found, not coverage-found — see **P2-008**.
+
+### Noted, not filled
+
+- **`app.py:447`** — the artist-alias redirect (`/artist/<alias_id>` → the canonical artist). Real
+  entity-page behaviour with no test. Left for session 5's consolidated pass rather than filled
+  here, since it belongs to `artists.py`'s area more than to session 4's.
+- **`app.py:195, 200, 259, 458, 555`** — the entity pages' 404 branches for a nonexistent or
+  wrong-tier id. The album one *is* covered (via the error-page query-string test); the rest are the
+  same three-line shape repeated. Low value individually, cheap in bulk at session 5.
+- **`app.py:496`** — `representative()` returning None inside a listing loop; the same defensive
+  `continue` class session 2 and 3 both declined to chase.

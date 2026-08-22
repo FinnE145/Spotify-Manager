@@ -29,6 +29,13 @@ accidentally get committed.
 against whatever DB `SYMR_DB_PATH` (via conftest's guard, or a real temp
 copy) points the app at -- P3 builds a sampled DB for this; the ordinary
 suite's builders corpus works too, for the tooling's own self-test.
+
+**Run as a script it carries its own `symr.db` guard**, because nothing else
+does: it is the only thing in `tests/` that runs outside pytest, so none of
+`conftest.py`'s four layers apply. It refuses to start unless `SYMR_DB_PATH`
+is set and resolves somewhere other than the real database. Neither the
+capture nor the compare pass is read-only in practice -- `create_app()`
+migrates, and a plain GET writes -- so this is a hard exit, not a warning.
 """
 
 import os
@@ -104,6 +111,39 @@ if __name__ == "__main__":
     _REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
+
+    # The real-symr.db guard, and it runs BEFORE `import app` -- this script
+    # is the one thing in tests/ that runs outside pytest, so conftest.py's
+    # four guard layers (P2_tests.md §4.1) do not protect it at all, and
+    # `create_app()` below calls `db.init_db()`, which runs _migrate() and
+    # _ensure_views() against whatever DB_PATH resolves to. It is also not
+    # read-only after that: a plain GET writes (ensure_track_groups on
+    # /dev/canonical, queue_wanted_uris on every album page, ensure_fresh's
+    # recompute) and can spend a real Spotify request on an album/artist
+    # page's first view.
+    #
+    # Two checks rather than one, for §4.1's own reason -- the first is the
+    # mechanism, the second catches the day the mechanism changes. The
+    # unset-env case is not hypothetical: it is exactly how this script
+    # reached the real symr.db on 2026-08-21 (an exported SYMR_DB_PATH did
+    # not carry into a later shell invocation), writing 9 wanted_uri rows.
+    import config
+
+    _resolved = _os.path.abspath(config.DB_PATH)
+    if not _os.environ.get("SYMR_DB_PATH"):
+        print(
+            "refusing to run: SYMR_DB_PATH is not set, so this would open the "
+            f"real library database ({_resolved}). Point it at a copy first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if _resolved == _os.path.join(_REPO_ROOT, "symr.db"):
+        print(
+            f"refusing to run: SYMR_DB_PATH resolves to the real library "
+            f"database ({_resolved}).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # Deliberately not imported at module level: importing app/db/conn
     # machinery unconditionally would make `import golden` (as

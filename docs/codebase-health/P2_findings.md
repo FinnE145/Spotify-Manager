@@ -10,8 +10,9 @@ two sets must match exactly** — a bug in one and not the other is the failure 
 exists to prevent.
 
 **Status: sessions 0 (infrastructure), 1 (Ingest), 2 (Grouping) and 3 (Scoring) complete —
-session 3 verified 2026-08-21; 7 findings.** Session 4 (Read paths & UI) written 2026-08-21,
-pending its own Verify pass; **zero new findings** — see the note at the end of this file.
+session 3 verified 2026-08-21; 7 findings.** Session 4 (Read paths & UI) written and verified
+2026-08-21; the session found none of its own, and **Verify found P2-008** — six gaps, all in
+tests rather than in production code, all fixed in place. **8 findings.**
 P1's backlog was empty, so P2 started with nothing inherited. **No finding so far has needed an
 `xfail`** — every one has resolved to a fix or to a documentation question, so the debt ledger
 `codebase-health-P.md` §4 sanctions is still empty.
@@ -334,12 +335,105 @@ coverage, not in `grouping.py`, so no finding number and no `xfail` is owed (sam
 session 2's caught-before-shipping gaps, never P2-003/P2-005's own shape, which shipped and were
 only found later).
 
-One process note, not a finding: an ad hoc standalone smoke-test of `tests/golden.py`'s CLI path
-(run directly via `venv/bin/python tests/golden.py`, outside the pytest suite and its `conftest.py`
-guard) briefly read from the real `symr.db` rather than a temp one — an exported `SYMR_DB_PATH`
-from an earlier shell command did not carry into a later one, since shell state does not persist
-between tool calls in this environment. Read-only (`golden.py` issues only GET requests), so
-nothing was modified, and the resulting files (which briefly held real playlist/track content) were
-deleted immediately. The pytest-based `test_golden.py` (six tests, all passing through
-`conftest.py`'s guard) already covers the tooling; no further standalone CLI verification was
-attempted after this.
+One process note, **corrected during Verify** — it is worse than the session recorded, and the
+correction is the reason `tests/golden.py` now carries a guard of its own. An ad hoc standalone
+smoke-test of that file's CLI path (run directly via `venv/bin/python tests/golden.py`, outside the
+pytest suite and its `conftest.py` guard) ran against the real `symr.db` rather than a temp one —
+an exported `SYMR_DB_PATH` from an earlier shell command did not carry into a later one, since
+shell state does not persist between tool calls in this environment. The session recorded this as
+"read-only … nothing was modified", on the reasoning that `golden.py` issues only GET requests.
+**That reasoning does not hold in Symr and the database shows it did not.** `create_app()` calls
+`db.init_db()`, which runs `_migrate()` and `_ensure_views()`; and a plain GET writes — Verify found
+**9 `wanted_uri` rows** stamped `2026-08-22T00:16:20Z` against album `003Zy4JaIUr8s43IBes033` (the
+alphabetically-first album id, which is exactly what `discover()` picks), from the album page's
+`queue_wanted_uris` call, plus one `api_request` row at `00:16:19Z` for a token-refresh POST with
+context `index`. No `api.spotify.com` quota was spent and nothing irreplaceable was touched; the
+rows were left in place, since the album page re-queues them on any visit by design (M §4.4), so
+deleting them would be a second pointless write to the live database rather than an undo.
+
+The lesson is not "be careful with the CLI" — it is that this file is **the one thing in `tests/`
+that runs outside pytest**, so none of §4.1's four guard layers reach it, and the session that
+built it did not notice. `golden.py`'s `__main__` block now refuses to start unless `SYMR_DB_PATH`
+is set *and* resolves somewhere other than the real database — two checks, for §4.1's own stated
+reason: the first is the mechanism, the second catches the day the mechanism changes. The unset
+case is not hypothetical; it is precisely how this happened. The pytest-based `test_golden.py`
+(six tests, all passing through `conftest.py`'s guard) covers the tooling's behaviour; the CLI
+path is now safe to run by hand.
+
+---
+
+### P2-008 — session 4's un-failable tests, and route wiring nothing observed
+
+- **Spec:** `P2_tests.md` §1's two questions, asked of session 4's output during its Verify pass —
+  *would this assertion have told the difference?* and *what does this module produce that no test
+  reads at all?* Plus the clauses each affected test cites: `org-canvas.md`'s corrections section
+  (the tie-break and the per-link cutoff), `generations-B.md` §Spans ("the **earliest** added_at of
+  its **live** memberships"), `entity-pages-K.md` §5.3/§7.1 (at most one Spotify request, on first
+  view only) and `grouping-fixes-backfill-M.md` §4.4/§0.5 (queuing runs on **every** album-page
+  view, which is what makes clearing the queue a real undo).
+- **Code:** test code only, plus `tests/routes_catalog.py`. **No production code was wrong** —
+  every mutation below was reverted, and `entities.py`, `generations.py`, `grouping.py` and
+  `app.py` behave exactly as their specs say.
+- **How it was found:** Verify's independent mutation pass — 66 mutations across the four modules,
+  against the session's own 12. **52 killed, 14 survived**; 9 of the survivors were real and
+  clustered into six gaps, 5 were equivalent or unkillable (listed at the end).
+- **The six gaps**, each confirmed by building the discriminating fixture and re-running the
+  mutant, not by reading:
+  1. **`test_a_tied_label_and_card_the_label_wins` could not fail.** Flipping the tie-break to
+     card-before-label passed all 708 tests. With a single label on the board, losing the tie costs
+     nothing: `resolve()` backtracks, so the card reaches that same label one hop later. This is
+     P2-005's shape exactly — the fixture agreed with both rules — and the fix is one more label,
+     so the tied card leads somewhere else.
+  2. **`generation_spans`' `MIN(added_at)` was unasserted.** `MAX` survived: no fixture ever gave
+     one generation two live memberships at different dates, so MIN and MAX were the same row. The
+     test that should have caught it is the one *about* `started_at`, whose whole design is a
+     removed row dated earlier than the live one — it pins `removed_at IS NULL` and says nothing
+     about "earliest". Fixed with a third membership.
+  3. **The album and artist pages' first-view fetch guards were unobserved** — the second question,
+     not the first. Deleting `if album["tracklist_pulled_at"] is None:`, so that **every** page view
+     spends a Spotify request, passed the whole suite. `test_entities.py` asserts the stamp
+     thoroughly; nothing read the guard that reads the stamp, and the stamp alone enforces nothing.
+     This is the live half of §5's floor item "a failed detail fetch does not retry on the next page
+     view" — the half that is about page views. Three route-level tests now drive the real route
+     twice and count the calls.
+  4. **`queue_wanted_uris`' route wiring was unobserved.** Both moving the call under the first-view
+     guard *and* deleting it outright passed. The function is well tested; its one caller was not.
+  5. **The spans-ordering test asserted something no fixture can test.** Its comment claimed to
+     prove the order "comes from the ORDER BY, not from insertion order" — but `generation.ordinal`
+     is `INTEGER PRIMARY KEY`, so it *is* the rowid and a bare table scan returns ordinal order
+     however the rows went in. Dropping the `ORDER BY` entirely passes and always will. What can
+     actually go wrong is ordering by one of the query's other two columns, so the fixture now
+     names playlist ids and playlist names that sort in the exact reverse of the ordinals.
+  6. **The canvas per-link cutoff boundary was unpinned** (`> cutoff` vs `>=`), where session 4
+     pinned the analogous `play_stats` week boundary. Now pinned.
+- **Also fixed, found alongside:** `Case.slug` promised uniqueness and did not have it —
+  `/api/roundtrip/start` and `/api/roundtrip/reconcile` are two `@app.route` decorators on one view
+  function, so both cases produced `post_start_roundtrip`. Inert while golden capture is GET-only,
+  but the slug is a **snapshot filename**: the day a capture covers POSTs, one silently overwrites
+  the other and `compare()` reports no diff for a route it never compared. A `variant` field and a
+  uniqueness test close it. Also: a `?generation=1` case, since the playlist page's entire
+  generation view was unexercised (the catalog issues query-string-free paths); and some dead code
+  in `test_routes.py`.
+- **Classification:** `underspecified` — in the P2 sense the earlier findings established: the
+  tests cited real clauses and asserted true things, and could not have failed.
+- **The five non-real survivors, written down so nobody re-hunts them:** `grouping.py`'s cutoff
+  `break` → `continue` (candidates are sorted nearest-first, so every later one fails the same
+  check — genuinely equivalent, and the code comment says so); `entities.py`'s
+  `[item["id"] for item in items if item.get("id")]` → unfiltered (a NULL in a SQL `IN` list never
+  matches, so the `owned` set is identical); `generations.py`'s `ORDER BY` removed (unkillable by
+  construction, per gap 5); `api_error` gaining an unused keyword argument (a bad mutation of
+  Verify's own — it changes no payload); and `grouping.py`'s `visiting.discard(card_id)` → `pass`,
+  which **is** a behavioural difference in principle but which Verify could not build a
+  distinguishing graph for — reported as probably-equivalent rather than as a gap, since claiming
+  a gap nobody can demonstrate is how a suite acquires tests that assert nothing.
+- **Ruling:** Fix all of it in Verify (2026-08-21). Every fix is a fixture or a new test, no
+  production behaviour changed. All ten previously-surviving real mutants re-run and **all ten now
+  die**; suite 708 → 715. No `xfail` is owed — nothing is asserted to be broken.
+- **The generalization, which is new.** Sessions 1–3 found un-failable tests inside a module's own
+  unit tests. Session 4's cluster is mostly **one layer up**: `entities.py`'s functions are tested
+  to 100% of lines and behave correctly, and the *route that calls them* could have been rewired to
+  spend a Spotify request on every page view without a single test noticing. A well-tested function
+  plus an unobserved call site is a well-tested function that is not actually wired to anything the
+  suite checks. Where a spec's rule is split across a function and its caller — a stamp written in
+  one place and read in another — **the test has to cross the seam too**, or it pins the half that
+  cannot enforce the rule alone.

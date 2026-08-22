@@ -19,7 +19,6 @@ import pytest
 
 import builders
 import canonical
-import db
 import jobs
 import routes_catalog
 import scoring
@@ -98,16 +97,20 @@ def test_catalog_covers_every_registered_route(app):
     assert catalog - registered == set(), "catalog cases naming a dead route"
 
 
+def test_every_case_slug_is_unique():
+    # source: Case.slug's own contract -- "unique across the catalog". The
+    # slug is a snapshot filename, so a collision means one capture
+    # overwrites another and compare() silently reports no diff for a route
+    # it never compared. Two rules already share an endpoint+method
+    # (roundtrip start/reconcile), which is what `variant` is for (P2-008).
+    slugs = [case.slug for case in routes_catalog.CASES]
+
+    assert len(slugs) == len(set(slugs)), "duplicate case slug(s): " + str(
+        sorted({s for s in slugs if slugs.count(s) > 1})
+    )
+
+
 # -- The sweep --------------------------------------------------------------
-
-
-def _case_id(case):
-    return case.slug
-
-
-@pytest.fixture
-def swept_cases(conn, corpus):
-    return routes_catalog.cases_for(conn)
 
 
 def test_every_route_returns_non_5xx(client, corpus, conn, stub_jobs, fake_spotify):
@@ -224,7 +227,9 @@ def test_fully_backfilled_album_renders_no_first_n_note(client, conn, fake_spoti
 
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert "first" not in body.lower() or "first 2 of 2" not in body.lower()
+    # The note's exact wording, from entity_album.html: "First {n} of
+    # {total};". `A or B` where A implies B collapses to B, so state B.
+    assert "first 2 of 2" not in body.lower()
 
 
 def test_partially_fetched_album_renders_the_first_n_note(client, conn, fake_spotify):
@@ -297,3 +302,113 @@ def test_edit_link_resolves_through_the_deep_link_to_the_viewer(client, corpus):
 
     followed = client.get(resp.headers["Location"])
     assert followed.status_code == 200
+
+
+# -- The one-request-per-page-load ceiling, at the route level ----------
+#
+# entity-pages-K.md's hardest constraint is not that the fetch stores what
+# it fetched -- test_entities.py has that -- but that the page spends AT
+# MOST one Spotify request, on first view, ever. That ceiling lives in
+# app.py's `if album["tracklist_pulled_at"] is None:` guard, and nothing
+# read it until session 4's Verify: deleting the guard, so every single
+# page view spends a request, passed all 708 tests (P2-008). The stamp and
+# the guard that reads it are two halves of one rule and neither is worth
+# anything alone, so these drive the real route twice and count the calls.
+
+
+def test_album_page_fetches_the_tracklist_only_on_the_first_view(client, conn, fake_spotify):
+    # source: entity-pages-K.md §5.3 -- "On first view (tracklist_pulled_at
+    # IS NULL only -- never re-fetched automatically)."
+    album = builders.make_album(conn, "al-guarded", name="Guarded Album", total_tracks=1)
+    conn.commit()
+    fake_spotify.add_album(
+        {
+            "id": album,
+            "tracks": {
+                "items": [
+                    {"id": "tg1", "uri": "spotify:track:tg1", "name": "One", "artists": [], "track_number": 1, "disc_number": 1},
+                ]
+            },
+        }
+    )
+
+    client.get(f"/album/{album}")
+    client.get(f"/album/{album}")
+
+    assert len([c for c in fake_spotify.calls if c[0] == "album"]) == 1
+
+
+def test_a_failed_album_fetch_does_not_retry_on_the_next_page_view(client, conn, fake_spotify):
+    # source: entity-pages-K.md §5.3 (P1-016) -- "a failed attempt now also
+    # stamps tracklist_pulled_at ... it simply stops re-spending a request
+    # on every later visit." The end-to-end half of P2_tests.md §5's floor
+    # item; test_entities.py asserts the stamp, this asserts the ceiling it
+    # exists to enforce.
+    album = builders.make_album(conn, "al-failing", name="Failing Album")
+    conn.commit()
+    fake_spotify.fail("album", Exception("429"))
+
+    client.get(f"/album/{album}")
+    client.get(f"/album/{album}")
+
+    assert len([c for c in fake_spotify.calls if c[0] == "album"]) == 1
+
+
+def test_artist_page_fetches_the_image_only_on_the_first_view(client, conn, fake_spotify):
+    # source: entity-pages-K.md §7.1 -- "on first view (detail_pulled_at IS
+    # NULL only)", the same rule and the same guard shape as the album page.
+    artist = builders.make_artist(conn, "ar-guarded", name="Guarded Artist")
+    conn.commit()
+    fake_spotify.add_artist({"id": artist, "images": [{"url": "https://img/640", "width": 640}]})
+
+    client.get(f"/artist/{artist}")
+    client.get(f"/artist/{artist}")
+
+    assert len([c for c in fake_spotify.calls if c[0] == "artist"]) == 1
+
+
+def test_album_page_requeues_a_cleared_wanted_uri_on_every_view(client, conn, fake_spotify):
+    # source: grouping-fixes-backfill-M.md §4.4/§0.5 -- queue_wanted_uris
+    # runs on EVERY album-page view, not just the first, "which is what
+    # makes clearing a queue a real undo instead of a trap, since a cleared
+    # uri comes back the moment the page is revisited." The route-level
+    # wiring, which nothing read: moving the call under the first-view
+    # guard -- or deleting it outright -- passed the whole suite (P2-008).
+    album = builders.make_album(conn, "al-requeue", name="Requeue Album")
+    conn.commit()
+    fake_spotify.add_album(
+        {
+            "id": album,
+            "tracks": {
+                "items": [
+                    {"id": "t-unowned", "uri": "spotify:track:t-unowned", "name": "U", "artists": [], "track_number": 1, "disc_number": 1},
+                ]
+            },
+        }
+    )
+
+    client.get(f"/album/{album}")
+    assert conn.execute("SELECT COUNT(*) FROM wanted_uri").fetchone()[0] == 1
+
+    conn.execute("DELETE FROM wanted_uri")
+    conn.commit()
+
+    client.get(f"/album/{album}")
+
+    assert conn.execute("SELECT COUNT(*) FROM wanted_uri").fetchone()[0] == 1
+
+
+def test_playlist_generation_view_renders_the_generation_split(client, corpus):
+    # source: CLAUDE.md's route map -- "/playlist/<id> (?generation=1
+    # renders the generation view, ?tier= toggles it)". A whole alternate
+    # render path on an already-swept route: the catalog issues the bare
+    # path, so nothing exercised this branch at all (P2-008). Asserts the
+    # view's own content, not just a 200 -- P2_tests.md §1's warning.
+    resp = client.get(f"/playlist/{corpus['gen_playlist']}?generation=1")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Corpus Track One" in body
+
+    tiered = client.get(f"/playlist/{corpus['gen_playlist']}?generation=1&tier=song")
+    assert tiered.status_code == 200
