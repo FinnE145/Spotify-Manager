@@ -14,3 +14,7 @@ htmlcov/
 .spotipy_cache*
 .claude/*
 !.claude/skills/
+
+# Golden-snapshot capture output (P2_tests.md §4.6) -- the tooling
+# (tests/golden.py) is committed, captured snapshots never are.
+tests/golden_snapshots/

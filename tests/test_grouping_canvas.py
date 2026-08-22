@@ -76,6 +76,27 @@ def test_a_dead_ending_nearest_neighbor_backtracks_to_a_farther_candidate(conn):
     assert a in group_for(result, "l")
 
 
+def test_a_cycle_skip_backtracks_past_the_visited_card_not_just_stops(conn):
+    # source: org-canvas.md, same section -- "a mutually-nearest cluster
+    # still resolves to whichever label is reachable from it" and the
+    # `visiting` set exists so a cycle is skipped ("continue") rather than
+    # aborting the whole search ("break"). This must hold even when the
+    # visited card isn't the last candidate tried: A's only candidate is B;
+    # B's nearest candidate is A (visited, must be *skipped*, not treated as
+    # a dead end), and B's next candidate D chains on to a label. A fixture
+    # where the visited candidate is always the last one tried can't tell
+    # "skip and keep going" apart from "stop" -- this one can.
+    cutoff = 50
+    a = card("a", 0, 0)
+    b = card("b", 10, 0)  # A's only candidate (dist 10); A-D is 55, out of range
+    d = card("d", 55, 0)  # B's second candidate (dist 45); reaches the label
+    lbl = label("l", 95, 0)  # reachable only from D (dist 40)
+
+    result = group_cards([a, b, d], [lbl], cutoff)
+
+    assert a in group_for(result, "l")
+
+
 def test_two_mutually_nearest_cards_with_no_reachable_label_both_go_ungrouped(conn):
     # source: org-canvas.md, same section -- "If a card's nearest neighbor
     # leads into a cycle (e.g. two cards that are each other's nearest
