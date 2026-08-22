@@ -27,6 +27,8 @@ sees the same ids and an assertion can name one literally.
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+import db
+
 _counters = defaultdict(int)
 
 # For the one parameter whose None is a meaningful value rather than "give me
@@ -412,3 +414,86 @@ def _insert(conn, table, row):
     return conn.execute(
         f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", tuple(row.values())
     )
+
+
+# -- The org canvas ----------------------------------------------------------
+
+
+def make_board(conn, name=None):
+    """An *extra* `board` row, beyond the default one. Returns its id.
+
+    Rarely what you want. `db.init_db()` already seeds board
+    `db.DEFAULT_BOARD_ID` (1), and every canvas route hard-codes that id in its
+    WHERE clause -- so a card built on a board from here is invisible to all of
+    them, and the route still answers 200 with an empty canvas. That is a
+    passing test that observes nothing, so `make_card`/`make_label` default to
+    the seeded board and this exists only for a test that genuinely wants a
+    second one (e.g. asserting the routes ignore it).
+    """
+    cursor = conn.execute("INSERT INTO board (name) VALUES (?)", (name or _next("board"),))
+    conn.commit()
+    return cursor.lastrowid
+
+
+def make_card(conn, board_id=None, x=None, y=None, display_name=None, **overrides):
+    """One `card` row. Returns its id.
+
+    **`placement` defaults to `'placed'` here, where the schema defaults to
+    `'tray'`.** Deliberate, and the opposite of the usual builder rule of
+    mirroring the schema: `grouping.group_cards` filters to placed cards on its
+    first line, so a builder defaulting to the schema value would hand every
+    grouping test an empty canvas -- and the test would pass, having grouped
+    nothing. A test about the tray says so explicitly.
+
+    x/y default to 0, which is a real coordinate: the grouping tests are about
+    distances, so every one of them passes both anyway.
+    """
+    if board_id is None:
+        board_id = db.DEFAULT_BOARD_ID
+    row = {
+        "board_id": board_id,
+        "entity_type": "playlist",
+        "entity_id": _next("card-entity"),
+        "display_name": display_name or _next("card"),
+        "image_url": None,
+        "note": "",
+        "placement": "placed",
+        "x": 0.0 if x is None else x,
+        "y": 0.0 if y is None else y,
+    }
+    row.update(overrides)
+    cursor = _insert(conn, "card", row)
+    conn.commit()
+    return cursor.lastrowid
+
+
+def make_label(conn, board_id=None, x=0.0, y=0.0, text=None):
+    """One `label` row on the default board. Returns its id."""
+    if board_id is None:
+        board_id = db.DEFAULT_BOARD_ID
+    cursor = conn.execute(
+        "INSERT INTO label (board_id, text, x, y) VALUES (?, ?, ?, ?)",
+        (board_id, text if text is not None else _next("label"), x, y),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+# -- Relinked uris -----------------------------------------------------------
+
+
+def make_uri_alias(conn, requested_uri, track_id):
+    """One `track_uri_alias` row: Spotify served `track_id` for a request for
+    `requested_uri`.
+
+    This is what makes `played_uri_track` more than `track.uri`, so any test
+    asserting that a read path resolves relinked plays needs a uri here that is
+    **not** the track's own -- otherwise a naive `JOIN track ON track.uri`
+    would satisfy it too, and the assertion could not fail.
+    """
+    make_track(conn, track_id)
+    conn.execute(
+        "INSERT OR REPLACE INTO track_uri_alias (requested_uri, track_id) VALUES (?, ?)",
+        (requested_uri, track_id),
+    )
+    conn.commit()
