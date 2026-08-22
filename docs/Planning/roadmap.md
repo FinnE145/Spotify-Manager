@@ -161,6 +161,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
       DONE                                  DONE                          DONE
 
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
+                            DONE            DONE        NEXT
   ──► O (request budgets) ──► F/G ──► L (better search)
 ```
 
@@ -168,7 +169,8 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N and J have landed.** Their sections below are marked, and each points
+**A, I, C, D, E, B, K, H, M, N and J have landed**, and **P is two parts of three done** (P1 and
+P2; P3 is the next thing to plan). Their sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
@@ -668,12 +670,20 @@ answered in `codebase-health-P.md` §9.
   existing bugs into a permanently green suite — the audit is what makes P2's assertions
   trustworthy. Explicitly **not** behaviour-preserving: it will surface real bugs, some fixed
   inline. → `docs/codebase-health/P1_spec_audit.md`
-- **P2 — tests.** pytest in `tests/`, all four tiers (pure functions, routes, DB-bound logic,
-  Spotify-bound loops), JS out of scope. Plus the permanent workflow changes that keep the suite
-  alive: Verify runs it before finish-up, Implement runs it before handing off, and every future
-  spec carries a Tests section.
-- **P3 — refactor.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
-  snapshots over all 69 routes. Strictly behaviour-preserving.
+- **P2 — tests. ✅ DONE** (six sessions, each merged on its own; verified 2026-08-22). pytest in
+  `tests/`, all four tiers (pure functions, routes, DB-bound logic, Spotify-bound loops), **JS out
+  of scope by decision**. `venv/bin/python -m pytest`, **770 tests**, a few seconds. All three
+  permanent workflow changes landed and are live: Verify runs it before finish-up, Implement runs
+  it before handing off, and every future spec carries a Tests section. **Authoritative for what
+  shipped:** `docs/codebase-health/P2_tests.md` (the instructions, incl. §5's test floor and §7's
+  coverage discipline) and `docs/codebase-health/P2_findings.md` (**10 findings**, all ruled; the
+  `xfail` ledger is empty, so nothing is deferred). Two findings are carried forward deliberately
+  as `unclear` and are **explicitly not P3 deletion candidates** — P2-004 and P2-009.
+- **P3 — refactor. ← next.** The pre-spec's four findings, verified against P2 by byte-exact HTML
+  golden snapshots over all 69 routes (the tooling is committed and inert in `tests/golden.py`;
+  P3 captures before, diffs after, deletes). Strictly behaviour-preserving. One deletion is
+  already queued and evidenced: `canonical_detect.all_candidate_groups`, condemned by P1-009 on a
+  full caller search.
 
 The four original findings, in the order they'd bite:
 
