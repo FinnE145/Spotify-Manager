@@ -36,6 +36,11 @@ If port 45660 is occupied, **stop and flag it to Finn before writing any code** 
 - **One try, then ask.** If an approach fails on the first attempt, stop and ask — no second approach, no layered hacky workarounds. Surface the problem.
 - Number questions (sub-letters when nesting). KISS everywhere except security and never-touch-the-real-library, which get done fully and properly.
 
+## Before handing off
+**Run `venv/bin/python -m pytest` before you tell Finn you're done**, whether or not you wrote tests. Breakage caught here belongs to the session that caused it; caught in Verify it belongs to a session that has to work out what happened first (`docs/specs/codebase-health-P.md` §7).
+
+If it's red, say so plainly with the failing test names and stop — a failure is a finding, not something to work around. Never weaken or delete a test to get a green run; if a test now asserts the wrong thing because the spec deliberately changed it, that is a change to make openly and to tell Finn about, not quietly.
+
 ## Committing
 - Commit in Finn's name, only when he asks, in logical units — a few implementation commits as needed depending on scope and fixes-as-you-go, stacked on the spec commit.
 - **Don't push, and don't merge to `main`** — that's the Verify finish-up, not this phase.

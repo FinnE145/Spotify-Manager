@@ -21,13 +21,16 @@ That block is written at session start, so it's a *fresh-session* check. If Finn
 3. Echo what you're verifying — "verifying `docs/specs/X.md` on branch `feat/Y` vs `main`" — before starting.
 
 ## Review
+- **Run the test suite first: `venv/bin/python -m pytest`.** Do this before reading the diff — a red suite changes what the review is about, and finding out after you've reviewed everything wastes the pass.
 - Diff the branch against `main` and check it against the spec: is everything specced actually built, and is anything built that the spec didn't call for?
-- Run the app / tests and confirm the feature works. Prefer driving the real behavior over trusting the code.
+- Run the app and confirm the feature works. Prefer driving the real behavior over trusting the code.
 - **Hand focus/blur-dependent or final-visual checks to Finn** rather than engineering synthetic-event workarounds — a programmatic `blur()` won't fire without real OS focus, so it's wasted effort. Batch such manual checks to the end. An ungated harness for *objective* checks (dimensions, DOM state) is fine — delete it when done.
 - Report findings. Fix only what Finn confirms; if bigger work is needed, hand back to a new implement chat.
 
 ## Finish-up (only when Finn says so)
-When Finn says finish up / looks good, and once verification has passed:
+**The suite must pass before any of this.** `venv/bin/python -m pytest`, green, on the branch as it stands — this is the gate, and it is the reason the suite exists (`docs/specs/codebase-health-P.md` §7): regression coverage that only runs when someone remembers is not coverage. Verify is exactly where "looks good, finish up" happens, so this is where it is enforced. A failure is a finding to report, never something to skip past or to fix by weakening the test.
+
+When Finn says finish up / looks good, and once verification and the suite have both passed:
 1. **Update the Codebase Map in `CLAUDE.md`** to cover anything the feature added or moved — new modules, templates, `static/js/` files, directories, renamed routes. It's the map a fresh session reads first, and it goes stale silently. Check it against the real tree (`ls` the repo), not just against the diff.
 2. **Check the step off in `docs/Planning/roadmap.md`** if the spec names a roadmap step (its header line says so). Mark that step's section `✅ DONE`, point it at the spec that is now authoritative for what shipped, update the *Order* diagram and the "X, Y and Z have landed" line, and correct anything the section claims that implementation disproved. If the spec came from no roadmap step, skip this and say so.
 3. Commit any confirmed verify-phase fixes in his name (logical units), including that map update.
