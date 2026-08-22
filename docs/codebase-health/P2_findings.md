@@ -10,9 +10,11 @@ two sets must match exactly** — a bug in one and not the other is the failure 
 exists to prevent.
 
 **Status: sessions 0 (infrastructure), 1 (Ingest), 2 (Grouping) and 3 (Scoring) complete —
-session 3 verified 2026-08-21; 7 findings.** P1's backlog was empty, so P2 started with nothing
-inherited. **No finding so far has needed an `xfail`** — every one has resolved to a fix or to a
-documentation question, so the debt ledger `codebase-health-P.md` §4 sanctions is still empty.
+session 3 verified 2026-08-21; 7 findings.** Session 4 (Read paths & UI) written 2026-08-21,
+pending its own Verify pass; **zero new findings** — see the note at the end of this file.
+P1's backlog was empty, so P2 started with nothing inherited. **No finding so far has needed an
+`xfail`** — every one has resolved to a fix or to a documentation question, so the debt ledger
+`codebase-health-P.md` §4 sanctions is still empty.
 
 **Tests that could not fail are now the bulk of the record** — P2-003, P2-005 and P2-007's four,
 plus session 1's pair, which `codebase-health-P.md` §10 records rather than numbering. That is the
@@ -303,3 +305,41 @@ and `tier_counts` were not asserted *at all*, and the worker test asserted a cou
 forced by something other than the rule under test. Ask of a green suite not only "would this
 notice a wrong answer?" but "is there a column, a return value or a code path here that nothing
 reads?" — the second question is what mutation answers cheaply and review does not.
+
+---
+
+## Session 4 — Read paths & UI
+
+**Zero findings.** `entities.py`, `generations.py`, `grouping.py`'s org-canvas grouping, the
+`/api/*` error shape (P1-014), the permanent 69-route sweep, and the golden snapshot capture/
+compare tooling were all written against their audited specs, with source comments citing
+`entity-pages-K.md`, `generations-B.md` and `org-canvas.md`'s "Corrections to current behavior
+(P1-012)" section throughout (108 tests: `test_entities.py` (25), `test_generations.py` (40),
+`test_grouping_canvas.py` (13), `test_api_errors.py` (8), `test_template_conventions.py` (2),
+`test_routes.py` (14), `test_golden.py` (6) — bringing the suite from 600 to 708).
+
+A 12-item mutation pass ran against `entities.py`, `generations.py`, `app.py`'s error handling and
+`grouping.py` during writing (session 2's pattern, not session 3's — this session's targets were
+small and read-only enough to check as they were written). 11 of 12 died on the first try. The
+12th — `resolve()`'s cycle-skip (`continue`) mutated to abort the whole search (`break`) — survived
+against the existing fixtures: every fixture had the visited (cycled-back-to) candidate as the
+*last* one in its list, so `continue` and `break` were indistinguishable (nothing left to try
+either way). This is the same class of gap P2-003/P2-005 named — the fixture, not the assertion,
+was too simple, though here for a mutation rather than for the shipped test suite. Fixed by adding
+`test_a_cycle_skip_backtracks_past_the_visited_card_not_just_stops`, which nests the visited
+candidate one level deeper (A's only candidate is B; B's *first* candidate is the visited A, its
+*second* is a card that reaches a label) so `continue`-past-the-visited-candidate and
+`break`-out-entirely diverge. Re-run: killed. No production code changed — the gap was in test
+coverage, not in `grouping.py`, so no finding number and no `xfail` is owed (same disposition as
+session 2's caught-before-shipping gaps, never P2-003/P2-005's own shape, which shipped and were
+only found later).
+
+One process note, not a finding: an ad hoc standalone smoke-test of `tests/golden.py`'s CLI path
+(run directly via `venv/bin/python tests/golden.py`, outside the pytest suite and its `conftest.py`
+guard) briefly read from the real `symr.db` rather than a temp one — an exported `SYMR_DB_PATH`
+from an earlier shell command did not carry into a later one, since shell state does not persist
+between tool calls in this environment. Read-only (`golden.py` issues only GET requests), so
+nothing was modified, and the resulting files (which briefly held real playlist/track content) were
+deleted immediately. The pytest-based `test_golden.py` (six tests, all passing through
+`conftest.py`'s guard) already covers the tooling; no further standalone CLI verification was
+attempted after this.
