@@ -165,7 +165,6 @@ def index_data(conn, q):
         "query": q,
         "track_matches": track_matches,
         "changes": changes,
-        "liked_playlist_id": LIKED_PLAYLIST_ID,
     }
 
 

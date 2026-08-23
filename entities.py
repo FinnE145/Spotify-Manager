@@ -255,7 +255,6 @@ def group_detail(conn, tier, group_id):
         "stats": play_stats(conn, track_ids),
         "playlists": playlists_for_tracks(conn, track_ids),
         "tracks_by_id": tracks_by_id,
-        "track_scores": track_scores,
         # "song" isn't a materialized tier (§9.1) -- it aggregates at
         # query time from its member versions, same as album/artist/
         # playlist, so it needs song_scores() rather than a direct lookup.
