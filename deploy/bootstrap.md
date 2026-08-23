@@ -26,23 +26,32 @@ In the Spotify developer dashboard, add `https://fe-pro.tail78f5ec.ts.net/callba
 second redirect URI on the app — **keep the existing loopback one**
 (`http://127.0.0.1:45660/callback`), which the laptop still uses.
 
-## 3. Create `/srv/symr`
+## 3. Create `/srv/stacks/symr`
 
-The one privileged step — `/srv` is root-owned.
+The one privileged step — `/srv/stacks` is root-owned. Use `ssh -t`, since `sudo` prompts.
 
 ```bash
-ssh fe-pro "sudo mkdir -p /srv/symr && sudo chown 1000:1000 /srv/symr"
+ssh -t fe-pro "sudo mkdir -p /srv/stacks/symr && sudo chown 1000:1000 /srv/stacks/symr"
 ```
+
+**`/srv/stacks/<service>/` is the machine's convention, not Symr's choice** — one directory per
+hosted service, each with a `data/` subdirectory bind-mounted to `/data` in its container. The
+Minecraft stack at `/srv/stacks/minecraft/` is the same shape, and Docker's own `data-root` is
+moved to `/srv/docker` by `/etc/docker/daemon.json`. `~/SERVER.md` on the machine is the full
+description. Symr diverges in two ways on purpose: its stack directory is `finne`-owned rather
+than root-owned, so `deploy.sh` needs no `sudo`; and its compose file stays inside `repo/deploy/`
+rather than at the stack root, because Symr is built from source and the compose belongs with the
+commit it builds.
 
 ## 4. Clone the repo
 
 ```bash
-ssh fe-pro "git clone https://github.com/FinnE145/Spotify-Manager /srv/symr/repo"
+ssh fe-pro "git clone https://github.com/FinnE145/Spotify-Manager /srv/stacks/symr/repo"
 ```
 
 ## 5. Write `symr.env`
 
-Copy `deploy/symr.env.example` to `/srv/symr/symr.env` on the server (mode 600), and fill
+Copy `deploy/symr.env.example` to `/srv/stacks/symr/symr.env` on the server (mode 600), and fill
 in the real values — same Spotify client id/secret as the laptop, the server's own
 redirect URI (already in the example), and a **fresh** `SYMR_SECRET_KEY`:
 
@@ -53,9 +62,9 @@ ssh fe-pro "python3 -c 'import secrets; print(secrets.token_hex(32))'"
 Do not reuse the laptop's `SYMR_SECRET_KEY`.
 
 ```bash
-scp deploy/symr.env.example fe-pro:/srv/symr/symr.env
-ssh fe-pro "chmod 600 /srv/symr/symr.env"
-# then edit /srv/symr/symr.env on the server by hand
+scp deploy/symr.env.example fe-pro:/srv/stacks/symr/symr.env
+ssh fe-pro "chmod 600 /srv/stacks/symr/symr.env"
+# then edit /srv/stacks/symr/symr.env on the server by hand
 ```
 
 ## 6. Copy the database across
@@ -69,14 +78,14 @@ compacted file with no `-wal`/`-shm` to carry across, which is the same reason �
 the nightly backup.
 
 ```bash
-ssh fe-pro "mkdir -p /srv/symr/data"
+ssh fe-pro "mkdir -p /srv/stacks/symr/data"
 
 python3 -c "import sqlite3; c = sqlite3.connect('symr.db'); c.execute('VACUUM INTO ?', ('/tmp/symr-transfer.db',)); c.close()"
-rsync -az /tmp/symr-transfer.db fe-pro:/srv/symr/data/symr.db
+rsync -az /tmp/symr-transfer.db fe-pro:/srv/stacks/symr/data/symr.db
 rm /tmp/symr-transfer.db
 
-rsync -az .spotipy_cache fe-pro:/srv/symr/data/.spotipy_cache
-rsync -az data/streaming_history fe-pro:/srv/symr/data/
+rsync -az .spotipy_cache fe-pro:/srv/stacks/symr/data/.spotipy_cache
+rsync -az data/streaming_history fe-pro:/srv/stacks/symr/data/
 ```
 
 Check the row counts match on both sides before going further — `track`, `play`,
@@ -84,8 +93,8 @@ Check the row counts match on both sides before going further — `track`, `play
 spread, and a truncated transfer shows up immediately.
 
 No trailing slash on `data/streaming_history` — with one, rsync copies the folder's
-*contents* into `/srv/symr/data/` and the timestamped export folders land loose there
-instead of under `/srv/symr/data/streaming_history/`, which is where `SYMR_UPLOAD_ROOT`
+*contents* into `/srv/stacks/symr/data/` and the timestamped export folders land loose there
+instead of under `/srv/stacks/symr/data/streaming_history/`, which is where `SYMR_UPLOAD_ROOT`
 points.
 
 Copying `.spotipy_cache` means no re-login is needed on first boot — see step 10.
@@ -102,7 +111,7 @@ Run this **on the server** (`ssh fe-pro` first), so the quoting stays readable:
 python3 - <<'EOF'
 import sqlite3
 
-conn = sqlite3.connect("/srv/symr/data/symr.db")
+conn = sqlite3.connect("/srv/stacks/symr/data/symr.db")
 n = conn.execute(
     "UPDATE play_import SET folder = '/data/streaming_history/' || "
     "substr(folder, length('data/streaming_history/') + 1) "
@@ -121,7 +130,7 @@ from the laptop. Use `ssh -t`: every `sudo` here prompts for a password.
 
 ```bash
 ssh -t fe-pro "sudo mkdir -p /var/backups/symr && sudo chown 1000:1000 /var/backups/symr"
-ssh -t fe-pro "sudo cp /srv/symr/repo/deploy/symr-backup.{service,timer} /etc/systemd/system/ && \
+ssh -t fe-pro "sudo cp /srv/stacks/symr/repo/deploy/symr-backup.{service,timer} /etc/systemd/system/ && \
   sudo systemctl daemon-reload && \
   sudo systemctl enable --now symr-backup.timer"
 ```
@@ -132,7 +141,7 @@ Confirm with `systemctl list-timers symr-backup.timer` — it should show the ne
 ## 8. Build and start the container
 
 ```bash
-ssh fe-pro "cd /srv/symr/repo/deploy && docker compose up -d --build"
+ssh fe-pro "cd /srv/stacks/symr/repo/deploy && docker compose up -d --build"
 ```
 
 ## 9. Start `tailscale serve`

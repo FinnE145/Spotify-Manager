@@ -59,8 +59,16 @@ property that matters. Both are in one box, so §7.4 covers the off-machine copy
 
 ### 1.2 Filesystem layout on the server
 
+**Corrected 2026-08-23, after bootstrap.** This step originally put Symr at `/srv/symr/`, a peer
+of `/srv/stacks` and `/srv/docker`. That broke a convention the machine had already established
+and which nothing on it documents: `/srv/stacks/<service>/` is one directory per hosted service,
+holding its compose file and a `data/` subdirectory bind-mounted to `/data` (the Minecraft stack
+is exactly that shape), while `/etc/docker/daemon.json` keeps Docker's `data-root` on `/srv/docker`.
+Symr is a service and belongs under `/srv/stacks/` like any other. `deploy/bootstrap.md` and
+`~/SERVER.md` on the machine record the convention so it stops being implicit.
+
 ```
-/srv/symr/
+/srv/stacks/symr/
   repo/                      the git clone (code only; deploy replaces it wholesale)
   symr.env                   the environment file — NOT in git, mode 600
   data/                      the persistent volume, bind-mounted to /data in the container
@@ -70,8 +78,16 @@ property that matters. Both are in one box, so §7.4 covers the off-machine copy
 /var/backups/symr/           nightly VACUUM INTO output, on the OS drive
 ```
 
-`/srv` is root-owned, so creating `/srv/symr` is the one bootstrap step needing `sudo`; it is
-then `chown`ed to `1000:1000` and everything after runs unprivileged.
+`/srv/stacks` is root-owned, so creating `/srv/stacks/symr` is the one bootstrap step needing
+`sudo`; it is then `chown`ed to `1000:1000` and everything after runs unprivileged. That
+ownership is a deliberate divergence from the Minecraft stack beside it, whose directory and
+compose file are root-owned: keeping Symr's `finne`-owned is what lets `deploy.sh` pull and
+rebuild without `sudo`.
+
+Symr's compose file is also **not** at the stack root, where Minecraft's hand-written one sits —
+it stays in the repo at `repo/deploy/docker-compose.yml`, versioned with the code it builds. The
+Minecraft stack pulls a published image and so needs no checkout; Symr builds from source, so a
+copy at the stack root would be a second file free to disagree with the one in git.
 
 ---
 
@@ -198,9 +214,9 @@ services:
   symr:
     build: { context: .., dockerfile: deploy/Dockerfile }
     container_name: symr
-    env_file: /srv/symr/symr.env
+    env_file: /srv/stacks/symr/symr.env
     volumes:
-      - /srv/symr/data:/data
+      - /srv/stacks/symr/data:/data
     ports:
       - "127.0.0.1:45660:45660"
     restart: unless-stopped
@@ -240,7 +256,7 @@ processes do not. **Any future change here must keep the server single-process.*
 
 ### 4.4 Paths and the environment file
 
-`/srv/symr/symr.env`, mode `600`, owned by `finne`. Never in git; `deploy/symr.env.example`
+`/srv/stacks/symr/symr.env`, mode `600`, owned by `finne`. Never in git; `deploy/symr.env.example`
 records the keys with placeholder values.
 
 | Key | Server value | Note |
@@ -282,7 +298,7 @@ restart.
 
 Three places must gain the key, and **all three are part of this step**:
 
-1. `/srv/symr/symr.env` — during bootstrap.
+1. `/srv/stacks/symr/symr.env` — during bootstrap.
 2. The laptop's `.env` — generated with `secrets.token_hex(32)`. **This has to land before or with
    the `config.py` change**, or the laptop app stops starting.
 3. `tests/conftest.py` — in the block above the first project import, beside the three Spotify
@@ -448,12 +464,12 @@ re-does it would be dangerous.
 1. **Finn:** enable HTTPS Certificates in the Tailscale admin console (§3.1).
 2. **Finn:** add `https://fe-pro.tail78f5ec.ts.net/callback` to the Spotify dashboard, keeping the
    loopback URI (§3.2).
-3. `sudo mkdir -p /srv/symr && sudo chown 1000:1000 /srv/symr` — the one privileged step.
-4. `git clone` into `/srv/symr/repo`.
-5. Write `/srv/symr/symr.env` (mode 600) from `deploy/symr.env.example`, generating a fresh
+3. `sudo mkdir -p /srv/stacks/symr && sudo chown 1000:1000 /srv/stacks/symr` — the one privileged step.
+4. `git clone` into `/srv/stacks/symr/repo`.
+5. Write `/srv/stacks/symr/symr.env` (mode 600) from `deploy/symr.env.example`, generating a fresh
    `SYMR_SECRET_KEY`.
 6. **Stop the laptop app**, then `rsync` `symr.db`, `.spotipy_cache` and `data/streaming_history/`
-   into `/srv/symr/data/`. Stopping first is what makes the copy consistent — this is the one
+   into `/srv/stacks/symr/data/`. Stopping first is what makes the copy consistent — this is the one
    transfer not protected by `VACUUM INTO`.
 7. `sudo mkdir -p /var/backups/symr && sudo chown 1000:1000 /var/backups/symr`; install and enable
    the timer.
@@ -473,8 +489,8 @@ registered for future logins and is verified by clicking through `/login` once.
 `deploy/deploy.sh`, run **from the laptop**. Assumes the branch has already been merged to `main`
 and pushed, which is the Verify finish-up's job.
 
-1. `ssh fe-pro` → `git -C /srv/symr/repo pull --ff-only`
-2. `docker compose -f /srv/symr/repo/deploy/docker-compose.yml up -d --build`
+1. `ssh fe-pro` → `git -C /srv/stacks/symr/repo pull --ff-only`
+2. `docker compose -f /srv/stacks/symr/repo/deploy/docker-compose.yml up -d --build`
 3. Health check, retried for up to 30 s: `curl` `http://127.0.0.1:45660/login` on the host,
    expecting **302**.
 4. §7.4's gated backup pull.

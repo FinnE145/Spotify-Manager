@@ -1,12 +1,12 @@
-# docs/specs/host-on-fe-pro-Q.md §4.2. Run from /srv/symr/repo/deploy on
+# docs/specs/host-on-fe-pro-Q.md §4.2. Run from /srv/stacks/symr/repo/deploy on
 # fe-pro: `docker compose -f docker-compose.yml up -d --build`.
 services:
   symr:
     build: { context: .., dockerfile: deploy/Dockerfile }
     container_name: symr
-    env_file: /srv/symr/symr.env
+    env_file: /srv/stacks/symr/symr.env
     volumes:
-      - /srv/symr/data:/data
+      - /srv/stacks/symr/data:/data
     ports:
       # Loopback only -- never 0.0.0.0. §3.3: Symr is unauthenticated at the
       # app level and relies entirely on Tailscale as the reachability

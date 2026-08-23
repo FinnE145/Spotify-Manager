@@ -11,7 +11,7 @@ set -eu
 # the database is in WAL mode, so live data is split across symr.db and
 # symr.db-wal, and a bare copy mid-write would silently produce a torn file.
 
-DB_PATH="/srv/symr/data/symr.db"
+DB_PATH="/srv/stacks/symr/data/symr.db"
 BACKUP_DIR="/var/backups/symr"
 RETENTION_DAYS=30
 

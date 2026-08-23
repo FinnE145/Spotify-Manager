@@ -6,7 +6,7 @@ set -eu
 # not this script's.
 
 HOST="fe-pro"
-REPO="/srv/symr/repo"
+REPO="/srv/stacks/symr/repo"
 COMPOSE="$REPO/deploy/docker-compose.yml"
 
 echo "deploy.sh: pulling latest on $HOST"
