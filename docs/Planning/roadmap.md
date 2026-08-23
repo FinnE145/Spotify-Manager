@@ -170,7 +170,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
 **A, I, C, D, E, B, K, H, M, N and J have landed**, and **P is two parts of three done, with the
-third in progress** (P1 and P2 merged; P3 is specced and its sessions 1 and 2 of 3 have landed). Their
+third's three sessions all landed and only its Verify pass outstanding** (P1 and P2 merged). Their
 sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
@@ -690,8 +690,8 @@ answered in `codebase-health-P.md` §9.
   coverage discipline) and `docs/codebase-health/P2_findings.md` (**10 findings**, all ruled; the
   `xfail` ledger is empty, so nothing is deferred). Two findings are carried forward deliberately
   as `unclear` and are **explicitly not P3 deletion candidates** — P2-004 and P2-009.
-- **P3 — refactor. ← in progress; sessions 1 and 2 of 3 landed 2026-08-22 → `docs/codebase-health/P3_refactor.md` is
-  authoritative.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
+- **P3 — refactor. ← all three sessions landed 2026-08-22; only P3's Verify pass remains →
+  `docs/codebase-health/P3_refactor.md` is authoritative.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
   snapshots (the tooling is committed and inert in `tests/golden.py`; P3 captures before, diffs
   after, deletes). Strictly behaviour-preserving. **Three sessions**: golden harness + the small
   fixes, the six entity pages, the three dev pages + close-out. **Nine views extracted, ~583
@@ -705,10 +705,27 @@ answered in `codebase-health-P.md` §9.
   cleanup backlog beyond it. **Sessions 1 and 2 are done and merged**: harness built, gate proved, baseline
   captured once, and the three small changes (the deletion, the cycle, the `SELECT *` sites) landed
   at zero golden diffs; then the six entity pages plus `generation_view`, taking `conn.execute` in
-  `app.py` **42 → 19** and `create_app` 1,620 → 1,161, again at zero golden diffs. Five findings
-  ruled in `docs/codebase-health/P3_findings.md`. **The three dev pages and the close-out remain** —
-  and P3-005 adds one job to session 3: sweep those three payloads for keys only golden observes
-  *before* deleting the snapshots, because afterwards there is nothing left to attribute a catch to.
+  `app.py` **42 → 19** and `create_app` 1,620 → 1,161, again at zero golden diffs. **Session 3 closed
+  it out**: `/dev/canonical` to `canonical_detect.index_data`, `/dev/snapshot` to
+  `snapshot.index_data`, and `/dev/generations/tenure` to `entities.tenure_page` — `entities`, not
+  the `generations.py` §4.1 named, because that page ranks by score before paginating and
+  `scoring.py` imports `generations`, so the obvious home would have closed a cycle in the step
+  whose §8 forbids one (**P3-006**, and its lesson is that ownership and the import graph are two
+  constraints where only §4.1.1's one view had both checked). `conn.execute` in `app.py` finished at
+  **13**, `app.py` at 1,077 lines, zero golden diffs throughout. **P3-007 is the session's real
+  work**: P3-005's assignment, discharged as 38 mutations over the three payloads and their route
+  wiring, each run against the suite and the compare *separately* — **16 of 38 were held by golden
+  alone and 4 by nothing**, and two of that four turned out not to be missing tests at all but a
+  dead payload key (`liked_playlist_id`, nothing in the tree reads it, ruled record-not-remove like
+  P3-005's `track_scores`) and a rule no case in the catalog can express (a search lifting the
+  listing cap, because every `?q=` case matches fewer rows than the cap). 26 tests later, 19 of the
+  20 uncaught mutations die against the permanent suite and the twentieth is the dead key, so the
+  golden suite was redundant before it was retired — which is the finish line P3-004 named. Seven
+  findings ruled in `docs/codebase-health/P3_findings.md`. **P3's own Verify pass is what remains**
+  (`codebase-health-P.md` §8), and it — not session 3 — **deletes the snapshots**, deliberately: both
+  earlier Verify passes found what they found by *re-running* the compare and the measurement rather
+  than reading the session's account of them, and §3.4 forbids re-capturing what session 3 would
+  have thrown away.
 
 The four original findings, in the order they'd bite:
 
