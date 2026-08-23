@@ -851,3 +851,31 @@ def test_the_generation_count_is_every_generation_not_every_row(conn):
 
     assert data["generation_count"] == 3
     assert len(data["spans"]) == 3
+
+
+def test_tenure_page_reports_the_tier_it_was_asked_for_alongside_that_tier_s_ids(conn):
+    # source: generations_tenure.html:52 -- `entity_link(tier, r.group_id,
+    # ...)`. The echoed tier and the rows' group ids are one pair, not two
+    # independent values: group ids are per-tier, so a tier that disagrees
+    # with the ids it is rendered beside links every row to a *different*
+    # group at the wrong tier, and takes the tier toggle (:21/:23) and every
+    # sort and pager link with it.
+    #
+    # Found by P3's Verify pass (P3-008): hardcoding `"tier": "version"`
+    # survived the whole suite, because every other tenure_page test asks
+    # for "version" and so cannot tell an echo from a constant. This one
+    # asks for "song" and asserts the pair, which is why it needs both
+    # halves rather than just `data["tier"] == "song"`.
+    playlists = _gen_chain(conn, 1)
+    builders.make_group(conn, ["ta", "tb"])
+    _present(conn, playlists[0], "ta", added_at="2026-01-15T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+    groups = canonical.groups_for_track(conn, "ta")
+
+    data = entities.tenure_page(conn, "song", "tenure", 1)
+    listed = [r["group_id"] for r in data["rows"]]
+
+    assert data["tier"] == "song"
+    assert groups["song"] in listed
+    assert groups["version"] not in listed

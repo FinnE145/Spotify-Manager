@@ -156,3 +156,26 @@ def test_pending_tier_count_is_zero_with_nothing_queued(conn):
     builders.make_group(conn, ["ta", "tb"])
 
     assert _index(conn)["pending_tier_count"] == 0
+
+
+def test_the_track_search_ranks_by_score_before_its_hundred_row_cap(conn):
+    # source: docs/specs/scoring-H.md §11.1 -- "/dev/canonical search
+    # results" is one of the two search sites that table moves off name
+    # ordering, and "both are capped, so name-ordering means they currently
+    # return the alphabetically-first N rather than the best N".
+    #
+    # Found by P3's Verify pass (P3-008): the cap itself is 100 and a literal,
+    # so this asserts the *order* rather than the membership -- which is the
+    # only thing observable below 100 matches, and is what a
+    # `sorted(...)`-to-`list(...)` mutation changes. The fixture disagrees
+    # with both fallbacks at once: "A" is first by the query's own
+    # `ORDER BY t.name COLLATE NOCASE` and first by insertion, and is the one
+    # given the worse score.
+    builders.make_track(conn, "t-a", name="A Ranked Track")
+    builders.make_track(conn, "t-b", name="B Ranked Track")
+    builders.make_score(conn, "track", "t-a", all_time=20.0)
+    builders.make_score(conn, "track", "t-b", all_time=90.0)
+
+    results = _index(conn, search_q="Ranked Track")["search_results"]
+
+    assert [r["name"] for r in results] == ["B Ranked Track", "A Ranked Track"]

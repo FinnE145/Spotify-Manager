@@ -911,6 +911,31 @@ def test_search_collapses_an_aliased_artist_onto_its_canonical_id(conn):
     assert [a["artist_id"] for a in results["artists"]] == ["ar-dupe-one"]
 
 
+def test_search_ranks_songs_by_score_before_capping_at_fifty(conn):
+    # source: scoring-H.md §11.1 -- the same clause as the album test below,
+    # on the other half of the sentence it cites: "All four groups here rank
+    # by score before capping at 50, not after."
+    #
+    # Found by P3's Verify pass (P3-008): the album half of that rule was
+    # asserted and the song half was not, so dropping the version listing's
+    # `sorted(...)` passed the whole suite and was caught only by the golden
+    # baseline, which P3 deletes. Built the same way for the same reason --
+    # 51 matches with the only scoring one **last** alphabetically, since
+    # `seen_versions` is populated in the query's own name order, so
+    # cap-then-rank cuts exactly the version that should come first.
+    for i in range(1, 52):
+        track = builders.make_track(conn, f"t-song-cap-{i:02d}", name=f"Cap Song {i:02d}")
+        groups = builders.make_group(conn, [track])
+        if i == 51:
+            builders.make_score(conn, "version", groups["version"], all_time=95.0)
+    conn.commit()
+
+    results = entities.search(conn, "Cap Song")
+
+    assert len(results["songs"]) == 50
+    assert results["songs"][0]["name"] == "Cap Song 51"
+
+
 def test_search_ranks_albums_by_score_before_capping_at_fifty(conn):
     # source: scoring-H.md §11.1 -- "All four groups here rank by score
     # before capping at 50, not after: a name-ordered cap returns the

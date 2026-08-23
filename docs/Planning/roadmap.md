@@ -161,7 +161,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
       DONE                                  DONE                          DONE
 
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
-                            DONE            DONE        IN PROGRESS (1/3)
+                           DONE            DONE       DONE
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► F/G ──► L (search)
 ```
 
@@ -169,11 +169,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N and J have landed**, and **P is two parts of three done, with the
-third's three sessions all landed and only its Verify pass outstanding** (P1 and P2 merged). Their
-sections below are marked, and each points
-at the spec that is authoritative for what actually shipped — read the spec, not
-the summary here, before touching any of them.
+**A, I, C, D, E, B, K, H, M, N, J and P have landed** — P in all three of its parts, verified and
+merged 2026-08-22. Their sections below are marked, and each points at the spec that is
+authoritative for what actually shipped — read the spec, not the summary here, before touching
+any of them.
 
 **`score` is now available to everything downstream** → `docs/specs/scoring-H.md`. Anything
 below that wants a ranking should read it rather than inventing one, and anything that
@@ -660,7 +659,7 @@ ISRC + normalized title + duration and never touches one. That is what makes a b
 `score` table safe, and it is the assumption to re-check before anything downstream starts
 *branching* on a score.
 
-## P — Codebase health
+## P — Codebase health ✅ DONE
 
 **Specced, and unusually shaped → `docs/specs/codebase-health-P.md`.** That file is the entry
 point, but it is a standing **approach document, not a contract** — read its §0 first, because
@@ -675,7 +674,7 @@ answered in `codebase-health-P.md` §9.
 
 **Three parts, one branch (`feat/codebase-health-P`), each merged into `main` as it lands:**
 
-- **P1 — spec audit.** All 17 specs (6,381 lines) cross-referenced against the code; every
+- **P1 — spec audit. ✅ DONE.** All 17 specs (6,381 lines) cross-referenced against the code; every
   difference classified and ruled on by Finn. **This part was added during planning and is not in
   the pre-spec.** It exists because tests written from code encode *what it does* and freeze
   existing bugs into a permanently green suite — the audit is what makes P2's assertions
@@ -690,7 +689,7 @@ answered in `codebase-health-P.md` §9.
   coverage discipline) and `docs/codebase-health/P2_findings.md` (**10 findings**, all ruled; the
   `xfail` ledger is empty, so nothing is deferred). Two findings are carried forward deliberately
   as `unclear` and are **explicitly not P3 deletion candidates** — P2-004 and P2-009.
-- **P3 — refactor. ← all three sessions landed 2026-08-22; only P3's Verify pass remains →
+- **P3 — refactor. ✅ DONE** (three sessions, each merged on its own; verified 2026-08-22) →
   `docs/codebase-health/P3_refactor.md` is authoritative.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
   snapshots (the tooling is committed and inert in `tests/golden.py`; P3 captures before, diffs
   after, deletes). Strictly behaviour-preserving. **Three sessions**: golden harness + the small
@@ -721,11 +720,18 @@ answered in `codebase-health-P.md` §9.
   listing cap, because every `?q=` case matches fewer rows than the cap). 26 tests later, 19 of the
   20 uncaught mutations die against the permanent suite and the twentieth is the dead key, so the
   golden suite was redundant before it was retired — which is the finish line P3-004 named. Seven
-  findings ruled in `docs/codebase-health/P3_findings.md`. **P3's own Verify pass is what remains**
-  (`codebase-health-P.md` §8), and it — not session 3 — **deletes the snapshots**, deliberately: both
-  earlier Verify passes found what they found by *re-running* the compare and the measurement rather
-  than reading the session's account of them, and §3.4 forbids re-capturing what session 3 would
-  have thrown away.
+  findings ruled in `docs/codebase-health/P3_findings.md`. **P3's Verify pass closed it out**: it
+  re-ran the golden compare (zero diffs) and 22 of P3-007's mutations (all 22 caught, so that
+  finding's claim holds), then deleted the snapshots — the one irreversible step, deliberately held
+  back from session 3 because both earlier Verify passes produced their findings by *re-running*
+  the compare and the measurement rather than reading the session's account, and §3.4 forbids
+  re-capturing. It found **P3-008** by changing the unit of mutation: P3-007 mutated every payload
+  *key*, which answers "is this read?" and never "is this right?", and three rules living inside
+  keys it had ticked off survived — `tenure_page`'s tier echo (every one of session 3's five new
+  tenure tests passes `tier="version"`, so none could tell an echo from a constant) and both halves
+  of `scoring-H.md` §11.1's rank-before-cap on `/dev/canonical?search=` and `/search`'s songs. The
+  middle one was caught by nothing at all, for P3-007's own catalog reason. Three assertions fixed,
+  suite at **861 tests**.
 
 The four original findings, in the order they'd bite:
 

@@ -16,6 +16,7 @@ byte-exact diff meaningful: that every difference is a defect.
 | P3-005 | 2 (Verify) | The same class, swept exhaustively rather than sampled: **twelve more** payload keys only golden observed, three route-side guards nothing observed at all, and one dead payload key | **the fifteen assertions fixed now; the dead key goes to the post-P sweep** (2026-08-22) |
 | P3-006 | 3 | §4.1's named home for `tenure_page` — `generations.py` — cannot have it: the function needs `scoring`, and `scoring.py` imports `generations` | **goes to `entities.py` instead** (2026-08-22) |
 | P3-007 | 3 | The class enumerated a third time, over the three dev pages: **sixteen** of 38 mutations held by golden alone, four by nothing — and two of those four are a dead payload key and a rule the catalog cannot express | **the tests fixed now; the dead key goes to the post-P sweep** (2026-08-22) |
+| P3-008 | 3 (Verify) | Mutating the *rules inside* three payload keys rather than the keys themselves: two §11.1 rank-before-cap clauses and `tenure_page`'s tier echo, **none of them observable by the permanent suite** and one of them by nothing at all | **the three assertions fixed now** (2026-08-22) |
 
 ---
 
@@ -430,6 +431,67 @@ And the standing one, now discharged rather than restated: this was **the last s
 measurement was possible at all**. After the snapshots are deleted there is no second net, so a
 green suite can no longer be attributed to anything. That is the argument for doing this before the
 deletion rather than after it, and it does not come round again.
+
+---
+
+## P3-008 — the unit of mutation, and the three rules that fell between the keys
+
+**Found:** P3's Verify pass, extending P3-007's enumeration after re-running 22 of its mutations
+(all 22 caught, so its central claim holds) and its golden compare (zero diffs).
+
+P3-007 mutated **every key** of the three extracted payloads and every route-side wiring the
+extraction created. That is the right unit for "does anything read this value at all", and it is
+the wrong unit for "does anything check the value is *right*". A key can be observed by name and
+unobserved by rule: something asserts the list is non-empty, or has the expected members, while
+nothing asserts the order the spec requires it to be in.
+
+Three such rules survived the permanent suite. Each was then run against the golden baseline
+separately, which is what attributes them:
+
+| mutation | suite | golden |
+|---|---|---|
+| `entities.tenure_page` returns `"tier": "version"` whatever it was passed | survives | **catches** (318B, `get_dev_generations_tenure_song`) |
+| `/dev/canonical?search=`'s `sorted(...)` → `list(...)` before `[:100]` | survives | **blind** |
+| `/search`'s version listing, same mutation before `[:50]` | survives | **catches** |
+
+The middle one is caught by **nothing**, and the reason is P3-007's own second "nothing" result
+repeating exactly: `routes_catalog.py:267` is `/dev/canonical?search=zzz`, which matches almost
+nothing, so no ordering inside `search_results` is observable through it. P3-007 identified that
+shape for the *cap* and fixed it with a monkeypatched cap; the cap of 100 on this listing is a
+literal in the middle of an expression, so the fix here is to assert the **order** of two results
+rather than the membership of a hundred.
+
+The other two are the class P3-004, P3-005 and P3-007 have each found once already, at a finer
+grain. `tier` is the sharper of them, because it is session 3's own code and it was tested: five
+new `tenure_page` tests landed in `test_generations.py`, and **every one of them passes
+`tier="version"`**, so none can tell an echoed argument from a constant. And the echo is not
+cosmetic — `generations_tenure.html:52` renders `entity_link(tier, r.group_id, …)`, so tier and
+group id are one pair: a wrong tier links every row of the song-tier page to a *different* group
+at the version tier, flips the tier toggle, and puts `tier=version` in every sort and pager link.
+`/search`'s two halves are the same sentence of `scoring-H.md` §11.1 split across two listings,
+with the album half asserted since session 2 and the song half not.
+
+### Fixed here
+
+Three tests, each verified by re-running its mutation against the full suite:
+`test_the_track_search_ranks_by_score_before_its_hundred_row_cap`,
+`test_tenure_page_reports_the_tier_it_was_asked_for_alongside_that_tier_s_ids` (which asserts the
+tier *and* the ids together, since either alone is satisfiable by the mutation), and
+`test_search_ranks_songs_by_score_before_capping_at_fifty`.
+
+### The part worth carrying forward
+
+The measurement P3-004 → P3-005 → P3-007 refined three times converged on a unit — one mutation
+per payload key — and that unit has a floor. **A key-level sweep answers "is this read?", never
+"is this right?"**, and the second question is where an ordering rule lives. Every one of P3's
+findings after the first two has been an unobserved *something*; this is the first where the thing
+unobserved was inside a key the sweep had already ticked off as covered.
+
+Which is also the note to end P3's findings on, since the golden baseline is deleted with this
+pass: **the four sweeps between them never stopped finding the same class, they only kept changing
+what granularity they looked at it from.** `codebase-health-P.md` §2's question — *would this
+notice a wrong answer?* — has to be asked of the assertion, not of the coverage report and not of
+the key list.
 
 ---
 
