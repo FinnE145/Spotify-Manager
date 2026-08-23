@@ -15,7 +15,15 @@ routes_catalog.py): both produce a response that legitimately differs run to
 run (a fresh OAuth `state`, session-dependent branching), so a byte diff on
 either would be meaningless noise, not a signal.
 
-Usable as a script for P3, run directly (matching the project's own
+**P3 drives this from pytest, not from the `__main__` block below**
+(`P3_refactor.md` §3.2). `tests/test_golden_pass.py` is that driver. The
+reason is the guards: `conftest.py` supplies the frozen clock, the blocked
+sockets and the connect guard, and the standalone CLI has none of them --
+which is exactly how it reached the real `symr.db` on 2026-08-21 and wrote 9
+`wanted_uri` rows. The `__main__` block stays as the last line of defence,
+not as the path anyone uses.
+
+Still usable as a script, run directly (matching the project's own
 `venv/bin/python app.py` convention -- not `-m`, since `tests/` carries no
 `__init__.py` and isn't a package):
 
@@ -27,8 +35,9 @@ use that path unless there's a reason not to, so the capture step can't
 accidentally get committed.
 
 against whatever DB `SYMR_DB_PATH` (via conftest's guard, or a real temp
-copy) points the app at -- P3 builds a sampled DB for this; the ordinary
-suite's builders corpus works too, for the tooling's own self-test.
+copy) points the app at -- P3 runs it against a plain copy of `symr.db`
+(`make_pristine`/`restore` below); the ordinary suite's builders corpus works
+too, for the tooling's own self-test.
 
 **Run as a script it carries its own `symr.db` guard**, because nothing else
 does: it is the only thing in `tests/` that runs outside pytest, so none of
@@ -39,12 +48,67 @@ migrates, and a plain GET writes -- so this is a hard exit, not a warning.
 """
 
 import os
+import shutil
+
+
+def make_pristine(source, dest):
+    """Takes the one-off pristine copy of the golden database (§3.1).
+
+    **Opens no SQLite connection to `source`.** That is the whole point of
+    doing this with `copyfile`: the source is the real 93 MB library, and
+    even a read-only connection creates a `-shm`, takes locks, and gives a
+    future edit somewhere to go wrong. Copying bytes cannot.
+
+    A bare byte copy is only a *complete* database if nothing is pending in
+    the write-ahead log, so this refuses when `<source>-wal` is non-empty
+    rather than producing a torn baseline -- which would not announce itself,
+    and would render subtly wrong pages that P3 would then read as refactor
+    damage. An empty `-wal` means the last connection checkpointed on close,
+    which is the state the file is in whenever the app is not running.
+    """
+    wal = source + "-wal"
+    if os.path.exists(wal) and os.path.getsize(wal) > 0:
+        raise RuntimeError(
+            f"refusing to copy {source}: its write-ahead log ({wal}) is not empty, "
+            "so a byte copy would be incomplete. Stop the app and try again."
+        )
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    shutil.copyfile(source, dest)
+    return dest
+
+
+def restore(pristine, target):
+    """Restores the run copy from the pristine copy, before every pass (§3.1).
+
+    **The restore is not optional, and it is what makes a byte diff mean
+    anything.** In Symr a plain GET writes -- `ensure_track_groups` on
+    `/dev/canonical`, `queue_wanted_uris` on every album page, and P1-016's
+    "attempted" stamp, which lands even when the detail fetch *fails* -- so a
+    capture pass leaves the database in a state its own first request never
+    saw. Comparing against that state would diff on the second pass rendering
+    the other branch, which is a fact about Symr's write-on-read design and
+    not about the refactor. Both passes start from identical bytes instead.
+
+    Clears `-wal`/`-shm` alongside: they belong to the file being replaced,
+    and a stale pair against fresh bytes is a corrupt database, not an old one.
+    """
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(target + suffix)
+        except FileNotFoundError:
+            pass
+    shutil.copyfile(pristine, target)
+    return target
 
 
 def capture(client, conn, out_dir):
     """Writes one `<slug>.html` per golden case into `out_dir`.
 
-    Returns the list of slugs written.
+    Returns a list of `(slug, status_code)`. The status is carried out rather
+    than discarded so a caller can tell a captured *page* from a captured
+    *error page*: a baseline of 60 identical 500s would compare clean forever
+    and prove nothing, which is `P2_tests.md` §1's first question asked of the
+    tooling instead of of a test.
     """
     import routes_catalog
 
@@ -55,11 +119,11 @@ def capture(client, conn, out_dir):
         path = os.path.join(out_dir, f"{case.slug}.html")
         with open(path, "wb") as f:
             f.write(resp.data)
-        written.append(case.slug)
+        written.append((case.slug, resp.status_code))
     return written
 
 
-def compare(client, conn, out_dir):
+def compare(client, conn, out_dir, actual_dir=None):
     """Re-issues every golden case and diffs it against what's in `out_dir`.
 
     Returns a list of `(slug, detail)` for every case that differs, plus one
@@ -67,6 +131,14 @@ def compare(client, conn, out_dir):
     (`detail="missing from current catalog"`) and one per catalog case with
     no snapshot on disk (`detail="no snapshot captured"`). An empty return
     means nothing changed since capture() ran.
+
+    `actual_dir`, when given, receives a `<slug>.html` of what each differing
+    case rendered *this* time, so the diff can be read with an ordinary
+    `diff` rather than inferred from a byte count. Written here, at the
+    moment of comparison, rather than reconstructed by a caller afterwards:
+    re-issuing a third time would run against a database the two earlier
+    passes have already written to, so it would not necessarily reproduce
+    the bytes being reported.
     """
     import routes_catalog
 
@@ -90,6 +162,10 @@ def compare(client, conn, out_dir):
         after = routes_catalog.issue(client, case).data
         if before != after:
             diffs.append((case.slug, f"byte diff: {len(before)}B -> {len(after)}B"))
+            if actual_dir is not None:
+                os.makedirs(actual_dir, exist_ok=True)
+                with open(os.path.join(actual_dir, f"{case.slug}.html"), "wb") as f:
+                    f.write(after)
 
     for slug in on_disk - catalog_slugs:
         diffs.append((slug, "missing from current catalog"))
