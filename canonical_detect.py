@@ -629,6 +629,99 @@ def canonical_page_groups(conn):
     return unreviewed_main, unreviewed_cross, all_groups
 
 
+# -- The /dev/canonical page (P3_refactor.md §4.1.1) --------------------
+#
+# Here rather than in canonical.py, which would need canonical -> scoring
+# and so invert the direction CLAUDE.md documents. This module already
+# imports canonical and scoring both, and already owns the page's siblings
+# above (canonical_page_groups, filter_groups, pending_song_ids).
+
+
+def index_data(conn, q, show_singletons, search_q, expand_song_id, cap):
+    """Everything /dev/canonical renders except its two autogroup-status
+    values, as the template's kwargs.
+
+    The route owns parsing all five inputs off the query string, echoes
+    them back to the template itself, and keeps `last_auto_run` /
+    `auto_grouped` -- those come from canonical_autogroup, which imports
+    *this* module, so reaching for them here would make a new cycle.
+
+    `cap` is how many listing rows to build (None for all of them): the
+    route decides that from `q`, since "you searched, so you want every
+    match" is a decision about the request rather than about the data.
+    Detection is deliberately absent -- it cost ~350ms of this page's
+    ~500ms and feeds only the cross-artist pane and the two unreviewed
+    counts, so /api/canonical/cross/listing serves both after paint."""
+    reviewed_row = conn.execute(
+        "SELECT COUNT(*) AS c, MAX(decided_at) AS latest FROM reviewed_pair"
+    ).fetchone()
+
+    all_song_groups = canonical.song_group_rows(
+        conn, query=q, include_singletons=show_singletons
+    )
+    # Ranked here rather than in canonical.py: scoring is cheap (one read
+    # of the materialized version tier plus a Python combine() per song),
+    # so the listing still ranks before the expensive hydration step below
+    # touches only the capped slice.
+    song_scores = scoring.song_scores(conn, [g["song_id"] for g in all_song_groups])
+    for g in all_song_groups:
+        g["score"] = song_scores.get(g["song_id"], {}).get("all_time", 0.0)
+    all_song_groups.sort(key=lambda g: (-g["score"], g["song_id"]))
+    shown = all_song_groups if cap is None else all_song_groups[:cap]
+    # A deep link to a group past the cap would otherwise land on a page
+    # that doesn't contain it.
+    if expand_song_id and not any(g["song_id"] == expand_song_id for g in shown):
+        shown = [g for g in all_song_groups if g["song_id"] == expand_song_id] + shown
+    groups = canonical.hydrate_song_groups(conn, shown)
+
+    # The listing's real cost: one four-tier tree per group rendered. Built
+    # for the capped slice only, which is the point of the cap.
+    trees = {g["song_id"]: canonical.song_tree(conn, g["song_id"]) for g in groups}
+
+    search_results = []
+    if search_q:
+        like = f"%{search_q}%"
+        rows = conn.execute(
+            "SELECT t.track_id FROM track t WHERE t.name LIKE ? "
+            "   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id) "
+            "              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "
+            "ORDER BY t.name COLLATE NOCASE",
+            (like, like),
+        ).fetchall()
+        row_scores = scoring.scores_for_tier(conn, "track", [r["track_id"] for r in rows])
+        ranked_rows = sorted(
+            rows, key=lambda r: -row_scores.get(r["track_id"], {}).get("all_time", 0.0)
+        )[:100]
+        for row in ranked_rows:
+            info = canonical.track_display(conn, row["track_id"])
+            info["groups"] = canonical.groups_for_track(conn, row["track_id"])
+            search_results.append(info)
+
+    # Every track id whose artist names this page might render as links,
+    # gathered up front so artist_credits_for_tracks is one batched query
+    # rather than one per track (see its own docstring for why that
+    # matters on this page specifically).
+    credit_track_ids = set()
+    for g in groups:
+        if g["representative_track_id"]:
+            credit_track_ids.add(g["representative_track_id"])
+        credit_track_ids.update(trees[g["song_id"]]["track_ids"])
+    credit_track_ids.update(t["track_id"] for t in search_results)
+
+    return {
+        "total_tracks": conn.execute("SELECT COUNT(*) FROM track").fetchone()[0],
+        "tier_counts": canonical.tier_counts(conn),
+        "reviewed_count": reviewed_row["c"],
+        "reviewed_latest": reviewed_row["latest"],
+        "groups": groups,
+        "group_total": len(all_song_groups),
+        "trees": trees,
+        "search_results": search_results,
+        "pending_tier_count": len(pending_song_ids(conn)),
+        "artist_credits": canonical.artist_credits_for_tracks(conn, list(credit_track_ids)),
+    }
+
+
 # -- Cross-artist queue (spec E §4) -------------------------------------
 #
 # 0 of 292 reviewed cross-artist pairs have ever been merged: the queue's hit

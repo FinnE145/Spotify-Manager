@@ -220,8 +220,10 @@ as the canonical and generations pages already do.
 Cover, name, album artists (linked, from `resolved_album_artist`), `album_type`, `release_date`,
 `total_tracks`, and **"14 of 19 known"**. Outbound Spotify link.
 
-**Corrected during P1 (P1-016):** the artist list is actually built by an inline query in
-`app.py`'s `album_page`, not a direct read of `resolved_album_artist` — that view carries no
+**Corrected during P1 (P1-016):** the artist list is actually built by an inline query in the
+album page's own read path — `app.py`'s `album_page` when this was written, `entities.album_detail`
+since P3 extracted it (`docs/codebase-health/P3_refactor.md` §4.1) — not a direct read of
+`resolved_album_artist`, because that view carries no
 `position`, which this listing needs to preserve credit order. The inline query now `GROUP BY`s
 the resolved artist id (same reasoning as `track_artist_credit`'s existing `GROUP BY`), which it
 originally didn't — an album credited under both an alias id and its already-canonical id would
@@ -556,6 +558,13 @@ view) — never moved out. Not itself flagged as a problem to fix; `CLAUDE.md`'s
 entry already describes the narrower, actual scope, and P3's query-extraction step
 (`codebase-health-P.md` §5) is the natural place to revisit where these rollups live, not this
 audit.
+
+**Settled by P3, 2026-08-22 (`P3_refactor.md` §4.1).** That step did revisit them, and the
+original paragraph above is now the accurate one: every entity page's read path lives in
+`entities.py`, one function per page (`group_detail` / `track_detail` / `album_detail` /
+`artist_detail` / `playlist_detail` / `search`), with the route reduced to its 404 guard, its
+`request.args` parsing and one `render_template`. The rollups this paragraph is about are inside
+`album_detail` and `artist_detail`.
 
 ---
 

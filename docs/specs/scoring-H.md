@@ -1140,6 +1140,11 @@ Retiring it is three distinct jobs, and the second and third are easy to miss:
 - **Tracks within an album** keep disc/track order (`app.py:328`, `app.py:336`).
 - **Tracks within a playlist** keep playlist position order (`app.py:468`).
 
+Both of those read paths moved to `entities.py` in P3 (`docs/codebase-health/P3_refactor.md`
+§4.1) — `album_detail` and `playlist_detail`. The rule is unchanged; only its address is. The
+`app.py` line numbers in §11.1's table above are the pre-H state that table is *about*, and are
+deliberately not re-derived.
+
 Ordering a *list of* albums or playlists by score is fine and is covered above. It is only
 the contents of one album or one playlist that keep their native order.
 

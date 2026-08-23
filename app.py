@@ -351,86 +351,28 @@ def create_app():
         search_q = request.args.get("search", "").strip()
         expand_song_id = request.args.get("expand", type=int)
 
-        reviewed_row = conn.execute(
-            "SELECT COUNT(*) AS c, MAX(decided_at) AS latest FROM reviewed_pair"
-        ).fetchone()
-
-        all_song_groups = canonical.song_group_rows(
-            conn, query=q, include_singletons=show_singletons
-        )
-        # Ranked here rather than in canonical.py: scoring is cheap (one read
-        # of the materialized version tier plus a Python combine() per song),
-        # so the listing still ranks before the expensive hydration step below
-        # touches only the capped slice.
-        song_scores = scoring.song_scores(conn, [g["song_id"] for g in all_song_groups])
-        for g in all_song_groups:
-            g["score"] = song_scores.get(g["song_id"], {}).get("all_time", 0.0)
-        all_song_groups.sort(key=lambda g: (-g["score"], g["song_id"]))
-        shown = _cap_listing(all_song_groups, q)
-        # A deep link to a group past the cap would otherwise land on a page
-        # that doesn't contain it.
-        if expand_song_id and not any(g["song_id"] == expand_song_id for g in shown):
-            shown = [g for g in all_song_groups if g["song_id"] == expand_song_id] + shown
-        groups = canonical.hydrate_song_groups(conn, shown)
-
-        # The listing's real cost: one four-tier tree per group rendered. Built
-        # for the capped slice only, which is the point of the cap.
-        trees = {g["song_id"]: canonical.song_tree(conn, g["song_id"]) for g in groups}
-
-        # Detection is deliberately absent here: it cost ~350ms of this page's
-        # ~500ms and feeds only the cross-artist pane and the two unreviewed
-        # counts, so /api/canonical/cross/listing serves both after paint.
-
-        search_results = []
-        if search_q:
-            like = f"%{search_q}%"
-            rows = conn.execute(
-                "SELECT t.track_id FROM track t WHERE t.name LIKE ? "
-                "   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id) "
-                "              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "
-                "ORDER BY t.name COLLATE NOCASE",
-                (like, like),
-            ).fetchall()
-            row_scores = scoring.scores_for_tier(conn, "track", [r["track_id"] for r in rows])
-            ranked_rows = sorted(
-                rows, key=lambda r: -row_scores.get(r["track_id"], {}).get("all_time", 0.0)
-            )[:100]
-            for row in ranked_rows:
-                info = canonical.track_display(conn, row["track_id"])
-                info["groups"] = canonical.groups_for_track(conn, row["track_id"])
-                search_results.append(info)
-
-        # Every track id whose artist names this page might render as links,
-        # gathered up front so artist_credits_for_tracks is one batched query
-        # rather than one per track (see its own docstring for why that
-        # matters on this page specifically).
-        credit_track_ids = set()
-        for g in groups:
-            if g["representative_track_id"]:
-                credit_track_ids.add(g["representative_track_id"])
-            credit_track_ids.update(trees[g["song_id"]]["track_ids"])
-        credit_track_ids.update(t["track_id"] for t in search_results)
-
         return render_template(
             "canonical.html",
             active="dev_canonical",
-            total_tracks=conn.execute("SELECT COUNT(*) FROM track").fetchone()[0],
-            tier_counts=canonical.tier_counts(conn),
-            reviewed_count=reviewed_row["c"],
-            reviewed_latest=reviewed_row["latest"],
-            groups=groups,
-            group_total=len(all_song_groups),
-            trees=trees,
-            show_singletons=show_singletons,
             q=q,
+            show_singletons=show_singletons,
             cross_q=cross_q,
             search_q=search_q,
-            search_results=search_results,
             expand_song_id=expand_song_id,
+            # canonical_autogroup imports canonical_detect, so these two stay
+            # here rather than moving into index_data (P3_refactor.md §4.1.1).
             last_auto_run=canonical_autogroup.last_run(conn),
             auto_grouped=canonical.auto_grouped_ids(conn),
-            pending_tier_count=len(canonical_detect.pending_song_ids(conn)),
-            artist_credits=canonical.artist_credits_for_tracks(conn, list(credit_track_ids)),
+            **canonical_detect.index_data(
+                conn,
+                q,
+                show_singletons,
+                search_q,
+                expand_song_id,
+                # A search is taken as asking for all of its matches; see
+                # _cap_listing, which says the same for the cross listing.
+                cap=None if q else _LISTING_CAP,
+            ),
         )
 
     @app.route("/dev/canonical/group/<int:group_id>")
@@ -686,68 +628,14 @@ def create_app():
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
         conn = db.get_db()
-        # Named columns, not `SELECT *` (P3_refactor.md §4.5). See the matching
-        # list on /playlist/<id> for why the two are not shared.
-        playlists = conn.execute(
-            "SELECT playlist_id, name, image_url, owner, track_count, pulled_at, "
-            "snapshot_id, last_changed_at, tracks_pulled_at, unfollowed_at, description, "
-            "last_pull_error, excluded, generation_declined, tracks_pulled_snapshot_id "
-            "FROM snapshot"
-        ).fetchall()
-        playlist_score_map = scoring.playlist_scores(conn, [p["playlist_id"] for p in playlists])
-        playlists = sorted(
-            playlists,
-            key=lambda p: (
-                -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),
-                (p["name"] or "").casefold(),
-            ),
-        )
-
         q = request.args.get("q", "").strip()
-        track_matches = []
-        if q:
-            like = f"%{q}%"
-            track_matches = conn.execute(
-                """
-                SELECT t.track_id, t.name, COALESCE(ta.artists, '') AS artists, COUNT(m.id) AS appearances
-                FROM track t
-                JOIN membership m ON m.track_id = t.track_id AND m.removed_at IS NULL
-                LEFT JOIN track_artists ta ON ta.track_id = t.track_id
-                WHERE t.name LIKE ?
-                   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id)
-                              WHERE x.track_id = t.track_id AND ar.name LIKE ?)
-                GROUP BY t.track_id
-                ORDER BY t.name COLLATE NOCASE
-                LIMIT 50
-                """,
-                (like, like),
-            ).fetchall()
-
-        changes = conn.execute(
-            """
-            SELECT m.playlist_id, s.name AS playlist_name, m.track_id, t.name AS track_name,
-                   COALESCE(ta.artists, '') AS artists, m.added_at, m.removed_at,
-                   COALESCE(m.removed_at, m.added_at) AS event_at,
-                   CASE WHEN m.removed_at IS NOT NULL THEN 'removed' ELSE 'added' END AS kind
-            FROM membership m
-            JOIN snapshot s ON s.playlist_id = m.playlist_id
-            JOIN track t ON t.track_id = m.track_id
-            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
-            ORDER BY event_at DESC
-            LIMIT 50
-            """
-        ).fetchall()
-
         return render_template(
             "snapshot.html",
             active="dev_snapshot",
-            playlists=playlists,
-            summary=snapshot.summary_counts(conn),
-            query=q,
-            track_matches=track_matches,
-            changes=changes,
-            liked_playlist_id=snapshot.LIKED_PLAYLIST_ID,
+            # generations.py's, not snapshot.py's -- see index_data's
+            # docstring for why it is fetched here rather than in there.
             pending_generation=generations.pending_new_generation(conn),
+            **snapshot.index_data(conn, q),
         )
 
     # -- Generations & tenure -------------------------------------------
@@ -771,71 +659,23 @@ def create_app():
             pending_generation=generations.pending_new_generation(conn),
         )
 
-    _TENURE_SORT_KEYS = {
-        "tenure": "tenure", "total": "total_generations", "runs": "run_count", "score": "score",
-    }
-    _TENURE_PAGE_SIZE = 100
-
     @app.route("/dev/generations/tenure", endpoint="dev_generations_tenure")
     def dev_generations_tenure():
         conn = db.get_db()
         canonical.ensure_track_groups(conn)
         conn.commit()
 
-        tier = _generations_tier_arg()
-        sort = request.args.get("sort", "tenure")
-        if sort not in _TENURE_SORT_KEYS:
-            sort = "tenure"
-        page = request.args.get("page", 1, type=int) or 1
-        page = max(page, 1)
-
-        spans = generations.generation_spans(conn)
-
-        all_tenures = generations.tenures(conn, tier=tier)
-        # Every row's score, computed up front: the sort below runs before
-        # pagination, same as tenure/total/runs (docs/specs/scoring-H.md
-        # §11.1). "song" aggregates at query time; "version" is a direct
-        # materialized lookup.
-        if tier == "version":
-            score_map = scoring.scores_for_tier(conn, "version", [t["group_id"] for t in all_tenures])
-        else:
-            score_map = scoring.song_scores(conn, [t["group_id"] for t in all_tenures])
-        for t in all_tenures:
-            t["score"] = score_map.get(t["group_id"], {}).get("all_time", 0.0)
-
-        sort_key = _TENURE_SORT_KEYS[sort]
-        # group_id as the tiebreak keeps paging stable across requests.
-        all_tenures.sort(key=lambda t: (-t[sort_key], t["group_id"]))
-
-        total = len(all_tenures)
-        total_pages = max(1, -(-total // _TENURE_PAGE_SIZE))
-        page = min(page, total_pages)
-        start = (page - 1) * _TENURE_PAGE_SIZE
-        page_slice = all_tenures[start : start + _TENURE_PAGE_SIZE]
-
-        rows = []
-        for t in page_slice:
-            rep_id = canonical.representative(conn, t["group_id"])
-            present = {o for start_o, end_o in t["runs"] for o in range(start_o, end_o + 1)}
-            rows.append(
-                {
-                    **t,
-                    "representative": canonical.track_display(conn, rep_id) if rep_id else None,
-                    "present_ordinals": present,
-                }
-            )
-
         return render_template(
             "generations_tenure.html",
             active="dev_generations",
-            tier=tier,
-            sort=sort,
-            page=page,
-            total_pages=total_pages,
-            total=total,
-            generation_count=len(spans),
-            spans=spans,
-            rows=rows,
+            # In entities.py rather than generations.py: it needs scoring,
+            # which imports generations (P3_refactor.md §4.1 / P3-006).
+            **entities.tenure_page(
+                conn,
+                _generations_tier_arg(),
+                request.args.get("sort", "tenure"),
+                request.args.get("page", 1, type=int) or 1,
+            ),
         )
 
     @app.route("/dev/generations/confirm", methods=["POST"], endpoint="dev_generations_confirm")

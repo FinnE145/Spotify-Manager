@@ -11,6 +11,7 @@ import pytest
 
 import builders
 import canonical
+import entities
 import generations
 
 
@@ -738,3 +739,115 @@ def test_generation_view_returns_the_span_of_that_generation_not_another(conn):
     assert span["ordinal"] == 2
     assert span["started_at"] == "2026-02-01T00:00:00Z"
     assert span["ended_at"] == "2026-03-01T00:00:00Z"
+
+
+# -- entities.tenure_page -- /dev/generations/tenure's read path ------------
+#
+# The function lives in `entities.py` rather than here, and that is a
+# deliberate exception recorded as P3-006: it ranks every row by score before
+# paginating, `scoring.py` imports this module, and `generations -> scoring`
+# would close a cycle. Its tests live here, with the tenure fixtures they are
+# built from and where anyone looking for tenure will look.
+#
+# Session 3's mutation sweep found `sort` observable only by the golden
+# baseline, which is deleted at the end of P3.
+
+
+def test_tenure_page_ranks_by_score_before_it_paginates(conn, monkeypatch):
+    # source: docs/specs/scoring-H.md §11.1 -- score is "add score as a sort
+    # column" for this page, and the sort runs before pagination. The
+    # highest-scoring group is built LAST, so it is last by group_id, which
+    # is both the insertion order and the documented tiebreak: an
+    # implementation that slices before sorting leaves it off page 1
+    # entirely, and one that ignores score puts it third.
+    #
+    # The page size is monkeypatched rather than built around: the rule under
+    # test is "sort, then slice", and proving it at a boundary of 2 needs
+    # three groups where proving it at 100 needs 101.
+    monkeypatch.setattr(entities, "_TENURE_PAGE_SIZE", 2)
+    playlists = _gen_chain(conn, 1)
+    groups = []
+    for i, track in enumerate(("ta", "tb", "tc")):
+        builders.make_track(conn, track)
+        groups.append(builders.make_group(conn, [track, f"{track}-2"]))
+        _present(conn, playlists[0], track, added_at="2026-01-15T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+    for group, score in zip(groups, (10.0, 20.0, 90.0)):
+        builders.make_score(conn, "version", group["version"], all_time=score)
+
+    data = entities.tenure_page(conn, "version", "score", 1)
+
+    assert data["total_pages"] == 2
+    assert data["rows"][0]["group_id"] == groups[2]["version"]
+
+
+def test_an_unrecognised_sort_falls_back_to_tenure_and_reports_the_fallback(conn):
+    # source: the route variant in tests/routes_catalog.py -- "an
+    # unrecognised sort falls back to 'tenure' rather than reaching SQL".
+    # The returned `sort` is what the template writes into its own sort
+    # links, so a fallback that ordered correctly but echoed the junk back
+    # would build every link on the page around `?sort=;drop`.
+    playlists = _gen_chain(conn, 1)
+    builders.make_group(conn, ["ta", "tb"])
+    _present(conn, playlists[0], "ta", added_at="2026-01-15T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    assert entities.tenure_page(conn, "version", ";drop", 1)["sort"] == "tenure"
+    assert entities.tenure_page(conn, "version", "runs", 1)["sort"] == "runs"
+
+
+def test_the_page_number_is_clamped_into_range_and_returned_normalized(conn):
+    # source: characterization of the pager -- `page` comes back in the
+    # kwargs because generations_tenure.html renders it, so a page past the
+    # end has to become a real page rather than an empty slice labelled 9.
+    playlists = _gen_chain(conn, 1)
+    builders.make_group(conn, ["ta", "tb"])
+    _present(conn, playlists[0], "ta", added_at="2026-01-15T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    assert entities.tenure_page(conn, "version", "tenure", 9)["page"] == 1
+    assert entities.tenure_page(conn, "version", "tenure", 0)["page"] == 1
+
+
+def test_rows_carry_a_representative_and_every_ordinal_present_in(conn):
+    # source: generations-B.md's tenure table -- each row renders a
+    # representative track and a strip of one cell per generation. The group
+    # is present in 1 and 3 but not 2, so present_ordinals is the expanded
+    # run set rather than the endpoints: {1, 3}, not {1, 2, 3}.
+    playlists = _gen_chain(conn, 3)
+    # Both members carry the same name, so the assertion holds whichever one
+    # the representative election picks -- this is testing that a
+    # representative is attached and rendered, not which track wins it.
+    builders.make_track(conn, "ta", name="Cornelia Street")
+    builders.make_track(conn, "tb", name="Cornelia Street")
+    builders.make_group(conn, ["ta", "tb"])
+    for ordinal in (1, 3):
+        _present(conn, playlists[ordinal - 1], "ta", added_at=f"2026-0{ordinal}-15T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    version_id = canonical.groups_for_track(conn, "ta")["version"]
+    rows = entities.tenure_page(conn, "version", "tenure", 1)["rows"]
+    row = {r["group_id"]: r for r in rows}[version_id]
+
+    assert row["present_ordinals"] == {1, 3}
+    assert row["representative"]["name"] == "Cornelia Street"
+
+
+def test_the_generation_count_is_every_generation_not_every_row(conn):
+    # source: generations_tenure.html renders one strip cell per generation,
+    # so this counts the spans rather than the tenure rows. The fixture makes
+    # the two numbers differ (3 generations, 1 group with tenure).
+    playlists = _gen_chain(conn, 3)
+    builders.make_group(conn, ["ta", "tb"])
+    _present(conn, playlists[0], "ta", added_at="2026-01-15T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    data = entities.tenure_page(conn, "version", "tenure", 1)
+
+    assert data["generation_count"] == 3
+    assert len(data["spans"]) == 3

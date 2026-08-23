@@ -14,6 +14,8 @@ byte-exact diff meaningful: that every difference is a defect.
 | P3-003 | 1 (Verify) | `normalize.base_string`'s accent-stripping was unasserted by the whole suite *and* invisible to golden | **assertion fixed now; the class goes to the post-P sweep** (2026-08-22) |
 | P3-004 | 2 | Eleven payload keys on the six extracted entity pages were observable **only** by golden — a suite that is deleted at the end of P3 | **fixed now** (2026-08-22) |
 | P3-005 | 2 (Verify) | The same class, swept exhaustively rather than sampled: **twelve more** payload keys only golden observed, three route-side guards nothing observed at all, and one dead payload key | **the fifteen assertions fixed now; the dead key goes to the post-P sweep** (2026-08-22) |
+| P3-006 | 3 | §4.1's named home for `tenure_page` — `generations.py` — cannot have it: the function needs `scoring`, and `scoring.py` imports `generations` | **goes to `entities.py` instead** (2026-08-22) |
+| P3-007 | 3 | The class enumerated a third time, over the three dev pages: **sixteen** of 38 mutations held by golden alone, four by nothing — and two of those four are a dead payload key and a rule the catalog cannot express | **the tests fixed now; the dead key goes to the post-P sweep** (2026-08-22) |
 
 ---
 
@@ -304,7 +306,147 @@ attribute a catch *to*.
 
 ---
 
+## P3-006 — the one row of §4.1's table that names a home the import graph forbids
+
+**Found:** session 3, on the first line of extracting `dev_generations_tenure`.
+
+§4.1's table sends that view to `generations.tenure_page(conn, tier, sort, page)`. It cannot go
+there. The page ranks every tenure row by score *before* paginating (`docs/specs/scoring-H.md`
+§11.1), so the function needs `scoring.scores_for_tier` / `scoring.song_scores` — and
+`scoring.py:32` already imports `generations`, for `generation_spans` at `scoring.py:148`. Adding
+`generations → scoring` closes a cycle, in the step whose §8 criterion 3 is "the import graph has
+no cycle" and whose §4.2 removed the only one that existed.
+
+A function-local `import scoring` inside `tenure_page` would dodge the import-time failure, and was
+not treated as an option: it is the same edge, drawn where a reader of the module header cannot see
+it, and `CLAUDE.md`'s "never layer hacky fixes" applies exactly here.
+
+### Ruled 2026-08-22: it goes to `entities.py`
+
+`entities.py` already imports both `generations` and `scoring`, so `entities.tenure_page` costs
+**no new edge at all** and needs no indirection. The cost is that a dev page's read path now sits
+in a module whose docstring says "entity viewing pages" — paid down with a section comment there,
+a `CLAUDE.md` map note in both `entities.py`'s and `generations.py`'s entries (a reader looking for
+tenure will look in `generations.py` first, and now finds a pointer), and this finding.
+
+The two alternatives, for the record. **Injecting scoring into `generations.tenure_page`** as a
+`score_lookup` callable keeps §4.1's named home, but puts the tier→scoring-function branch in
+`app.py`, which is a scoring concern in a routing file, and adds precisely the indirection §4.1.1's
+own criterion disfavours. **Leaving the view in `app.py`** and recording it costs nothing against
+§8's `conn.execute` target — this view has none — but loses the unit-testability of the
+rank-before-paginate rule, which is the extraction's stated point (§5 reason 2).
+
+### The part worth carrying forward
+
+§4.1's table was built on one rule — *the module that already owns that data* — and that rule is
+right. What this row shows is that it is not sufficient on its own: **ownership and the import
+graph are two constraints, and only one of them was checked for eight of the nine views.**
+
+§4.1.1 is the proof that the check works, and it is the same check. `canonical_index` got a whole
+subsection precisely because its natural owner (`canonical.py`) would have needed `canonical →
+scoring`, and every candidate there was "checked against the actual import graph" by name. That
+scrutiny was spent on the view that visibly had no clean home; the eight that looked obvious got
+the ownership rule alone, and one of them was wrong for the identical reason. **The view that looks
+like it has an obvious home is the one whose home nobody verifies.**
+
+---
+
+## P3-007 — the class enumerated a third time, and what enumeration finds that test-writing doesn't
+
+**Found:** session 3, doing exactly what P3-005's carry-forward assigned it — "worth doing in
+session 3 for `canonical_index`, `snapshot_index` and `dev_generations_tenure` before their
+snapshots are deleted, because after deletion the measurement is no longer possible: there will be
+nothing left to attribute a catch *to*."
+
+### The measurement
+
+**38 single-line mutations**: every key of all three extracted payloads (24), plus the 14 route-side
+wirings the extraction created — the cap decision, the five echoed query args, the two autogroup
+status values, the pending-generation prompt, and each parsed argument. For every one, the
+permanent suite and the golden compare were run **separately**, so "green" could be attributed to
+one net or the other rather than to the pair.
+
+| | caught by the suite | golden only | nothing |
+|---|---|---|---|
+| `canonical_detect.index_data` (10 keys) | 4 | 5 | 1 |
+| `snapshot.index_data` (6 keys) | 3 | 2 | 1 |
+| `entities.tenure_page` (8 keys) | 5 | 3 | 0 |
+| route-side wiring (14) | 6 | 6 | 2 |
+| **total** | **18** | **16** | **4** |
+
+**Sixteen of 38 were held up by the golden baseline alone** — the suite §3.4 deletes at the end of
+this session, which is to say at the end of P3.
+
+The ratio is worth recording next to P3-005's. Ten of these three payloads' 24 keys were
+golden-only (42%), against 12 of the entity pages' 62 (19%). That is not a coincidence and not a
+regression: P2's sessions 4 and 5 were "Read paths & UI" and the route sweep, aimed at the entity
+pages and the route layer. **The dev pages were the part of the read surface P2 never pointed at,
+and the measurement shows it.**
+
+### Two of the four "nothing" results are not missing tests
+
+This is the part that is new, and it is the argument for enumerating rather than writing tests from
+a reading of the code.
+
+- **`snapshot.index_data`'s `liked_playlist_id` is dead.** Nothing in `templates/`, `static/` or
+  `app.py` reads it; a repo-wide search returns exactly one hit, the line that produces it.
+  Pre-existing on `main` (`app.py:749` before the move), so not a P3 regression. Same shape and the
+  same ruling as P3-005's `track_scores`: **recorded, not removed** — §2 is unambiguous, and it goes
+  to the post-P sweep as a one-line deletion.
+- **`/dev/canonical`'s "a search lifts the cap" is unobservable for a *catalog* reason.** Every
+  `?q=` case in `routes_catalog.py` and `test_routes.py` matches far fewer rows than the cap of 50,
+  so capping a search and not capping it render identically. Nothing about the fixtures is wrong;
+  no case in the catalog can express the rule. That is P3-005's `search_page` `if q:` in mirror
+  image once more, and the fix needed a monkeypatched cap rather than another case.
+
+A pass that asked "what should I test here?" would have written a test for each and moved on. The
+mutation is what says one of the two has no observable behaviour to test at all, and the other
+cannot be observed until a fixture is built that crosses the cap.
+
+### Fixed here
+
+**26 tests.** Eight in a new `tests/test_canonical_page.py`, four in a new
+`tests/test_snapshot_page.py`, five in `tests/test_generations.py` (`tenure_page`'s, which live
+beside the tenure fixtures they are built from even though the function is in `entities.py`, per
+P3-006), six in `tests/test_routes.py` under a section naming the seam each covers, and three in
+`tests/test_codebase_map.py` — that last file is §4.3's module-list check rather than part of this
+finding.
+
+**Every one was verified by re-running its mutation against the new suite with golden disabled**,
+which is the only way to establish the thing that actually matters: 19 of the 20 previously
+uncaught mutations now fail the permanent suite. The twentieth is `liked_playlist_id`, and it stays
+uncaught because it is dead.
+
+### The part worth carrying forward
+
+P3-004 sampled the class and fixed what it sampled. P3-005 enumerated it and found twice as much
+again. This one enumerated it on the code the same session had just written, and the new content is
+the distinction that only mutation surfaces: **an unobserved return value is not always a missing
+test.** Sometimes it is a key that should not exist, and sometimes it is a rule the test *catalog*
+has no case capable of expressing. Both look identical from inside a coverage report and from
+inside a green suite.
+
+And the standing one, now discharged rather than restated: this was **the last session in which the
+measurement was possible at all**. After the snapshots are deleted there is no second net, so a
+green suite can no longer be attributed to anything. That is the argument for doing this before the
+deletion rather than after it, and it does not come round again.
+
+---
+
 ## Not findings — decisions taken in passing, recorded so they are not re-litigated
+
+- **The golden snapshots outlive session 3 by one pass.** §3.4, §5 and §8.8 all assign the deletion
+  to session 3; Finn ruled 2026-08-22 that **P3's Verify pass deletes them instead**, and the
+  reasoning is what the two previous Verify passes actually did with them. Session 1's re-ran the
+  compare independently rather than trusting the session's word for it; session 2's re-ran P3-004's
+  measurement rather than reading it, which is the entire reason P3-005 exists. Deleting at the end
+  of session 3 would leave P3's own Verify with no way to re-derive either, and §3.4 forbids
+  re-capturing — so the one action that cannot be undone would land exactly one pass before the
+  pass most likely to need it. Nothing about the *net* is at stake: P3-007 already established that
+  19 of the 20 mutations golden was solely catching now fail the permanent suite, so what survives
+  for one more pass is the ability to check that claim, not coverage. `tests/golden_snapshots/` is
+  gitignored (`.gitignore:20`) and `*.db` separately so (`.gitignore:5`), so nothing can reach a
+  commit in the meantime.
 
 - **`docs/specs/canonical-fixes.md`'s archived blocks were left verbatim.** §4.4 asked for the two
   doc references to `all_candidate_groups` to be updated. §2.1 there is a dated measurement table

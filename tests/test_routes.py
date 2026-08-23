@@ -1139,3 +1139,111 @@ def test_the_export_cutoff_decides_what_groups_under_a_label(client, conn):
 
     assert _export_section_of(wide, "Distant Card").startswith("Cutoff Label")
     assert _export_section_of(narrow, "Distant Card") == "Ungrouped"
+
+
+# -- P3 session 3's seams: the three dev pages ------------------------------
+#
+# Same shape as the section above, one extraction later. Session 3's mutation
+# sweep (P3-007) ran every one of these as a one-line change and found each
+# observable only by the golden baseline, or by nothing at all. They are route
+# tests rather than unit tests because each is P2-008's seam exactly: the
+# extracted function does the work, and app.py decides what to hand it or what
+# to render beside it -- neither half can be tested from the other side.
+
+
+def test_a_search_lifts_the_listing_cap(client, corpus, monkeypatch):
+    """`?q=` is taken as asking for *all* of its matches, so the cap does not
+    apply to a filtered listing.
+
+    The cap is monkeypatched to zero for the same reason the `?expand=` test
+    above does it: it makes "the cap would have dropped this" unconditional.
+    It is also why nothing was catching this -- every `?q=` case in the
+    catalog matches far fewer rows than the real cap of 50, so capping a
+    search and not capping it render identically.
+    """
+    # source: app.py's _cap_listing comment -- "a search is taken as asking
+    # for all of its matches, so `%` (a LIKE wildcard in both filters) still
+    # gets you everything". Since P3 the groups half of that rule is the
+    # route's `cap=None if q else _LISTING_CAP`, handed to
+    # canonical_detect.index_data, so only the route can decide it.
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "_LISTING_CAP", 0)
+
+    assert "Corpus Track One" not in client.get("/dev/canonical").get_data(as_text=True)
+    assert "Corpus Track One" in client.get("/dev/canonical?q=Corpus").get_data(as_text=True)
+
+
+def test_the_canonical_filter_boxes_keep_what_was_searched_for(client, corpus):
+    # source: canonical.html:101 and :181 -- the Groups and cross-artist
+    # filter inputs render `value="{{ q }}"` / `value="{{ cross_q }}"` from
+    # the route's echo. Losing an echo empties the box on every result page
+    # while the rows stay correctly filtered, so nothing about the listing
+    # looks wrong -- which is why only a byte-exact baseline saw it.
+    body = client.get("/dev/canonical?q=Corpus&cross=Zzz").get_data(as_text=True)
+
+    assert 'name="q" value="Corpus"' in body
+    assert 'name="cross" id="cross-input" value="Zzz"' in body
+
+
+def test_the_singletons_checkbox_stays_ticked_after_it_is_used(client, corpus):
+    # source: canonical.html:104 -- `{{ "checked" if show_singletons }}`.
+    # The listing test above proves `?singletons=1` changes the rows; this is
+    # the other half, that the control reporting the state agrees with it. A
+    # page whose rows include singletons but whose box is unticked invites
+    # exactly one wrong click.
+    assert "checked" not in client.get("/dev/canonical").get_data(as_text=True)
+    assert "checked" in client.get("/dev/canonical?singletons=1").get_data(as_text=True)
+
+
+def test_a_deep_linked_group_is_rendered_already_open(client, corpus):
+    # source: canonical.html:117 -- `{{ "open" if g.song_id == expand_song_id }}`
+    # on the <details>. Distinct from the cap test above, which proves the
+    # group is *present*: a deep link that lands on a collapsed group has
+    # arrived at the right page and shown nothing.
+    song_id = corpus["groups"]["song"]
+
+    body = client.get(f"/dev/canonical?expand={song_id}").get_data(as_text=True)
+
+    assert f'id="song-{song_id}" open' in body
+    assert f'id="song-{song_id}" open' not in client.get("/dev/canonical").get_data(as_text=True)
+
+
+def test_the_auto_group_status_line_and_badge_come_from_the_run_record(client, corpus, conn):
+    # source: canonical.html:78-83 and its auto_badge macro. Both values stay
+    # in the route rather than moving into index_data, because
+    # canonical_autogroup imports canonical_detect and reaching for them there
+    # would be a new cycle (P3_refactor.md §4.1.1) -- so this is the only
+    # place the wiring is visible at all.
+    conn.execute(
+        "INSERT INTO auto_group_run (id, started_at, finished_at, groups_closed, tracks_affected) "
+        "VALUES (7, '2026-08-01T00:00:00Z', '2026-08-01T00:01:00Z', 3, 9)"
+    )
+    conn.execute(
+        "UPDATE canonical_group SET auto_run_id = 7 WHERE id = ?", (corpus["groups"]["song"],)
+    )
+    conn.commit()
+
+    body = client.get("/dev/canonical").get_data(as_text=True)
+
+    # Asserted as two fragments because the template breaks the line between
+    # them; both numbers come from last_auto_run, so a missing echo takes
+    # both with it.
+    assert "3 groups," in body
+    assert "9 tracks" in body
+    assert 'title="Created by an auto-group run"' in body
+
+
+def test_the_snapshot_page_offers_an_undeclared_generation(client, corpus, conn):
+    # source: snapshot.html:10 -- generation_confirm_banner(pending_generation).
+    # That value is generations.py's and is fetched in the route, deliberately
+    # not inside snapshot.index_data (snapshot.py has no dependency on
+    # generations.py and gains none). The route is therefore the only side
+    # that can be observed, and nothing was observing it.
+    builders.make_playlist(conn, "p-v2", name="v2.0.0")
+    conn.commit()
+
+    body = client.get("/dev/snapshot").get_data(as_text=True)
+
+    assert 'id="generation-confirm-form"' in body
+    assert "v2.0.0" in body

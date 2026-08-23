@@ -720,3 +720,77 @@ def search(conn, q):
         "artists": artists_result,
         "playlists": playlists_result,
     }
+
+
+# -- /dev/generations/tenure (P3_refactor.md §4.1) -------------------------
+#
+# Not an entity page, and here rather than in generations.py -- which §4.1
+# named -- for one reason: this needs scoring, and scoring.py already
+# imports generations (scoring.py:32, for generation_spans), so the edge
+# generations -> scoring would close exactly the kind of cycle §8's third
+# criterion requires the graph not to have. This module already imports
+# both, so it is the only existing home costing no new dependency. See
+# P3-006.
+
+_TENURE_SORT_KEYS = {
+    "tenure": "tenure", "total": "total_generations", "runs": "run_count", "score": "score",
+}
+_TENURE_PAGE_SIZE = 100
+
+
+def tenure_page(conn, tier, sort, page):
+    """Everything /dev/generations/tenure renders, as the template's kwargs.
+
+    `tier` is "version" or "song", whitelisted by the route (it shares that
+    with /dev/generations). `sort` and `page` are the raw ?sort= / ?page=
+    values: an unknown sort falls back to "tenure" and the page is clamped
+    into range, and both come back in the returned kwargs, since the
+    template renders them into its own sort links and pager."""
+    spans = generations.generation_spans(conn)
+
+    all_tenures = generations.tenures(conn, tier=tier)
+    # Every row's score, computed up front: the sort below runs before
+    # pagination, same as tenure/total/runs (docs/specs/scoring-H.md
+    # §11.1). "song" aggregates at query time; "version" is a direct
+    # materialized lookup.
+    if tier == "version":
+        score_map = scoring.scores_for_tier(conn, "version", [t["group_id"] for t in all_tenures])
+    else:
+        score_map = scoring.song_scores(conn, [t["group_id"] for t in all_tenures])
+    for t in all_tenures:
+        t["score"] = score_map.get(t["group_id"], {}).get("all_time", 0.0)
+
+    if sort not in _TENURE_SORT_KEYS:
+        sort = "tenure"
+    sort_key = _TENURE_SORT_KEYS[sort]
+    # group_id as the tiebreak keeps paging stable across requests.
+    all_tenures.sort(key=lambda t: (-t[sort_key], t["group_id"]))
+
+    total = len(all_tenures)
+    total_pages = max(1, -(-total // _TENURE_PAGE_SIZE))
+    page = min(max(page, 1), total_pages)
+    start = (page - 1) * _TENURE_PAGE_SIZE
+    page_slice = all_tenures[start : start + _TENURE_PAGE_SIZE]
+
+    rows = []
+    for t in page_slice:
+        rep_id = canonical.representative(conn, t["group_id"])
+        present = {o for start_o, end_o in t["runs"] for o in range(start_o, end_o + 1)}
+        rows.append(
+            {
+                **t,
+                "representative": canonical.track_display(conn, rep_id) if rep_id else None,
+                "present_ordinals": present,
+            }
+        )
+
+    return {
+        "tier": tier,
+        "sort": sort,
+        "page": page,
+        "total_pages": total_pages,
+        "total": total,
+        "generation_count": len(spans),
+        "spans": spans,
+        "rows": rows,
+    }

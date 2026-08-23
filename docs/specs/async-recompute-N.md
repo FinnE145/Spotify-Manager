@@ -40,6 +40,13 @@ duration and never touches a score. So a stale `score` table can only ever show 
 ~1.8s out of date or rank a list slightly wrong — it cannot cause a wrong durable decision
 anywhere.
 
+**Addresses moved by P3, 2026-08-22 (`docs/codebase-health/P3_refactor.md` §4.1); the claim did
+not.** Most of `app.py`'s share of that reader set is now `entities.py` (the six entity pages plus
+`tenure_page`), `canonical_detect.index_data` and `snapshot.index_data`. Every one of them is still
+a *reader* — P3 was strictly behaviour-preserving and added no write derived from a score — so
+"nothing in the codebase writes a decision derived from a score" holds unchanged. Only the list of
+files it has to be checked against grew.
+
 ---
 
 ## 1. The problem

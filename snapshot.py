@@ -99,6 +99,76 @@ def backfill_pending(conn):
     return conn.execute("SELECT COUNT(*) FROM track WHERE raw_json IS NULL").fetchone()[0]
 
 
+def index_data(conn, q):
+    """Everything /dev/snapshot renders, as the template's kwargs
+    (docs/codebase-health/P3_refactor.md §4.1).
+
+    `q` is the already-stripped ?q= track search -- the route owns parsing
+    it, and no Flask reaches in here. The page's pending-generation prompt
+    stays in the route too: it belongs to generations.py, and pulling it in
+    would give this module its first dependency on that one, which is
+    §4.1.1's reasoning for leaving last_auto_run / auto_grouped behind."""
+    # Named columns, not `SELECT *` (P3_refactor.md §4.5). See the matching
+    # list on /playlist/<id> for why the two are not shared.
+    playlists = conn.execute(
+        "SELECT playlist_id, name, image_url, owner, track_count, pulled_at, "
+        "snapshot_id, last_changed_at, tracks_pulled_at, unfollowed_at, description, "
+        "last_pull_error, excluded, generation_declined, tracks_pulled_snapshot_id "
+        "FROM snapshot"
+    ).fetchall()
+    playlist_score_map = scoring.playlist_scores(conn, [p["playlist_id"] for p in playlists])
+    playlists = sorted(
+        playlists,
+        key=lambda p: (
+            -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),
+            (p["name"] or "").casefold(),
+        ),
+    )
+
+    track_matches = []
+    if q:
+        like = f"%{q}%"
+        track_matches = conn.execute(
+            """
+            SELECT t.track_id, t.name, COALESCE(ta.artists, '') AS artists, COUNT(m.id) AS appearances
+            FROM track t
+            JOIN membership m ON m.track_id = t.track_id AND m.removed_at IS NULL
+            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
+            WHERE t.name LIKE ?
+               OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id)
+                          WHERE x.track_id = t.track_id AND ar.name LIKE ?)
+            GROUP BY t.track_id
+            ORDER BY t.name COLLATE NOCASE
+            LIMIT 50
+            """,
+            (like, like),
+        ).fetchall()
+
+    changes = conn.execute(
+        """
+        SELECT m.playlist_id, s.name AS playlist_name, m.track_id, t.name AS track_name,
+               COALESCE(ta.artists, '') AS artists, m.added_at, m.removed_at,
+               COALESCE(m.removed_at, m.added_at) AS event_at,
+               CASE WHEN m.removed_at IS NOT NULL THEN 'removed' ELSE 'added' END AS kind
+        FROM membership m
+        JOIN snapshot s ON s.playlist_id = m.playlist_id
+        JOIN track t ON t.track_id = m.track_id
+        LEFT JOIN track_artists ta ON ta.track_id = t.track_id
+        ORDER BY event_at DESC
+        LIMIT 50
+        """
+    ).fetchall()
+
+    return {
+        "playlists": playlists,
+        "summary": summary_counts(conn),
+        "query": q,
+        "track_matches": track_matches,
+        "changes": changes,
+        "liked_playlist_id": LIKED_PLAYLIST_ID,
+    }
+
+
 def set_excluded(conn, playlist_ids, excluded):
     placeholders = ",".join("?" for _ in playlist_ids)
     if excluded:
