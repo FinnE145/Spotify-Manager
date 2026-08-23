@@ -161,16 +161,17 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
       DONE                                  DONE                          DONE
 
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
-                            DONE            DONE        NEXT
-  ──► O (request budgets) ──► F/G ──► L (better search)
+                            DONE            DONE        IN PROGRESS (1/3)
+  ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► F/G ──► L (search)
 ```
 
 **P is three parts on one branch, not a normal step.** It is specced, but its entry point
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N and J have landed**, and **P is two parts of three done** (P1 and
-P2; P3 is the next thing to plan). Their sections below are marked, and each points
+**A, I, C, D, E, B, K, H, M, N and J have landed**, and **P is two parts of three done, with the
+third in progress** (P1 and P2 merged; P3 is specced and its session 1 of 3 has landed). Their
+sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
 
@@ -187,6 +188,16 @@ explicitly when they're added — don't leave them dangling off the end.
 
 **N sat right after M by priority, not dependency.** Finn asked for it next while M was
 still in flight; it had no technical dependency on M, J, or anything else here.
+
+**Q is gated on nothing** — no step below depends on it and it depends on none of them. It sits
+where it does because it is the gate for **R**, which needs a process that is always up, and
+because it is actionable today where O is still waiting on evidence.
+
+**R sits after O by decision, not dependency.** It would work fine before it. But R is the first
+thing Symr would ever spend quota on *recurring*, on a schedule, with nobody watching — so it goes
+behind the step whose whole job is making that spend visible. Finn's call, 2026-08-22, made after
+doing the arithmetic in R's section below and finding it was affordable rather than assuming it
+wasn't.
 
 **O is gated on data, not code.** It follows J because J ships the `api_request` log, but the
 wait is for that log to *catch a real lockout* — until it has, there is no measured ceiling to
@@ -679,7 +690,7 @@ answered in `codebase-health-P.md` §9.
   coverage discipline) and `docs/codebase-health/P2_findings.md` (**10 findings**, all ruled; the
   `xfail` ledger is empty, so nothing is deferred). Two findings are carried forward deliberately
   as `unclear` and are **explicitly not P3 deletion candidates** — P2-004 and P2-009.
-- **P3 — refactor. ← next, planned 2026-08-22 → `docs/codebase-health/P3_refactor.md` is
+- **P3 — refactor. ← in progress; session 1 of 3 landed 2026-08-22 → `docs/codebase-health/P3_refactor.md` is
   authoritative.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
   snapshots (the tooling is committed and inert in `tests/golden.py`; P3 captures before, diffs
   after, deletes). Strictly behaviour-preserving. **Three sessions**: golden harness + the small
@@ -691,7 +702,10 @@ answered in `codebase-health-P.md` §9.
   first, the async scoring worker above all. One deletion, already queued and evidenced:
   `canonical_detect.all_candidate_groups`, condemned by P1-009 on a full caller search — and a
   seven-category sweep re-run 2026-08-22 found **nothing else dead in the tree**, so there is no
-  cleanup backlog beyond it.
+  cleanup backlog beyond it. **Session 1 is done and merged**: harness built, gate proved, baseline
+  captured once, and the three small changes (the deletion, the cycle, the `SELECT *` sites) landed
+  at zero golden diffs, with three findings ruled in `docs/codebase-health/P3_findings.md`. The
+  entity pages and the dev pages remain.
 
 The four original findings, in the order they'd bite:
 
@@ -727,6 +741,53 @@ on it: O is gated on the request log catching a real lockout, so it cannot start
 whatever the order says. P has no dependencies at all and gets more expensive the longer it
 waits — `create_app` only grows. Easy to move if something else matters more.
 
+## Q — Host on `fe-pro`
+
+**Not specced.** Own `/symr-plan` session. **Gated on nothing.**
+
+Symr runs today as `venv/bin/python app.py` on a laptop, on port 45660, against a `symr.db` sitting
+in the repo directory. Moving it to the home server (`fe-pro`, reachable over Tailscale) is a
+roadmap step rather than an afternoon of `git pull` **because several things in the code assume the
+laptop**, and each is a small change that has to be made deliberately:
+
+- **The OAuth redirect URI.** `CLAUDE.md`'s "port 45660 is not negotiable" is a *consequence* of the
+  URI registered against `localhost:45660`, not a fact about the app — the server needs its own
+  registered URI, and the rule then needs restating rather than deleting, since the laptop dev loop
+  still depends on it. **Check the dashboard's current rules before designing this**: Spotify has
+  been tightening what a non-loopback redirect URI may look like, and HTTPS may be mandatory for
+  anything that isn't `127.0.0.1`. Tailscale can serve a real certificate for a `*.ts.net` name,
+  which is the natural answer if so — but verify rather than assume, the same way
+  `docs/spotify_constraints.md` was built.
+- **`SECRET_KEY` must stop being random per process.** `config.py` generates one per start unless
+  `SYMR_SECRET_KEY` is set, so today every restart silently invalidates the session. On a laptop
+  that is a nuisance; on a service that restarts on its own it is the difference between working and
+  not.
+- **`SYMR_DEBUG` must stay off**, and the reason is specific rather than general: the reloader
+  restarts on any `.py` write, which kills an in-flight pull mid-transaction.
+- **The process has to survive logout and reboot** — a service manager, not a terminal. That drags
+  in one real code gap: all four background jobs and `scoring.py`'s recompute worker are in-process
+  threads, and **nothing calls `jobs.request_stop()` on shutdown**. The cooperative stop exists and
+  every job polls it; no shutdown path uses it. Restarting the service today means killing whatever
+  job was running, wherever it had got to.
+- **Paths become absolute, and `symr.db` needs a backup story.** `DB_PATH`, the spotipy token cache
+  and `data/streaming_history/` are all relative today. The backup half matters more than the
+  paths: the database holds every merge, reviewed pair, alias, pin, generation and confirmed
+  grouping decision — **human curation that no re-pull can reconstruct**. Losing it is not a
+  re-download, it is losing the work.
+
+**App-level auth is deliberately out of scope, and this is the one place that needs stating
+explicitly.** `CLAUDE.md` makes security the exception to KISS, so leaving Symr unauthenticated
+looks like exactly the shortcut that rule forbids. It is not, because **Tailscale is the boundary**:
+the app is reachable only from devices already in the tailnet, which is a real authentication
+decision made one layer down, not an absent one. A login form behind it would add a password to
+protect against people who cannot reach the port.
+
+**The tripwire, and it is a hard one:** the moment Symr is reachable from anything outside the
+tailnet — a port forward, a public hostname, a reverse proxy, sharing it with anyone — **real
+authentication becomes a prerequisite, not a follow-up**, and it becomes its own step. Symr's login
+guard checks for a *Spotify token*, not for a *user*; there is no notion of who is asking. Anyone
+who can reach the port is Finn, with a live authed Spotify client and the round-trip's write scope.
+
 ## O — Request-budget surfacing
 
 **Not specced.** Own `/symr-plan` session. **Gated on data, not code** — it cannot be
@@ -756,6 +817,50 @@ request would be read once and never again.
 
 **Useful when this is picked up:** `roundtrip_run.requests` remains the only *per-run* request
 count from before the log existed, kept deliberately for failed runs too.
+
+## R — Scrobbling from recently-played
+
+**Not specced.** Own `/symr-plan` session. **Gated on Q** (it needs a process that is always up),
+and placed after **O** by decision — see the Order notes.
+
+Poll `GET /v1/me/player/recently-played` on a schedule and record what comes back as plays, so the
+library reflects listening without waiting on a GDPR export. **Explicitly non-authoritative**: the
+extended-streaming-history import stays the source of truth, and it backfills and corrects
+everything scrobbling recorded.
+
+**The budget, worked out 2026-08-22 rather than assumed:** the endpoint returns at most **50 items**
+per call, so the poll interval only has to be short enough that 50 tracks cannot elapse between
+polls. Taking a deliberately pessimistic **2 minutes per track**, 50 tracks is 1h40m of unbroken
+listening, so a poll every **100 minutes** cannot overflow the window — **14.4 requests per day**.
+That is small, and it is worth recording that the first instinct was that scrobbling would drain the
+quota; the arithmetic says otherwise. Real tracks average well over two minutes, so the true margin
+is larger than this.
+
+**What is affordable is still recurring**, which is the whole reason it sits behind O: every other
+request Symr spends is attached to a button someone pressed. This is the first that spends forever,
+unattended.
+
+**Two things to verify before designing anything**, both checked 2026-08-22:
+
+- **`user-read-recently-played` is not in `config.SPOTIFY_SCOPES`.** Adding it means a scope change
+  and a **fresh consent**, which is an interactive browser step — worth planning deliberately when
+  the app lives on a headless server.
+- **The endpoint is unprobed.** It appears nowhere in `docs/spotify_constraints.md`. Given that
+  `/v1/tracks?ids=`, `/v1/artists?ids=` and `/v1/audio-features` all **403** on this app while their
+  singular equivalents work, "recently-played works" is an assumption. Probe it first, and record
+  the result there.
+
+**Design questions for that session, not decisions to take now:**
+
+- **Provenance.** `play` rows dedupe on a SHA-1 `row_hash` over 16 named keys *from the export's
+  shape*. A scrobbled row does not have that shape, so it needs its own identity — and the import
+  needs a defined way to supersede it. That is what "non-authoritative" has to actually mean in the
+  schema, and it is the substance of the step.
+- **The two sources will disagree by construction.** Spotify counts a play at a different threshold
+  than the export records one, so reconciliation is a rule to choose, not a bug to fix.
+- **Missed windows are accepted.** More than 50 tracks inside one interval loses the excess until
+  the next export corrects it. That is the design working, not failing — worth writing down so
+  nobody later treats it as a defect.
 
 ## L — Better search
 
