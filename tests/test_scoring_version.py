@@ -450,3 +450,124 @@ def test_both_horizons_use_the_same_shrinkage(conn):
     # neither collapsed to its unshrunk raw value
     assert recent_windowed[gx["version"]] != pytest.approx(0.394324, abs=1e-4)
     assert recent_windowed[gy["version"]] != pytest.approx(0.254615, abs=1e-4)
+
+
+# ---------------------------------------------------- post-P mutation sweep
+#
+# Every test below was written from a surviving mutation, not from a reading
+# of the code: the bounded sweep over scoring.py / canonical.py / snapshot.py /
+# roundtrip.py killed 364 of 372 mutants, and these close the ones that
+# mattered. See docs/codebase-health/post_P_sweep.md.
+
+
+def test_the_recent_blend_weights_the_windowed_half_too(conn):
+    """The version above it asserts the same §7.1a formula and **cannot fail**
+    against a wrong weight on `recent_windowed`, because both its fixtures are
+    inactive in the window: the term is `(1 - BLEND) * 0`, which is 0 for any
+    coefficient at all. This one gives the version real in-window activity, so
+    the coefficient is load-bearing.
+
+    Asserted as a convex combination rather than a literal, because that is
+    what §7.1a's formula *is* — two weights summing to 1 — and it is the
+    property a wrong coefficient breaks: with `recent_windowed` above
+    `all_time`, doubling its weight pushes the result past the larger of the
+    two, which no weighted average of them can reach.
+    """
+    # source: scoring-H.md §7.1a -- "recent = (1 - RECENT_ALLTIME_BLEND)
+    # ·recent_windowed + RECENT_ALLTIME_BLEND·all_time". Found by the post-P
+    # mutation sweep: `(1 - BLEND)` -> `(2 - BLEND)` survived the whole suite.
+    group = builders.make_group(conn, ["t1"])
+    # Dense activity, all of it inside the 90-day window: the recent horizon
+    # sees the same plays over a window-clamped exposure, so recent_windowed
+    # comes out above all_time rather than below it.
+    for days in (5, 10, 15, 20, 25):
+        builders.make_play(conn, track_id="t1", ts=builders.days_ago(days))
+
+    now = _now()
+    all_time, recent = scoring._version_horizons(conn, now, [])
+    windowed, _ = scoring._score_all(scoring._fetch_version_inputs(conn, True, now, []))
+    vid = group["version"]
+
+    # The premise the older test lacks -- without this the assertion below
+    # holds for any coefficient, and the test is decoration.
+    assert windowed[vid] > 0
+
+    # And the degeneracy the older fixture fell into, named explicitly: with
+    # recent_windowed at 0 the whole formula collapses to BLEND * all_time,
+    # which is what made a wrong coefficient invisible there.
+    assert recent[vid] != pytest.approx(scoring.RECENT_ALLTIME_BLEND * all_time[vid])
+    assert recent[vid] == pytest.approx(
+        (1 - scoring.RECENT_ALLTIME_BLEND) * windowed[vid]
+        + scoring.RECENT_ALLTIME_BLEND * all_time[vid]
+    )
+
+
+def test_a_generation_that_began_exactly_at_the_window_edge_counts_as_recent(conn):
+    # source: scoring-H.md §7.1 -- tenure counts generations that "began
+    # within the window". The test above proves 200d out / 30d in; this is
+    # the boundary itself, which `>=` includes and `>` does not. Found by the
+    # post-P sweep: `started_at >= win` -> `> win` survived.
+    playlist = builders.make_playlist(conn)
+    builders.make_generation(conn, ordinal=1, playlist_id=playlist)
+    builders.make_group(conn, ["t1"])
+    now = _now()
+    edge = (now - timedelta(days=scoring.RECENT_WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    builders.make_membership(conn, playlist_id=playlist, track_id="t1", added_at=edge)
+
+    assert scoring._recent_ordinals(conn, now) == [1]
+
+
+def test_a_first_opportunity_exactly_at_the_window_start_gives_the_full_window(conn):
+    """`fo < win` and `fo <= win` are **the same function** at this point, and
+    that is the thing worth writing down: clamping a first opportunity that
+    already equals the window start assigns it the value it already had. The
+    post-P sweep flagged `<` -> `<=` as a surviving mutant here; it is an
+    equivalent mutant, not a gap, so no test can kill it and none should try.
+
+    This one exists to pin the boundary's *answer* -- 90, the full window --
+    so that a future change to either side of the comparison has to keep it.
+    """
+    # source: scoring-H.md §7.1 -- "Exposure E: ... clamped to the window".
+    now = _now()
+    win = (now - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    assert scoring._first_opportunity_days(now, True, win, win) == 90
+
+
+def test_the_recent_window_is_ninety_days_at_its_boundary(conn):
+    # source: scoring-H.md §7 -- the recent horizon is a 90-day window.
+    # Asserted at the boundary rather than by reading the constant: a play at
+    # 89 days is inside it and one at 91 days is not, which is the smallest
+    # fixture that pins the number itself. Found by the post-P sweep:
+    # RECENT_WINDOW_DAYS 90 -> 91 survived.
+    inside = builders.make_group(conn, ["t-inside"])
+    outside = builders.make_group(conn, ["t-outside"])
+    builders.make_play(conn, track_id="t-inside", ts=builders.days_ago(89))
+    builders.make_play(conn, track_id="t-outside", ts=builders.days_ago(91))
+
+    rows = scoring._fetch_version_inputs(conn, True, _now(), [])
+
+    assert rows[inside["version"]]["R"] > 0
+    assert rows[outside["version"]]["R"] == 0
+
+
+def test_the_subtier_own_score_counts_the_generations_its_tracks_were_in(conn):
+    # source: scoring-H.md §6 -- a recording/release/track's own score is
+    # computed "over their own narrower track set" from §4's inputs, tenure
+    # included; only the shrinkage is dropped (§4.4). That tenure term is a
+    # second query from the version tier's -- _fetch_own_inputs, not
+    # _fetch_version_inputs -- and only the version one was asserted, so
+    # emptying the own-tier tenure CTE survived the post-P sweep.
+    playlist = builders.make_playlist(conn)
+    builders.make_generation(conn, ordinal=1, playlist_id=playlist)
+    present = builders.make_group(conn, ["t-present"])
+    absent = builders.make_group(conn, ["t-absent"])
+    builders.make_membership(
+        conn, playlist_id=playlist, track_id="t-present", added_at=builders.days_ago(200)
+    )
+
+    rows = scoring._fetch_own_inputs(conn, "recording", False, _now(), [])
+
+    # Paired, so an implementation returning a constant fails one or the other.
+    assert rows[present["recording"]]["T"] == 1
+    assert rows[absent["recording"]]["T"] == 0

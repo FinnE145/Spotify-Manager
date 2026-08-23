@@ -162,7 +162,8 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
                            DONE            DONE       DONE
-  ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► F/G ──► L (search)
+  ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep)
+  ──► F/G ──► L (search)
 ```
 
 **P is three parts on one branch, not a normal step.** It is specced, but its entry point
@@ -197,6 +198,13 @@ thing Symr would ever spend quota on *recurring*, on a schedule, with nobody wat
 behind the step whose whole job is making that spend visible. Finn's call, 2026-08-22, made after
 doing the arithmetic in R's section below and finding it was affordable rather than assuming it
 wasn't.
+
+**S sits a few steps out on purpose, and the delay is the point.** A whole-codebase mutation
+sweep run the week after P would only re-measure what P had just finished measuring. Run after Q,
+O and R, it also covers three steps' worth of *new* code — and, more to the point, it is the only
+instrument that would show later sessions quietly dropping the standard P set, which is the
+failure mode a big testing investment actually has. Finn's call, 2026-08-23, when the bounded
+version landed.
 
 **O is gated on data, not code.** It follows J because J ships the `api_request` log, but the
 wait is for that log to *catch a real lockout* — until it has, there is no measured ceiling to
@@ -887,6 +895,46 @@ unattended.
 - **Missed windows are accepted.** More than 50 tracks inside one interval loses the excess until
   the next export corrects it. That is the design working, not failing — worth writing down so
   nobody later treats it as a defect.
+
+## S — Whole-codebase mutation sweep
+
+**Not specced.** Own `/symr-plan` session, though it may not need much of one — the method is
+already written down and already run once. **Gated on nothing**; placed after R by decision (see
+the Order notes).
+
+**The precedent, with numbers: `docs/codebase-health/post_P_sweep.md`.** That is the bounded
+version, run 2026-08-23 over the four highest-risk modules: **372 mutants, 364 killed**, with
+`canonical.py`, `snapshot.py` and `roundtrip.py` all at **100%** and every survivor in
+`scoring.py`. Read its §1 before building anything — the method, the operator list and the
+`.pyc`-cache trap that silently served mutated bytecode from a clean source tree are all there,
+and re-deriving them costs a session.
+
+**What this step adds** is the other ~11 modules plus whatever Q, O and R ship: `app.py`,
+`entities.py`, `canonical_detect.py`, `generations.py`, `backfill.py`, `artists.py`,
+`history_import.py`, `db.py`, `api_log.py`, `jobs.py`, `normalize.py`, `canonical_autogroup.py`,
+`grouping.py`, `spotify_client.py`.
+
+**Three things the bounded run settled that this one should not re-litigate:**
+
+- **A survivor is not automatically a gap.** Of eight, one was an equivalent mutant (no test can
+  kill it), one was masked by the test harness rather than by the suite, and one was cosmetic.
+  Budget triage time, and record the verdicts — an unexplained survivor list is worse than none,
+  because the next sweep re-derives it.
+- **Kill rates are per-module and worth publishing.** 100% on three modules is the useful half of
+  the result; it says where *not* to spend the next pass.
+- **Fix at the level below the one you found.** Every substantive survivor sat in the `recent`
+  horizon — the same region as P2-007, which had already been "fixed" one level up by asserting
+  the column rather than the computation filling it.
+
+**Cost, measured:** 372 mutants took ~45 minutes wall-clock across six parallel worker copies on
+an 8-core laptop, and **zero** Spotify requests. The whole tree is maybe 3–4× that. It is CPU and
+patience, not quota.
+
+**Consider at plan time:** whether the operator set should grow (the bounded run used a
+deliberately small one), whether to keep hand-rolled tooling or adopt `mutmut`/`cosmic-ray`, and
+whether any part of it is worth wiring into `symr-verify` as a per-session check rather than a
+one-off — the skill already asks for mutation on a session's *own* new tests, which is a much
+smaller thing than this.
 
 ## L — Better search
 

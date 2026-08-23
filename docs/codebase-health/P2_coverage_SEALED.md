@@ -433,3 +433,27 @@ and `grouping.py` sat at 100% while P2-008's six real gaps lived in them, and `a
 The number went 89% → 94% and that is not the result; the result is 39 tests, 22 mutations, and one
 finding.
 
+---
+
+## Post-P re-measurement (2026-08-23), after the bounded mutation sweep
+
+Run in the order `symr-verify` now prescribes — **mutation first, coverage second** — over the four
+modules `docs/codebase-health/post_P_sweep.md` swept: `scoring.py`, `canonical.py`, `snapshot.py`,
+`roundtrip.py`.
+
+**Every remaining miss falls under a ruling already in this file**, and no new gap was found:
+
+| miss | already ruled as |
+|---|---|
+| `canonical.py:177,190` | the defensive-guard class (session 5) |
+| `canonical.py:364` | `nested_tree`, "a one-line `subtree(conn, "song", …)` wrapper" |
+| `scoring.py:118` | unreachable at the shipped `TAIL_FLOOR = 1.0` |
+| `roundtrip.py`, `snapshot.py` remainder | the early-exit / defensive `return`·`continue`·`raise` class |
+
+**The ordering earned itself on this pass, which is the reason to record it.** Mutation found five
+real gaps in `scoring.py` — a blend coefficient multiplied by a zero fixture, an unpinned window
+constant, a boundary, an unasserted own-tier tenure input, and one equivalent mutant worth
+documenting. Coverage, run afterwards over the same four modules, found **nothing** those five
+were in: every one of them sat on a line the suite already executed. That is `P2_tests.md` §7's
+"executed is not observed" stated as a measurement rather than as an argument, and it is why
+`symr-verify` puts coverage second.

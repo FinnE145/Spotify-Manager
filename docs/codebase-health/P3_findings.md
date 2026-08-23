@@ -156,6 +156,12 @@ Two things make the intersection larger than it looks, and both are visible abov
 Neither is a defect to fix inside P3. Both belong on the post-P list, alongside anything else of
 this shape found in sessions 2 and 3.
 
+**Discharged 2026-08-23 → `docs/codebase-health/post_P_sweep.md`.** The class was answered by a
+bounded mutation sweep over the four highest-risk modules: 372 mutants, 364 killed, three of the
+four modules at 100%, and every survivor in `scoring.py`. Five tests followed. The whole-codebase
+version is roadmap step **S**, placed a few steps out so it also measures the feature work in
+between. The half of this finding about golden is now moot — no baseline exists to be blind.
+
 ---
 
 ## P3-004 — the return values only the golden baseline was reading
