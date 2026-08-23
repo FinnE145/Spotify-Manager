@@ -11,8 +11,9 @@ the corrections section.
 build fixtures directly rather than through `builders`. The one exception
 (`card.note` exclusion) goes through the real `/api/export` route, because
 `card.note`'s absence from the export is only a meaningful assertion against
-a dict that actually *has* the key (a `SELECT *` row does; a hand-built dict
-omitting it entirely would pass the same assertion vacuously).
+a dict that actually *has* the key (`_board_state`'s row does -- `note` is in
+its column list; a hand-built dict omitting it entirely would pass the same
+assertion vacuously).
 """
 
 import builders
@@ -286,9 +287,9 @@ def test_tray_cards_sort_alphabetically_by_display_name(conn):
 def test_card_note_never_appears_in_the_export_text(app, client, conn):
     # source: org-canvas.md -- "card.note ... entirely undocumented here, and
     # not included in the export text either." Exercised through the real
-    # /api/export route so the card dict genuinely carries `note` (a
-    # SELECT * row) -- a hand-built dict omitting the key would pass this
-    # assertion vacuously.
+    # /api/export route so the card dict genuinely carries `note` (it is in
+    # _board_state's column list) -- a hand-built dict omitting the key would
+    # pass this assertion vacuously.
     builders.make_card(
         conn, x=5, y=5, display_name="Real Card", note="a distinctive secret note xyz123"
     )

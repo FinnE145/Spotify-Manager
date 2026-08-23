@@ -160,11 +160,15 @@ Per the testing convention: leave anything ungrouped back in the queue.
 ## 2. `/dev/canonical` page load
 
 **§2.1's table is archived history, not current** (noted 2026-08-17, P1-009). Of its seven named
-calls, `cross_artist_groups` names a function that no longer exists at all, `all_candidate_groups`
-still exists but has zero callers anywhere (a P3 cleanup candidate), and `song_groups` was itself
-later split into `song_group_rows` / `hydrate_song_groups` — `song_tree × 142` is now capped at
-50, not 142. Only `candidate_groups` / `ensure_track_groups` / `tier_counts` still name live
-functions, and **none of the seven run on `/dev/canonical`'s current page-load path** — see §2.3.
+calls, `cross_artist_groups` and `all_candidate_groups` name functions that no longer exist at all
+— the second was deleted by P3 on 2026-08-22 (`P3_refactor.md` §4.4), having had zero callers
+anywhere — and `song_groups` was itself later split into `song_group_rows` / `hydrate_song_groups`
+— `song_tree × 142` is now capped at 50, not 142. Only `candidate_groups` / `ensure_track_groups` /
+`tier_counts` still name live functions, and **none of the seven run on `/dev/canonical`'s current
+page-load path** — see §2.3.
+
+The blocks below are left verbatim on purpose: §2.1 is a dated measurement that must not be
+re-derived, and §2.2 records the cause as it stood. Neither is a claim about today's code.
 
 ### 2.1 Measured (2026-08-07, 9,693 tracks)
 

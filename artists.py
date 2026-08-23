@@ -7,7 +7,7 @@ Read-only w.r.t. Spotify -- no calls here."""
 
 from collections import defaultdict
 
-import canonical_detect
+import normalize
 import scoring
 
 
@@ -169,7 +169,7 @@ def candidate_pairs(conn):
 
     buckets = defaultdict(list)
     for artist_id, rec in rows.items():
-        buckets[canonical_detect.normalize_name(rec["name"])].append(artist_id)
+        buckets[normalize.base_string(rec["name"])].append(artist_id)
 
     pairs = []
     for _norm, ids in buckets.items():

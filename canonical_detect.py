@@ -4,11 +4,11 @@ pre-filled tier labels; decides nothing and writes nothing. Pure
 computation over track/membership — no Spotify calls."""
 
 import re
-import unicodedata
 from collections import defaultdict
 
 import artists
 import canonical
+import normalize
 import scoring
 
 _SUFFIX_DELIMITERS = (" (", " [", " - ", " – ", " — ", " /")
@@ -67,13 +67,10 @@ _DURATION_TOLERANCE_MS = 2000
 # -- Normalization ----------------------------------------------------
 
 
-def _strip_accents(s):
-    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-
-
-def _strip_punct_collapse(s):
-    s = "".join(c for c in s if c.isalnum() or c.isspace())
-    return re.sub(r"\s+", " ", s).strip()
+# The three shared normalizers moved to normalize.py (P3_refactor.md §4.2):
+# artists.py needed one of them and this module needs artists.artist_sets, so
+# the two imported each other. The two below stay here -- they are
+# detection-specific, and nothing outside detection wants a split suffix.
 
 
 def _split_suffix(s):
@@ -88,9 +85,9 @@ def _split_suffix(s):
 
 
 def normalize_title(title):
-    folded = _strip_accents(title or "").lower()
+    folded = normalize.strip_accents(title or "").lower()
     base_raw, suffix_raw = _split_suffix(folded)
-    return _strip_punct_collapse(base_raw), suffix_raw.strip()
+    return normalize.strip_punct_collapse(base_raw), suffix_raw.strip()
 
 
 def normalize_suffix(s):
@@ -105,7 +102,7 @@ def normalize_suffix(s):
     Digits are kept: "1947 version", "remastered 1999" and "99 luftballons"
     all need them.
     """
-    folded = _strip_accents(s or "").casefold()
+    folded = normalize.strip_accents(s or "").casefold()
     spaced = "".join(c if (c.isalnum() or c.isspace()) else " " for c in folded)
     return re.sub(r"\s+", " ", spaced).strip()
 
@@ -115,16 +112,6 @@ def _has_keyword(normalized, keywords):
     but not in " feat don toliver "."""
     padded = f" {normalized} "
     return any(f" {kw} " in padded for kw in keywords)
-
-
-def _normalize_base_string(s):
-    return _strip_punct_collapse(_strip_accents(s or "").lower())
-
-
-# Artist names normalize through the same pipeline as titles, but only to
-# spot duplicate-id candidates in artists.py -- detection itself never
-# matches on names.
-normalize_name = _normalize_base_string
 
 
 def classify_suffix(suffix):
@@ -233,7 +220,7 @@ def _fetch_tracks(conn):
             "artist_ids": credits["artist_ids"],
             "primary_ids": credits["primary_ids"],
             "featured_ids": credits["featured_ids"],
-            "album_norm": _normalize_base_string(row["album_name"] or ""),
+            "album_norm": normalize.base_string(row["album_name"] or ""),
             "real_groups": real_groups.get(row["track_id"]),
             "pinned": row["track_id"] in pinned_ids,
         }
@@ -607,11 +594,6 @@ def _build_all_groups(conn):
 def candidate_groups(conn):
     main, _cross = _build_all_groups(conn)
     return _order([g for g in main if not g["reviewed"]])
-
-
-def all_candidate_groups(conn):
-    main, cross = _build_all_groups(conn)
-    return _order(main + cross)
 
 
 def filter_groups(groups, query):

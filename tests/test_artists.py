@@ -20,6 +20,7 @@ what builds that.
 import artists
 import builders
 import canonical_detect as detect
+import normalize
 
 
 def scored_artist(conn, artist_id, name, track_ids, version_scores):
@@ -464,7 +465,14 @@ def test_artist_names_normalize_through_the_title_base_pipeline(conn):
     # lowercase, drop non-alphanumerics, collapse whitespace"; and E §1's
     # P1-013 amendment -- the two normalizers "are not the same function",
     # the base half deleting punctuation and the suffix half spacing it.
-    assert detect.normalize_name is detect._normalize_base_string
-    assert detect.normalize_name("Tyler, The Creator") == "tyler the creator"
-    assert detect.normalize_name("half\u2022alive") == "halfalive"
+    #
+    # That pipeline is now `normalize.base_string` (P3_refactor.md §4.2): it
+    # was `canonical_detect._normalize_base_string` with a `normalize_name`
+    # alias beside it, and this test used to assert the two were the same
+    # object. Both names are gone -- there is one function now, so that
+    # identity check would compare it against itself. What it was really
+    # pinning (artist names and title bases share one pipeline) is now true
+    # by construction; the behaviour below is what remains worth asserting.
+    assert normalize.base_string("Tyler, The Creator") == "tyler the creator"
+    assert normalize.base_string("half\u2022alive") == "halfalive"
     assert detect.normalize_suffix("half\u2022alive") == "half alive"

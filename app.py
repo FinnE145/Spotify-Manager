@@ -548,8 +548,18 @@ def create_app():
     @app.route("/playlist/<playlist_id>", endpoint="playlist_page")
     def playlist_page(playlist_id):
         conn = db.get_db()
+        # All 15 columns, named rather than `SELECT *` (P3_refactor.md §4.5) --
+        # the template reads this row by name and wants most of it, so the list
+        # is the whole table rather than a subset. Kept inline rather than
+        # shared with /dev/snapshot's identical list: the two are headed for
+        # different modules in P3's later sessions, and a constant between them
+        # would just become a cross-module import.
         playlist = conn.execute(
-            "SELECT * FROM snapshot WHERE playlist_id = ?", (playlist_id,)
+            "SELECT playlist_id, name, image_url, owner, track_count, pulled_at, "
+            "snapshot_id, last_changed_at, tracks_pulled_at, unfollowed_at, description, "
+            "last_pull_error, excluded, generation_declined, tracks_pulled_snapshot_id "
+            "FROM snapshot WHERE playlist_id = ?",
+            (playlist_id,),
         ).fetchone()
         if playlist is None:
             abort(404, description="Playlist not found.")
@@ -1150,7 +1160,14 @@ def create_app():
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
         conn = db.get_db()
-        playlists = conn.execute("SELECT * FROM snapshot").fetchall()
+        # Named columns, not `SELECT *` (P3_refactor.md §4.5). See the matching
+        # list on /playlist/<id> for why the two are not shared.
+        playlists = conn.execute(
+            "SELECT playlist_id, name, image_url, owner, track_count, pulled_at, "
+            "snapshot_id, last_changed_at, tracks_pulled_at, unfollowed_at, description, "
+            "last_pull_error, excluded, generation_declined, tracks_pulled_snapshot_id "
+            "FROM snapshot"
+        ).fetchall()
         playlist_score_map = scoring.playlist_scores(conn, [p["playlist_id"] for p in playlists])
         playlists = sorted(
             playlists,
@@ -1655,16 +1672,32 @@ def create_app():
 
 
 def _board_state(conn):
+    # Columns named rather than `SELECT *` (P3_refactor.md §4.5), and here the
+    # rule earns its keep twice over. These rows are `dict(row)`-ed straight
+    # into /api/board's JSON, so `*` meant a column added to `card` would
+    # silently widen the API payload -- and it also meant the payload's **key
+    # order depended on the database's migration history**: `note` arrives via
+    # ALTER TABLE (db.py:660), so `*` returns it last on a database that
+    # migrated into it and seventh on one built fresh from SCHEMA. Naming them
+    # is what makes the payload the same shape everywhere. The order below is
+    # the migrated one, which is what every existing database actually has.
+    #
+    # The cost, accepted: a column added to either table has to be added here
+    # too, where `*` would have picked it up. That is the point -- a query that
+    # silently widens is what the rule exists to prevent.
     cards = [
         dict(row)
         for row in conn.execute(
-            "SELECT * FROM card WHERE board_id = ? ORDER BY id", (db.DEFAULT_BOARD_ID,)
+            "SELECT id, board_id, entity_type, entity_id, display_name, image_url, "
+            "placement, x, y, note FROM card WHERE board_id = ? ORDER BY id",
+            (db.DEFAULT_BOARD_ID,),
         )
     ]
     labels = [
         dict(row)
         for row in conn.execute(
-            "SELECT * FROM label WHERE board_id = ? ORDER BY id", (db.DEFAULT_BOARD_ID,)
+            "SELECT id, board_id, text, x, y FROM label WHERE board_id = ? ORDER BY id",
+            (db.DEFAULT_BOARD_ID,),
         )
     ]
     return {"cards": cards, "labels": labels}

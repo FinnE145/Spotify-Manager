@@ -163,7 +163,6 @@ This puts the songs that appear all over the library first, and — since larger
 
 ```python
 candidate_groups(conn) -> list[CandidateGroup]      # main queue, ordered, unreviewed only
-all_candidate_groups(conn) -> list[CandidateGroup]  # incl. reviewed, for the viewer page
 ad_hoc_group(conn, track_ids) -> CandidateGroup     # arbitrary selection, for search → queue
 
 cross_buckets(conn) -> list[CrossItem]              # the reworked cross-artist queue

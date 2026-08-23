@@ -27,6 +27,7 @@ from spotipy.exceptions import SpotifyException
 import canonical_detect
 import db
 import jobs
+import normalize
 import scoring
 import snapshot
 from jobs import RateLimited
@@ -605,7 +606,7 @@ def _album_artist_keys(track):
     artists specifically, because that is what the export's
     reported_artist_name is -- it misses featured credits by design."""
     artists = (track.get("album") or {}).get("artists") or []
-    return {canonical_detect.normalize_name(a.get("name") or "") for a in artists}
+    return {normalize.base_string(a.get("name") or "") for a in artists}
 
 
 def _expected_labels(conn, uris):
@@ -615,7 +616,7 @@ def _expected_labels(conn, uris):
     return {
         row["uri"]: (
             _title_key(row["name"]),
-            canonical_detect.normalize_name(row["artist"] or ""),
+            normalize.base_string(row["artist"] or ""),
         )
         for row in conn.execute(
             "SELECT spotify_track_uri AS uri, MAX(reported_track_name) AS name, "
