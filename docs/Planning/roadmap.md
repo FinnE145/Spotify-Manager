@@ -10,12 +10,12 @@
 
 ## Spec index
 
-What each of the 17 audited specs in `docs/specs/` actually covers, and the code it's
+What each of the 18 audited specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
 a lookup from now on rather than a re-derivation. `codebase-health-P.md` itself isn't in the
-17 — it's the standing approach doc for this step, not an audited spec (see its own §0).
+18 — it's the standing approach doc for this step, not an audited spec (see its own §0).
 
 Four predate the lettered steps entirely (Symr's original build-out, before this roadmap
 existed); the rest map onto the lettered order above. **P1 audited** tracks
@@ -40,6 +40,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `partial-pulls-J.md` | Resumable/partial playlist pulls (derived work list, no cursor); the API request log | `snapshot.py` (pull logic), `api_log.py` | J | partial — see P1-004, P1-005 |
 | `grouping-fixes-backfill-M.md` | Three review-UI bugs (M1/M1b/M1c) + the album-tracklist backfill job | `canonical.py`, `backfill.py`, `entities.py` | M | no |
 | `async-recompute-N.md` | Moves `scoring.recompute()` off the request path for queue-driven writes | `scoring.py` (worker/backstop) | N | no |
+| `host-on-fe-pro-Q.md` | Symr on `fe-pro`: Docker + waitress behind `tailscale serve`, graceful shutdown, nightly backups, bootstrap/deploy | `serve.py`, `deploy/`, `config.py`, `jobs.drain()` | Q | no |
 
 ---
 
@@ -163,6 +164,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
                            DONE            DONE       DONE
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep)
+      DONE
   ──► F/G ──► L (search)
 ```
 
@@ -170,10 +172,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N, J and P have landed** — P in all three of its parts, verified and
-merged 2026-08-22. Their sections below are marked, and each points at the spec that is
-authoritative for what actually shipped — read the spec, not the summary here, before touching
-any of them.
+**A, I, C, D, E, B, K, H, M, N, J, P and Q have landed** — P in all three of its parts, verified and
+merged 2026-08-22; Q verified and merged 2026-08-23. Their sections below are marked, and each
+points at the spec that is authoritative for what actually shipped — read the spec, not the summary
+here, before touching any of them.
 
 **`score` is now available to everything downstream** → `docs/specs/scoring-H.md`. Anything
 below that wants a ranking should read it rather than inventing one, and anything that
@@ -775,9 +777,31 @@ on it: O is gated on the request log catching a real lockout, so it cannot start
 whatever the order says. P has no dependencies at all and gets more expensive the longer it
 waits — `create_app` only grows. Easy to move if something else matters more.
 
-## Q — Host on `fe-pro`
+## Q — Host on `fe-pro` ✅ DONE
 
-**Not specced.** Own `/symr-plan` session. **Gated on nothing.**
+**Specced and shipped: `docs/specs/host-on-fe-pro-Q.md`** — read that, not this section, before
+touching any of it. Verified and merged 2026-08-23.
+
+Three things below were confirmed by measurement rather than assumed, and two were corrected:
+
+- **The redirect-URI warning was right, and stricter than guessed** (spec §3.2): HTTPS is mandatory
+  for anything that isn't loopback, *and* `localhost` is not permitted at all — loopback must be the
+  literal `127.0.0.1` or `[::1]`. The laptop's existing URI was already compliant; the server got a
+  second one, `https://fe-pro.tail78f5ec.ts.net/callback`, behind `tailscale serve`.
+- **The shutdown gap was real** (spec §6) and is closed by `jobs.drain()` + `serve.py`'s SIGTERM
+  handler. But it buys tidiness, not data safety: all four jobs were already interruption-safe by
+  design, so an abrupt kill only ever cost re-work.
+- **"Paths become absolute" overstated it** (spec §5.2): `DB_PATH` and the spotipy cache were
+  already environment-sourced with relative *defaults*, so only `history_import.UPLOAD_ROOT` needed
+  moving into `config.py`. One new setting, not three.
+- **One thing this section doesn't mention turned out to be forced** (spec §3.3): the container must
+  publish to `127.0.0.1` only, never `0.0.0.0` as the Minecraft container does. §12's
+  unauthenticated design is justified *only* by Tailscale being the boundary, and a LAN-wide bind
+  would remove that boundary in one line of YAML.
+
+The original planning notes follow, unchanged.
+
+**Gated on nothing.**
 
 Symr runs today as `venv/bin/python app.py` on a laptop, on port 45660, against a `symr.db` sitting
 in the repo directory. Moving it to the home server (`fe-pro`, reachable over Tailscale) is a
