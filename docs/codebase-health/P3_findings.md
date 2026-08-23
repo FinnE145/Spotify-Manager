@@ -10,7 +10,8 @@ byte-exact diff meaningful: that every difference is a defect.
 | id | session | subject | ruling |
 |---|---|---|---|
 | P3-001 | 1 | `SELECT *` in `_board_state` — **and a correction to what this finding first claimed about it** | **leave as is** (2026-08-22) |
-| P3-002 | 1 | The golden baseline is blind to JSON **key order**, because `jsonify` sorts | **unruled** |
+| P3-002 | 1 | The golden baseline is blind to JSON **key order**, because `jsonify` sorts | **record and leave** (2026-08-22) |
+| P3-003 | 1 (Verify) | `normalize.base_string`'s accent-stripping was unasserted by the whole suite *and* invisible to golden | **assertion fixed now; the class goes to the post-P sweep** (2026-08-22) |
 
 ---
 
@@ -98,8 +99,57 @@ it: storing statuses would change what a snapshot *is*, and the only way to get 
 existing baseline is a re-capture — the one action §3.4 forbids outright, since it promotes any
 regression already introduced into the new baseline.
 
-**Recommended ruling:** record and leave. If a future site-wide refactor wants the status dimension,
-it belongs in the capture format from the start, decided before that refactor's baseline is taken.
+**Ruled 2026-08-22: record and leave.** If a future site-wide refactor wants the status dimension, it
+belongs in the capture format from the start, decided before that refactor's baseline is taken.
+
+---
+
+## P3-003 — a mutation that survived 770 tests *and* a clean golden compare
+
+**Found:** session 1's Verify pass, by mutation against the code session 1 had just moved.
+
+Deleting `strip_accents` from `normalize.base_string` — so artist names, album names and title bases
+stop being accent-folded — left **all 770 tests passing and the golden compare clean**. Both halves
+matter, because between them they are the entire safety net P3 is relying on for the ~583 lines
+sessions 2 and 3 move.
+
+It is not hypothetical. `symr.db` carries a merged artist pair **"Jerome Ducros" / "Jérôme Ducros"**,
+which `artists.candidate_pairs` could only ever have bucketed together because of that call. Golden
+cannot see it for a reason worth knowing: the pair is *already reviewed*, so it renders under
+`/dev/artists`' **Merged** table rather than under **Duplicate candidates**, and the merged table
+reads stored rows rather than re-deriving the buckets. A golden baseline over a curated library
+observes the *outcome* of past curation, not the rule that produced it.
+
+**This is not a P3 regression.** `main` has the identical hole: the assertion that moved
+(`test_artists.py:465`) carried no accented string before the move either, and the identity check
+retired beside it would not have caught this — it pinned that two *names* referred to one function,
+which says nothing about what that function does.
+
+### Fixed here
+
+One accented assertion added to the test that moved. It kills the mutation. The test's own comment
+had claimed the pipeline was "NFKD, strip combining marks" since before P3 — that claim is now
+checked rather than merely stated, which is the narrow version of `P2_tests.md` §1's question asked
+of a comment instead of an assertion.
+
+### Left for the post-P sweep — the reason this is a finding and not just a fix
+
+The *class* is out of P3's scope (§2: behaviour-preserving, and a bug found while moving code is
+recorded, not fixed). What the one instance shows is a question nothing has systematically asked:
+**which properties of the code P3 moves are unasserted by the suite and simultaneously unobservable
+in the golden baseline?** That intersection is where a refactor can quietly change behaviour with
+both nets reporting green, and it is exactly where P3-002's two known blind spots also live.
+
+Two things make the intersection larger than it looks, and both are visible above:
+
+- **A golden baseline over a curated database sees settled state, not live rules.** Anything whose
+  effect has already been recorded — a merge, a review, a pin, an alias — renders from the stored
+  row, so the rule that produced it is not re-run on the page being compared.
+- **A moved function keeps its old tests, including their old blind spots.** The move is where the
+  question gets asked; the tests come along unexamined unless someone asks it.
+
+Neither is a defect to fix inside P3. Both belong on the post-P list, alongside anything else of
+this shape found in sessions 2 and 3.
 
 ---
 
@@ -112,10 +162,14 @@ it belongs in the capture format from the start, decided before that refactor's 
   blocks themselves. That established convention was followed — the prose note carries the
   correction, the dated measurement is not re-derived (`CLAUDE.md`'s rule for the roadmap's
   measurements, applied here for the same reason).
-- **`normalize.py` is new and is not yet in `CLAUDE.md`'s codebase map.** §4.3 puts the map update
-  in session 3 deliberately, once the code has settled. §4.3's module-list check is the backstop
-  that makes forgetting it impossible, and it is the exact drift class that check was designed for
-  ("a module added and never documented, which P3 itself would commit if 4.2 landed unrecorded").
+- **`normalize.py` was added to `CLAUDE.md`'s codebase map in session 1's Verify, not deferred to
+  session 3.** The session had recorded the opposite, on §4.3's "do that by hand, in session 3, once
+  the code has settled". Verify's finish-up requires the map to cover new modules, and the two
+  reconcile cleanly: what §4.3 defers is the *restructuring* the nine extracted views will force,
+  which genuinely has not settled — a brand-new module is not part of that and is stable now.
+  Leaving it out would have merged a wrong map to `main` and left it wrong for two sessions, with
+  §4.3's module-list check (still session 3's) not yet written to catch it. The `tests/` entry gained
+  `test_golden_pass.py` at the same time and for the same reason.
 - **`tests/test_artists.py`'s identity assertion was retired, not moved.** It asserted
   `detect.normalize_name is detect._normalize_base_string` — that artist-name and title-base
   normalization were one function. Both names are gone and there is exactly one function now, so

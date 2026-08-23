@@ -476,3 +476,9 @@ def test_artist_names_normalize_through_the_title_base_pipeline(conn):
     assert normalize.base_string("Tyler, The Creator") == "tyler the creator"
     assert normalize.base_string("half\u2022alive") == "halfalive"
     assert detect.normalize_suffix("half\u2022alive") == "half alive"
+    # The accent case is what makes the "NFKD, strip combining marks" half of
+    # that comment checkable rather than merely stated -- without it, deleting
+    # strip_accents() from base_string() passes this whole file (P3-003). The
+    # pair is real: symr.db carries a merged "Jerome Ducros" / "Jerome Ducros"
+    # with the accents, which bucketed together only because of this call.
+    assert normalize.base_string("J\u00e9r\u00f4me Ducros") == "jerome ducros"
