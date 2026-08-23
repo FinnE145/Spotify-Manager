@@ -1,0 +1,8 @@
+venv/
+data/
+symr.db*
+.env
+.spotipy_cache*
+tests/
+__pycache__/
+.git/

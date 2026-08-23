@@ -14,6 +14,7 @@ import shutil
 import zipfile
 from datetime import datetime, timezone
 
+import config
 import db
 import jobs
 import scoring
@@ -22,7 +23,7 @@ import scoring
 # timestamp here). The export's chunking isn't stable between exports, so
 # overwriting a shared folder by filename would leave orphans from the old
 # chunking that later imports would silently re-count.
-UPLOAD_ROOT = os.path.join("data", "streaming_history")
+UPLOAD_ROOT = config.UPLOAD_ROOT
 
 _ZIP_NAME = "export.zip"
 _JSON_GLOB = "Streaming_History_*.json"

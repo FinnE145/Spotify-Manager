@@ -15,6 +15,7 @@ specifically so that decision lands here rather than inside `requests`.
 """
 
 import threading
+import time
 
 import pytest
 from spotipy.exceptions import SpotifyException
@@ -137,6 +138,60 @@ def test_a_new_job_clears_a_stop_left_over_from_the_previous_run():
 
     jobs.try_start("snapshot", check)
     assert ran.wait(2) is True
+
+
+def test_drain_returns_immediately_when_nothing_is_running(no_sleep):
+    # source: host-on-fe-pro-Q.md §6.4 / Tests clause 2 -- "With no job
+    # active, returns True without waiting" -- catches a drain() that just
+    # sleeps out its timeout regardless of whether anything is running.
+    # Asserted via no_sleep rather than a wall-clock measurement: this
+    # suite's autouse freezer fixture freezes time.monotonic, so timing the
+    # call would prove nothing.
+    assert jobs.drain(timeout=5) is True
+    assert no_sleep == []
+
+
+def test_drain_stops_a_cooperative_job_and_waits_for_the_slot():
+    """A job that polls stop_requested() at its own safe points -- exactly
+    how all four real jobs behave -- exits on its own once drain() asks."""
+    # source: host-on-fe-pro-Q.md §6.4 / Tests clause 2 -- "returns True once
+    # the slot clears, and the job observed the flag" -- catches a drain()
+    # that waits without ever calling request_stop. A non-default job name
+    # ("backfill"): request_stop(name) no-ops when name != _active, so a
+    # drain() that hardcoded "snapshot" would pass a test using "snapshot"
+    # while being completely broken.
+    started, observed_stop = threading.Event(), threading.Event()
+
+    def cooperative():
+        started.set()
+        while not jobs.stop_requested():
+            time.sleep(0.01)
+        observed_stop.set()
+
+    jobs.try_start("backfill", cooperative)
+    started.wait(2)
+
+    assert jobs.drain(timeout=5) is True
+    assert observed_stop.is_set()
+    assert jobs.active() is None
+
+
+def test_drain_times_out_on_a_job_that_ignores_the_stop_flag():
+    # source: host-on-fe-pro-Q.md §6.4 / Tests clause 2 -- "With a job that
+    # ignores the flag, returns False after the timeout" -- catches a
+    # drain() that reports success unconditionally.
+    started, release = threading.Event(), threading.Event()
+
+    def stubborn():
+        started.set()
+        release.wait(2)  # never checks stop_requested()
+
+    jobs.try_start("backfill", stubborn)
+    started.wait(2)
+
+    assert jobs.drain(timeout=0.2) is False
+
+    release.set()
 
 
 def test_now_iso_carries_an_explicit_z():

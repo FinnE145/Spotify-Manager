@@ -1,0 +1,19 @@
+# docs/specs/host-on-fe-pro-Q.md §4.2. Run from /srv/symr/repo/deploy on
+# fe-pro: `docker compose -f docker-compose.yml up -d --build`.
+services:
+  symr:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    container_name: symr
+    env_file: /srv/symr/symr.env
+    volumes:
+      - /srv/symr/data:/data
+    ports:
+      # Loopback only -- never 0.0.0.0. §3.3: Symr is unauthenticated at the
+      # app level and relies entirely on Tailscale as the reachability
+      # boundary (§12). Widening this bind changes that security model and
+      # needs §12 read first.
+      - "127.0.0.1:45660:45660"
+    restart: unless-stopped
+    # Docker's default is 10s, too short for jobs.drain()'s 40s poll window
+    # (§6.3) -- see serve.py's SIGTERM handler.
+    stop_grace_period: 45s

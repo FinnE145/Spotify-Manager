@@ -13,6 +13,12 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 ## Liked Songs
 - Exposed as **Saved Tracks**; readable and writable (add/remove) via the API.
 
+## Redirect URI — HTTPS required except loopback (verified 2026-08-23, `docs/specs/host-on-fe-pro-Q.md` §3.2)
+- HTTPS is required for the OAuth redirect URI **unless** the address is loopback, where HTTP is permitted.
+- `localhost` is **not allowed at all** as a redirect host — loopback must be the literal `127.0.0.1` or `[::1]`.
+- Enforcement began 2025-04-09 for new apps; all apps had to migrate by 2025-11.
+- An app may register **several** redirect URIs; which one is used is decided per-environment by `SPOTIFY_REDIRECT_URI`. Symr's laptop dev loop uses the loopback form (`http://127.0.0.1:45660/callback`, already compliant); its `fe-pro` server deployment uses an HTTPS tailnet URI (`https://fe-pro.tail78f5ec.ts.net/callback`) since a `*.ts.net` name is not loopback.
+
 ## Auth / scopes (verified against developer.spotify.com/documentation/web-api/concepts/scopes)
 - Reading private playlists: `playlist-read-private` (and `playlist-read-collaborative` for collaborative ones).
 - Modifying playlists: `playlist-modify-private`, `playlist-modify-public` (note: adding tracks to a *public* playlist still needs `playlist-modify-public`).

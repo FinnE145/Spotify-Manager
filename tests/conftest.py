@@ -58,9 +58,11 @@ os.environ["SPOTIFY_REDIRECT_URI"] = "http://localhost:45660/callback"
 # file that does not exist, it returns None with no network call at all.
 os.environ["SYMR_SPOTIPY_CACHE"] = os.path.join(TMP_DIR, "spotipy-cache")
 
-# A random per-process key is config.py's default and would make every test's
-# session cookie unverifiable across an app rebuild. Fixed here so a test can
-# construct two apps and have one read the other's session.
+# Required, not optional: config.py has no fallback for this and raises KeyError
+# without it (host-on-fe-pro-Q.md §5.1), so missing it fails collection of the
+# whole suite exactly as missing a Spotify credential does. Pinned to a fixed
+# value rather than a random one so a test can construct two apps and have one
+# read the other's session.
 os.environ["SYMR_SECRET_KEY"] = "test-secret-key"
 
 # Only app.py's __main__ block reads APP_DEBUG today, so this is inert -- pinned
@@ -186,13 +188,15 @@ if os.path.realpath(config.DB_PATH) == _REAL_DB:
 
 # ---------------------------------------------------------------- the other real path
 
-# `history_import.UPLOAD_ROOT` is the one filesystem path in the project that
-# config.py does not own: a module constant, relative to cwd, resolving to the
-# repo's own `data/streaming_history/` -- which holds Finn's real GDPR exports.
-# An import test left unredirected would both write new folders there and let
-# `latest_upload()` find and reimport seven years of real history. Redirected at
-# import time rather than by a fixture for the same reason as everything above:
-# a fixture is a thing a test can forget to request.
+# `history_import.UPLOAD_ROOT` binds from `config.UPLOAD_ROOT` at import time
+# (its own default, unset, resolves to the repo's own `data/streaming_history/`
+# -- which holds Finn's real GDPR exports), but this rebinds the module
+# attribute directly rather than via SYMR_UPLOAD_ROOT so it doesn't also need
+# setting before the env block above. An import test left unredirected would
+# both write new folders there and let `latest_upload()` find and reimport
+# seven years of real history. Redirected at import time rather than by a
+# fixture for the same reason as everything above: a fixture is a thing a
+# test can forget to request.
 import history_import  # noqa: E402  -- must follow the DB_PATH verification above
 
 history_import.UPLOAD_ROOT = os.path.join(TMP_DIR, "streaming_history")

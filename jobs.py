@@ -98,6 +98,37 @@ def stop_requested():
         return _stop_requested
 
 
+_DRAIN_POLL_SECONDS = 0.05
+
+
+def drain(timeout=40):
+    """Asks the running job to stop and waits for the slot to clear -- the
+    container's graceful-shutdown path (serve.py's SIGTERM handler).
+    Cooperative like request_stop: never kills anything, so a job that
+    ignores the flag just times out and Docker's SIGKILL is the backstop.
+
+    Polls a fixed number of times rather than against a time.monotonic()
+    deadline: the test suite runs every test under a frozen clock
+    (freezegun), which would make a monotonic-based deadline never arrive.
+    time.sleep is not frozen, so a fixed count of real sleeps is the form of
+    timeout that survives that (conftest.py's _background_threads_settled
+    faces the identical constraint).
+
+    Returns True once the slot is clear (immediately if nothing was running),
+    False if it didn't clear within timeout.
+    """
+    name = active()
+    if name is None:
+        return True
+    request_stop(name)
+    attempts = max(1, int(timeout / _DRAIN_POLL_SECONDS))
+    for _ in range(attempts):
+        if active() is None:
+            return True
+        time.sleep(_DRAIN_POLL_SECONDS)
+    return active() is None
+
+
 # -- Spotify calls -------------------------------------------------
 
 

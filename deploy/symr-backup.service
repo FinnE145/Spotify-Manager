@@ -1,0 +1,10 @@
+# docs/specs/host-on-fe-pro-Q.md §7.2. Install to /etc/systemd/system/,
+# paired with symr-backup.timer (which triggers this; do not `enable` this
+# unit directly). Runs as finne -- symr.db is owned by uid 1000 on the host.
+[Unit]
+Description=Symr database backup (VACUUM INTO, 30-day retention)
+
+[Service]
+Type=oneshot
+User=finne
+ExecStart=/srv/symr/repo/deploy/backup.sh

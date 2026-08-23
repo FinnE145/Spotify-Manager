@@ -13,9 +13,8 @@ being run twice safely and about not trusting the zip:
 - **`_offline_ts` has to handle a column that mixes units**, seconds-scale for
   most values and milliseconds-scale for a few hundred.
 
-`UPLOAD_ROOT` is redirected by conftest to a temp path, because it is the one
-filesystem path `config.py` does not own and it otherwise resolves to Finn's
-real exports.
+`UPLOAD_ROOT` is redirected by conftest to a temp path, because its default
+(unset) otherwise resolves to Finn's real exports.
 """
 
 import json

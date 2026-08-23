@@ -1,0 +1,13 @@
+# docs/specs/host-on-fe-pro-Q.md §7.2. Install to /etc/systemd/system/
+# alongside symr-backup.service, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now symr-backup.timer
+[Unit]
+Description=Daily timer for Symr database backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
