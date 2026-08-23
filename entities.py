@@ -213,6 +213,12 @@ def group_detail(conn, tier, group_id):
     exists but has no members. The second can't be left to the route: every
     line below it indexes track_ids[0]."""
     row = conn.execute("SELECT tier FROM canonical_group WHERE id = ?", (group_id,)).fetchone()
+    # The `!= tier` half cannot change the *status*: group ids are one space
+    # across all four tiers, so a wrong-tier id yields an empty member list and
+    # the caller's "no members" 404 catches it anyway (P2-009). It is kept for
+    # the honest message -- "no such group" rather than "group has no members"
+    # -- and to skip building a tree; a test asserting only a status code here
+    # is one that cannot fail, which is how this was found.
     if row is None or row["tier"] != tier:
         return None
 

@@ -97,6 +97,15 @@ def _cleanup_tier(conn, tier, column):
         "WHERE tier = ? AND representative_track_id IS NOT NULL",
         (tier,),
     ).fetchall()
+    # Looks dead and is deliberately kept (P2-004). `apply_partition` appears
+    # unable to strand a pin: step 4 only reuses a group id when a part covers
+    # that group's full membership, pinned track included, so a group that
+    # survives still contains its pin -- and three adjacent routes were checked
+    # and reach it either. That is a reading of the algorithm plus a caller
+    # check, which is weaker evidence than the caller search that condemned
+    # genuinely dead code, and the costs are asymmetric: keeping a cheap
+    # defensive branch costs nothing, removing a load-bearing one costs a
+    # silently wrong pin. Do not delete it as obviously unreachable.
     for row in reps:
         actual_group = _get_column(conn, row["representative_track_id"], column)
         if actual_group != row["id"]:
