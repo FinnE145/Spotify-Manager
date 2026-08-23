@@ -15,6 +15,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
+import canonical
 import jobs
 
 TIER_COLUMN = {"version": "version_id", "song": "song_id"}
@@ -176,6 +177,54 @@ def tenures(conn, tier="version"):
             }
         )
     return result
+
+
+def generation_view(conn, ordinal, tier):
+    """One generation's carried/new split, rendered by
+    /playlist/<id>?generation=1 (docs/specs/generations-B.md).
+
+    Which groups this generation shares with the one before it, which are
+    new to it, and how many of them survive into the one after -- None for
+    the newest generation, which has no next to survive into, and which the
+    template renders differently from a genuine zero.
+
+    tier is "version" or "song"; the route owns parsing it off the query
+    string, and _tier_column whitelists it rather than interpolating."""
+    column = _tier_column(tier)
+
+    spans = generation_spans(conn)
+    idx = next(i for i, s in enumerate(spans) if s["ordinal"] == ordinal)
+
+    def _groups_at(at_ordinal):
+        return {
+            r[0]
+            for r in conn.execute(
+                f"SELECT DISTINCT {column} FROM generation_presence WHERE ordinal = ?",
+                (at_ordinal,),
+            )
+        }
+
+    this_groups = _groups_at(ordinal)
+    prev_groups = _groups_at(spans[idx - 1]["ordinal"]) if idx > 0 else set()
+    next_groups = _groups_at(spans[idx + 1]["ordinal"]) if idx + 1 < len(spans) else None
+
+    def _summaries(ids):
+        out = []
+        for gid in sorted(ids):
+            rid = canonical.representative(conn, gid)
+            if rid is None:
+                continue
+            out.append({"group_id": gid, **canonical.track_display(conn, rid)})
+        return out
+
+    return {
+        "ordinal": ordinal,
+        "tier": tier,
+        "span": spans[idx],
+        "carried": _summaries(this_groups & prev_groups),
+        "new": _summaries(this_groups - prev_groups),
+        "survived_out": len(this_groups & next_groups) if next_groups is not None else None,
+    }
 
 
 def pending_new_generation(conn):

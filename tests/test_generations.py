@@ -603,3 +603,138 @@ def test_decline_generation_does_not_commit(conn):
         assert row["generation_declined"] == 0
     finally:
         other.close()
+
+
+# -- generation_view ------------------------------------------------------
+#
+# Extracted out of app.py's playlist_page in P3 session 2
+# (P3_refactor.md §4.1). The route still owns ?generation=1 and ?tier=;
+# this owns the split itself.
+
+
+def test_generation_view_splits_carried_from_new_against_the_previous_generation(conn):
+    # source: generations-B.md -- a generation's groups divide into those
+    # carried over from the one before it and those new to it. The fixture
+    # gives generation 2 one of each *and* leaves a group behind in
+    # generation 1, so "carried" cannot be satisfied by returning either
+    # whole set: this generation holds {carried, new}, the previous holds
+    # {carried, dropped}.
+    for track_id in ("t-carried", "t-new", "t-dropped"):
+        builders.make_track(conn, track_id)
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    first = _gen(conn, 1)
+    second = _gen(conn, 2)
+    _present(conn, first, "t-carried", position=0)
+    _present(conn, first, "t-dropped", position=1)
+    _present(conn, second, "t-carried", position=0)
+    _present(conn, second, "t-new", position=1)
+
+    view = generations.generation_view(conn, 2, "version")
+
+    assert [g["track_id"] for g in view["carried"]] == ["t-carried"]
+    assert [g["track_id"] for g in view["new"]] == ["t-new"]
+
+
+def test_generation_view_treats_the_first_generation_as_entirely_new(conn):
+    # source: generations-B.md -- generation 1 has no predecessor, so
+    # everything in it is new rather than carried. The guard is `if idx > 0
+    # else set()`; without it, spans[-1] silently compares generation 1
+    # against the *newest* generation, which here shares its only group and
+    # would report it carried.
+    builders.make_track(conn, "t-first")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    first = _gen(conn, 1)
+    last = _gen(conn, 2)
+    _present(conn, first, "t-first", position=0)
+    _present(conn, last, "t-first", position=0)
+
+    view = generations.generation_view(conn, 1, "version")
+
+    assert view["carried"] == []
+    assert [g["track_id"] for g in view["new"]] == ["t-first"]
+
+
+def test_generation_view_reports_survived_out_as_none_only_for_the_newest(conn):
+    # source: generations.generation_view's docstring -- survived_out is
+    # None for the newest generation, "which has no next to survive into,
+    # and which the template renders differently from a genuine zero". The
+    # fixture makes both cases available at once: generation 1 survives
+    # into 2 with zero overlap, and 2 is the newest. A count-only
+    # implementation reports 0 for both, which reads as "everything was
+    # dropped" on a page that simply has nothing to look forward to.
+    for track_id in ("t-early", "t-late"):
+        builders.make_track(conn, track_id)
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    first = _gen(conn, 1)
+    second = _gen(conn, 2)
+    _present(conn, first, "t-early", position=0)
+    _present(conn, second, "t-late", position=0)
+
+    assert generations.generation_view(conn, 1, "version")["survived_out"] == 0
+    assert generations.generation_view(conn, 2, "version")["survived_out"] is None
+
+
+def test_generation_view_at_song_tier_collapses_two_versions_of_one_song(conn):
+    # source: generations-B.md -- tier is a whitelisted column lookup, and
+    # song vs version is a real difference rather than a label: two version
+    # groups under one song count as two rows at version tier and one at
+    # song tier. Same fixture, both tiers, so a hard-coded version_id
+    # cannot pass.
+    first_group = builders.make_group(conn, ["t-v1"])
+    builders.make_group(conn, ["t-v2"], song=first_group["song"])
+    conn.commit()
+
+    playlist = _gen(conn, 1)
+    _present(conn, playlist, "t-v1", position=0)
+    _present(conn, playlist, "t-v2", position=1)
+
+    assert len(generations.generation_view(conn, 1, "version")["new"]) == 2
+    assert len(generations.generation_view(conn, 1, "song")["new"]) == 1
+
+
+def test_generation_view_rejects_a_tier_that_is_not_a_column(conn):
+    # source: CLAUDE.md -- tier is "a whitelisted column lookup, never
+    # interpolated", and the column goes into an f-string here. The route
+    # normalizes ?tier= before calling, so this pins the module's own
+    # guard rather than the route's.
+    _gen(conn, 1)
+
+    with pytest.raises(ValueError):
+        generations.generation_view(conn, 1, "release_id; DROP TABLE generation")
+
+
+def test_generation_view_reports_the_ordinal_it_was_asked_for(conn):
+    # source: P3_refactor.md §4.1 -- the route parses ?generation=1 and
+    # hands the ordinal in; entity_playlist.html renders it back as the
+    # section heading ("Generation N"). Asserted at two ordinals, so a
+    # constant -- or the newest generation, the plausible wrong default --
+    # fails on one of them. This is the only key nothing else in the payload
+    # would expose: carried/new/survived_out are all *derived* from the
+    # ordinal inside the function, so they stay right when it is dropped.
+    _gen_chain(conn, 3)
+
+    assert generations.generation_view(conn, 1, "version")["ordinal"] == 1
+    assert generations.generation_view(conn, 3, "version")["ordinal"] == 3
+
+
+def test_generation_view_returns_the_span_of_that_generation_not_another(conn):
+    # source: generations-B.md §Spans -- `span` is the dated range the page
+    # prints under the heading, picked as spans[idx] where idx is *this*
+    # generation's position. The middle of three is requested deliberately:
+    # spans[0], spans[-1] and both off-by-ones name a different generation
+    # than the correct answer, which no other assertion in this file would
+    # notice, since the carried/new split is computed from the ordinal
+    # rather than from the span.
+    _gen_chain(conn, 3)
+
+    span = generations.generation_view(conn, 2, "version")["span"]
+
+    assert span["ordinal"] == 2
+    assert span["started_at"] == "2026-02-01T00:00:00Z"
+    assert span["ended_at"] == "2026-03-01T00:00:00Z"

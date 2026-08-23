@@ -322,12 +322,18 @@ def test_edit_link_resolves_through_the_deep_link_to_the_viewer(client, corpus):
 #
 # entity-pages-K.md's hardest constraint is not that the fetch stores what
 # it fetched -- test_entities.py has that -- but that the page spends AT
-# MOST one Spotify request, on first view, ever. That ceiling lives in
-# app.py's `if album["tracklist_pulled_at"] is None:` guard, and nothing
-# read it until session 4's Verify: deleting the guard, so every single
-# page view spends a request, passed all 708 tests (P2-008). The stamp and
-# the guard that reads it are two halves of one rule and neither is worth
-# anything alone, so these drive the real route twice and count the calls.
+# MOST one Spotify request, on first view, ever. That ceiling lives in the
+# `if album["tracklist_pulled_at"] is None:` guard, and nothing read it
+# until session 4's Verify: deleting the guard, so every single page view
+# spends a request, passed all 708 tests (P2-008). The stamp and the guard
+# that reads it are two halves of one rule and neither is worth anything
+# alone, so these drive the real route twice and count the calls.
+#
+# The guard moved from app.py's album_page into entities.album_detail in
+# P3 session 2, and these tests did not change: they go through the route,
+# which is the only thing that can show the route still reaches it. That is
+# the half P2-008 was about, and it is why P3 was forbidden from touching
+# them (P3_refactor.md §6).
 
 
 def test_album_page_fetches_the_tracklist_only_on_the_first_view(client, conn, fake_spotify):
@@ -385,9 +391,10 @@ def test_album_page_requeues_a_cleared_wanted_uri_on_every_view(client, conn, fa
     # source: grouping-fixes-backfill-M.md §4.4/§0.5 -- queue_wanted_uris
     # runs on EVERY album-page view, not just the first, "which is what
     # makes clearing a queue a real undo instead of a trap, since a cleared
-    # uri comes back the moment the page is revisited." The route-level
-    # wiring, which nothing read: moving the call under the first-view
-    # guard -- or deleting it outright -- passed the whole suite (P2-008).
+    # uri comes back the moment the page is revisited." The wiring, which
+    # nothing read: moving the call under the first-view guard -- or
+    # deleting it outright -- passed the whole suite (P2-008). It sits in
+    # entities.album_detail since P3 session 2; this still drives the route.
     album = builders.make_album(conn, "al-requeue", name="Requeue Album")
     conn.commit()
     fake_spotify.add_album(
@@ -582,6 +589,100 @@ def test_a_group_id_of_the_wrong_tier_is_a_404_not_someone_elses_page(client, co
 def test_an_unknown_group_id_is_a_404(client, corpus):
     # source: app.py -- the `row is None` half of the same guard.
     assert client.get("/song/999999").status_code == 404
+
+
+# -- The route half of the seams P3 session 2 created (P3-005) -------------
+#
+# Extraction moved these views' work into entities.py, and the unit tests
+# beside it pin what the extracted function *returns*. These three pin what
+# the route does with it -- the half that cannot enforce the rule alone.
+# All three were verified by deleting the line each names: every one passed
+# the full suite and the golden compare both.
+
+
+def test_a_group_with_no_members_is_a_404_and_not_a_500(client, corpus, conn):
+    """The second of group_page's two 404s, and the half that stayed in the
+    route when P3 session 2 split this guard across a module boundary.
+
+    `entities.group_detail` signals it by returning `{"track_count": 0}` and
+    nothing else; test_entities.py pins that shape. Deleting the route's
+    `if not data["track_count"]` renders the template with a payload missing
+    every other key -- a 500, not a 404 -- and passed everything.
+    """
+    # source: app.py's group_page -- `abort(404, description="Group has no
+    # members.")`, plus P3_refactor.md's Tests section: "where a rule is
+    # split across a function and its call site, the test has to cross the
+    # seam." The negative assertion separates this guard from the tier
+    # guard above it, which 404s with a different description (P2-009).
+    empty_id = conn.execute(
+        "INSERT INTO canonical_group (tier, representative_track_id) VALUES ('version', NULL)"
+    ).lastrowid
+    conn.commit()
+
+    resp = client.get(f"/version/{empty_id}")
+
+    assert resp.status_code == 404
+    body = resp.get_data(as_text=True)
+    assert "Group has no members." in body
+    assert "No such group." not in body
+
+
+def test_the_album_page_allocates_groups_so_its_tracks_link_to_their_versions(client, conn):
+    """`canonical.ensure_track_groups(conn); conn.commit()` stays in the
+    route (P3_refactor.md §2 -- canonical.py never commits), which makes it
+    route wiring that only a route test can see.
+
+    Deleting it passes the whole suite *and* the golden compare, because a
+    library whose tracks all have groups renders identically either way.
+    So the fixture is the un-golden-able case: a track with no track_group
+    row at all, whose version link exists only if the page allocated one.
+    """
+    # source: app.py's album_page, and CLAUDE.md's note that
+    # ensure_track_groups "writes on a plain GET". tracklist_pulled_at is
+    # pre-stamped so this spends no Spotify request -- the fetch ceiling is
+    # a different rule, tested above.
+    builders.make_album(
+        conn, "al-ungrouped", name="Ungrouped Album", tracklist_pulled_at=builders.days_ago(1)
+    )
+    builders.make_track(conn, "t-ungrouped", name="Ungrouped Track", album_id="al-ungrouped")
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM track_group WHERE track_id = 't-ungrouped'"
+    ).fetchone()[0] == 0
+
+    resp = client.get("/album/al-ungrouped")
+
+    assert resp.status_code == 200
+    row = conn.execute(
+        "SELECT version_id FROM track_group WHERE track_id = ?", ("t-ungrouped",)
+    ).fetchone()
+    assert row is not None, "the page did not allocate a group for its own track"
+    assert f"/version/{row['version_id']}" in resp.get_data(as_text=True)
+
+
+def test_an_empty_search_allocates_nothing_but_a_real_one_does(client, corpus, monkeypatch):
+    """A plain GET that writes is exactly what P3's golden harness had to
+    neutralise, and `search_page`'s `if q:` is what keeps the bare page out
+    of that set.
+
+    Nothing read it. Deleting the guard passes the full suite and the
+    golden compare, because `routes_catalog` carries `/search?q=a` but not
+    the bare path, and the url_map completeness check keys on
+    `(endpoint, method)` -- a query string is neither (P2 session 5). The
+    positive half is what makes this discriminating: a spy that simply
+    never fires would pass against a route that had stopped calling it.
+    """
+    # source: app.py's search_page -- "ensure_track_groups only when there
+    # is something to search for, exactly as before: an empty /search
+    # writes nothing."
+    calls = []
+    monkeypatch.setattr(canonical, "ensure_track_groups", lambda conn: calls.append(1))
+
+    assert client.get("/search").status_code == 200
+    assert calls == []
+
+    assert client.get("/search?q=Corpus").status_code == 200
+    assert calls == [1]
 
 
 def test_an_aliased_artist_id_redirects_to_the_canonical_artist(client, corpus, conn):
