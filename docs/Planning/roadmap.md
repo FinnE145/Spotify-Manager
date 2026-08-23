@@ -170,7 +170,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
 **A, I, C, D, E, B, K, H, M, N and J have landed**, and **P is two parts of three done, with the
-third in progress** (P1 and P2 merged; P3 is specced and its session 1 of 3 has landed). Their
+third in progress** (P1 and P2 merged; P3 is specced and its sessions 1 and 2 of 3 have landed). Their
 sections below are marked, and each points
 at the spec that is authoritative for what actually shipped — read the spec, not
 the summary here, before touching any of them.
@@ -690,7 +690,7 @@ answered in `codebase-health-P.md` §9.
   coverage discipline) and `docs/codebase-health/P2_findings.md` (**10 findings**, all ruled; the
   `xfail` ledger is empty, so nothing is deferred). Two findings are carried forward deliberately
   as `unclear` and are **explicitly not P3 deletion candidates** — P2-004 and P2-009.
-- **P3 — refactor. ← in progress; session 1 of 3 landed 2026-08-22 → `docs/codebase-health/P3_refactor.md` is
+- **P3 — refactor. ← in progress; sessions 1 and 2 of 3 landed 2026-08-22 → `docs/codebase-health/P3_refactor.md` is
   authoritative.** The pre-spec's four findings, verified against P2 by byte-exact HTML golden
   snapshots (the tooling is committed and inert in `tests/golden.py`; P3 captures before, diffs
   after, deletes). Strictly behaviour-preserving. **Three sessions**: golden harness + the small
@@ -702,10 +702,13 @@ answered in `codebase-health-P.md` §9.
   first, the async scoring worker above all. One deletion, already queued and evidenced:
   `canonical_detect.all_candidate_groups`, condemned by P1-009 on a full caller search — and a
   seven-category sweep re-run 2026-08-22 found **nothing else dead in the tree**, so there is no
-  cleanup backlog beyond it. **Session 1 is done and merged**: harness built, gate proved, baseline
+  cleanup backlog beyond it. **Sessions 1 and 2 are done and merged**: harness built, gate proved, baseline
   captured once, and the three small changes (the deletion, the cycle, the `SELECT *` sites) landed
-  at zero golden diffs, with three findings ruled in `docs/codebase-health/P3_findings.md`. The
-  entity pages and the dev pages remain.
+  at zero golden diffs; then the six entity pages plus `generation_view`, taking `conn.execute` in
+  `app.py` **42 → 19** and `create_app` 1,620 → 1,161, again at zero golden diffs. Five findings
+  ruled in `docs/codebase-health/P3_findings.md`. **The three dev pages and the close-out remain** —
+  and P3-005 adds one job to session 3: sweep those three payloads for keys only golden observes
+  *before* deleting the snapshots, because afterwards there is nothing left to attribute a catch to.
 
 The four original findings, in the order they'd bite:
 
