@@ -9,53 +9,97 @@ byte-exact diff meaningful: that every difference is a defect.
 
 | id | session | subject | ruling |
 |---|---|---|---|
-| P3-001 | 1 | `SELECT *` made `/api/board`'s JSON key order depend on migration history | **leave as is** (2026-08-22) |
+| P3-001 | 1 | `SELECT *` in `_board_state` — **and a correction to what this finding first claimed about it** | **leave as is** (2026-08-22) |
+| P3-002 | 1 | The golden baseline is blind to JSON **key order**, because `jsonify` sorts | **unruled** |
 
 ---
 
-## P3-001 — `SELECT *` made an API payload's key order depend on the database's migration history
+## P3-001 — `SELECT *` in `_board_state`, and a correction to this finding's first version
 
-**Found:** session 1, while doing §4.5. **Status:** not a bug that ever bit; a real instance of the
-class §4.5 exists to prevent, and it decided which column order the fix had to use.
+**Found:** session 1, while doing §4.5. **Corrected the same session**, before the merge, by
+checking a claim that had already been written down and committed. The correction is the more
+useful half and is why this entry keeps both versions.
+
+### What was first claimed, and why it was wrong
 
 `_board_state` did `SELECT * FROM card` and `dict(row)`-ed the result straight into `/api/board`'s
 JSON. `SELECT *` returns columns in the table's *physical* order, and `card.note` arrives by
-`ALTER TABLE ... ADD COLUMN` (`db.py:660`) rather than from `SCHEMA`. So the two orders differ:
+`ALTER TABLE ... ADD COLUMN` (`db.py:660`) rather than from `SCHEMA`, so the physical order genuinely
+does differ between databases:
 
-| | order of `card` |
+| | physical order of `card` |
 |---|---|
 | a database that migrated into `note` (**`symr.db`**) | `… image_url, placement, x, y, note` |
 | one built fresh from `db.py`'s `SCHEMA` (**every test DB**) | `… image_url, note, placement, x, y` |
 
-Verified empirically both ways on 2026-08-22. `snapshot.tracks_pulled_snapshot_id` has the same
-split, though it only feeds templates that read by name, so nothing observable rides on it.
+Both verified empirically. From that, this finding originally concluded that "two installs of Symr
+at the same commit served different bytes on `/api/board`", and that naming the columns in the
+migrated order was therefore *the only choice* consistent with §2's behaviour-preserving rule and
+§3.3's zero-diff gate.
 
-**Nothing was ever broken by this.** `canvas.js` reads the payload by property name, and JSON
-objects are unordered by specification. What it means is narrower and still worth writing down:
-before this change, the byte content of an API response was a function of *how the database got to
-its current schema*, not of the code — two installs of Symr at the same commit served different
-bytes on `/api/board`. That is the silent-widening failure mode §4.5 names, one step further along
-than the version it describes.
+**That conclusion is false.** Flask's `app.json.sort_keys` defaults to `True` (verified on Flask
+3.1.3), so `jsonify` serializes object keys **alphabetically** and the dict's insertion order is
+discarded before it reaches the response. The captured baseline shows it plainly — `get_board`'s
+snapshot has `board_id, display_name, entity_id, entity_type, id, image_url, note, placement, x, y`,
+which is neither of the two orders above. The physical-order difference is real; it is simply
+invisible through the API, and always was.
 
-**What the fix did.** The named list uses the **migrated** order — the one every existing database
-actually has — so `/api/board` and `/api/export` are byte-identical on `symr.db` and the §3 golden
-compare stays clean. Naming the columns also removes the dependency itself: from here on every
-install serves the same key order regardless of its migration history.
+So: either column order would have produced zero golden diffs, and the constraint this finding
+claimed to be operating under did not exist.
 
-**The one consequence to be aware of:** on a *fresh* database the payload's key order changes
-(`note` moves from seventh to last). That is invisible to `canvas.js` and to the suite, which is
-green, but it is the one respect in which this change is not literally a no-op everywhere.
+### What is actually true
 
-**Why it is recorded rather than just done.** The choice was between the migrated order (zero
-golden diffs, matches reality) and `SCHEMA`'s logical order (two deliberate golden diffs). §1 and
-§3.3 make "any diff at all is a bug" load-bearing for the whole of P3, and §2 makes the session
-behaviour-preserving, so the migrated order was the only option consistent with both. But it does
-pin an accident of migration history as the canonical order, and that is Finn's call to confirm
-rather than mine to make silently.
+- **The change is still correct**, on §4.5's own stated grounds and unchanged by any of this: a
+  column added to `card` would silently widen an API payload, and naming the columns is what stops
+  that. The key *set* is what matters, and that is exactly what `SELECT *` left open.
+- **The order chosen is immaterial** to the response. The migrated order was kept because it is
+  what is written, not because it was forced.
+- **Nothing was ever broken**, in either version of the story.
 
-**Ruled 2026-08-22: leave as is.** If the logical order is ever preferred, it belongs in its own
-later change with its own justification, not inside a refactor whose acceptance criterion is that
-nothing observable moved.
+### The part worth carrying forward
+
+This finding passed its own check for the wrong reason, which is the failure shape `P2_tests.md` §1
+spent six sessions on, arriving here in a findings document rather than in a test. The golden
+compare came back clean and was read as confirmation of the reasoning; it was nothing of the kind,
+because the mechanism it was taken to confirm cannot reach the bytes it compares. The question that
+found it is the same one P2 ends on — *would this have noticed if I were wrong?* — asked of a claim
+rather than of an assertion. See P3-002 for the harness limit it exposed.
+
+**Ruled 2026-08-22: leave as is** (the code; the finding's first version is corrected above).
+
+---
+
+## P3-002 — what the golden baseline is blind to
+
+**Found:** session 1, out of P3-001. Not a defect in the harness; a limit worth stating, because a
+clean compare is about to be the evidence for two sessions that move ~583 lines, and it is only as
+good as what it actually observes.
+
+`golden.compare` diffs `response.data` and nothing else. That is complete for HTML — every page in
+the baseline is compared byte for byte, whitespace included — and it has two known gaps, both on
+the JSON side:
+
+**1. Object key order, because `jsonify` sorts.** `app.json.sort_keys` is `True`, so every `/api/*`
+response comes out alphabetically keyed regardless of the order the view built the dict in. The
+baseline therefore observes the key *set* and every value, but cannot observe key order. This is
+not a hole to plug: the order is invisible to clients too, for the same reason. It is recorded
+because P3-001 mistook a clean compare for confirmation of an order-related claim, and that mistake
+is available to anyone reading a green compare in session 2 or 3.
+
+**2. Status code and headers.** `capture()` records each case's status and the capture pass asserts
+none is 5xx, but the snapshot on disk is the body alone, so `compare()` cannot check that a route
+still returns the *same* status. A view that changed status while returning identical bytes would
+pass. In practice this is covered from the other side and does not need fixing here: Symr's error
+path renders `error.html`, whose bytes differ from any real page, and `test_routes.py`'s permanent
+sweep independently asserts non-5xx on every route in the catalog.
+
+**Not fixable inside P3 anyway**, which is the second reason to write it down rather than act on
+it: storing statuses would change what a snapshot *is*, and the only way to get them into the
+existing baseline is a re-capture — the one action §3.4 forbids outright, since it promotes any
+regression already introduced into the new baseline.
+
+**Recommended ruling:** record and leave. If a future site-wide refactor wants the status dimension,
+it belongs in the capture format from the start, decided before that refactor's baseline is taken.
 
 ---
 

@@ -1672,15 +1672,18 @@ def create_app():
 
 
 def _board_state(conn):
-    # Columns named rather than `SELECT *` (P3_refactor.md §4.5), and here the
-    # rule earns its keep twice over. These rows are `dict(row)`-ed straight
-    # into /api/board's JSON, so `*` meant a column added to `card` would
-    # silently widen the API payload -- and it also meant the payload's **key
-    # order depended on the database's migration history**: `note` arrives via
-    # ALTER TABLE (db.py:660), so `*` returns it last on a database that
-    # migrated into it and seventh on one built fresh from SCHEMA. Naming them
-    # is what makes the payload the same shape everywhere. The order below is
-    # the migrated one, which is what every existing database actually has.
+    # Columns named rather than `SELECT *` (P3_refactor.md §4.5), and this is
+    # the site the rule matters most for: these rows are `dict(row)`-ed
+    # straight into /api/board's JSON, so `*` meant any column added to `card`
+    # silently widened the API payload.
+    #
+    # The order below is not load-bearing and no effort should go into
+    # preserving it -- Flask's app.json.sort_keys is True, so jsonify emits
+    # keys alphabetically and the insertion order never reaches the response.
+    # (Worth stating because P3-001 first claimed the opposite and had to be
+    # corrected: `*` did make the *dict's* order depend on migration history,
+    # since `note` arrives by ALTER TABLE at db.py:660, but that was never
+    # observable through the API.)
     #
     # The cost, accepted: a column added to either table has to be added here
     # too, where `*` would have picked it up. That is the point -- a query that
