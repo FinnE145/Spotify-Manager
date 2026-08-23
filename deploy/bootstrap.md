@@ -60,13 +60,28 @@ ssh fe-pro "chmod 600 /srv/symr/symr.env"
 
 ## 6. Copy the database across
 
-**Stop the laptop app first** — this is the one transfer not protected by `VACUUM INTO`,
-so stopping is what makes the copy consistent.
+**Stop the laptop app first.** Then send the database through `VACUUM INTO` rather than
+rsyncing `symr.db` directly — stopping the app is *not* on its own enough to make a bare file
+copy safe. The database is in WAL mode, and a stopped app routinely leaves a populated
+`symr.db-wal` beside it (there was 3.1 MB of it on 2026-08-23); copying only the `.db` silently
+drops every transaction still sitting in that WAL. `VACUUM INTO` writes one consistent,
+compacted file with no `-wal`/`-shm` to carry across, which is the same reason §7.1 uses it for
+the nightly backup.
 
 ```bash
 ssh fe-pro "mkdir -p /srv/symr/data"
-rsync -az symr.db .spotipy_cache data/streaming_history fe-pro:/srv/symr/data/
+
+python3 -c "import sqlite3; c = sqlite3.connect('symr.db'); c.execute('VACUUM INTO ?', ('/tmp/symr-transfer.db',)); c.close()"
+rsync -az /tmp/symr-transfer.db fe-pro:/srv/symr/data/symr.db
+rm /tmp/symr-transfer.db
+
+rsync -az .spotipy_cache fe-pro:/srv/symr/data/.spotipy_cache
+rsync -az data/streaming_history fe-pro:/srv/symr/data/
 ```
+
+Check the row counts match on both sides before going further — `track`, `play`,
+`reviewed_pair`, `generation`, `membership`, `snapshot` and `canonical_group` are a good
+spread, and a truncated transfer shows up immediately.
 
 No trailing slash on `data/streaming_history` — with one, rsync copies the folder's
 *contents* into `/srv/symr/data/` and the timestamped export folders land loose there
@@ -101,13 +116,18 @@ EOF
 
 ## 7. Set up the backup timer
 
+The repo is already on the server from step 4, so the units are copied from there — no `scp`
+from the laptop. Use `ssh -t`: every `sudo` here prompts for a password.
+
 ```bash
-ssh fe-pro "sudo mkdir -p /var/backups/symr && sudo chown 1000:1000 /var/backups/symr"
-scp deploy/symr-backup.service deploy/symr-backup.timer fe-pro:/tmp/
-ssh fe-pro "sudo mv /tmp/symr-backup.service /tmp/symr-backup.timer /etc/systemd/system/ && \
+ssh -t fe-pro "sudo mkdir -p /var/backups/symr && sudo chown 1000:1000 /var/backups/symr"
+ssh -t fe-pro "sudo cp /srv/symr/repo/deploy/symr-backup.{service,timer} /etc/systemd/system/ && \
   sudo systemctl daemon-reload && \
   sudo systemctl enable --now symr-backup.timer"
 ```
+
+Confirm with `systemctl list-timers symr-backup.timer` — it should show the next run at
+00:00 UTC.
 
 ## 8. Build and start the container
 
@@ -117,11 +137,17 @@ ssh fe-pro "cd /srv/symr/repo/deploy && docker compose up -d --build"
 
 ## 9. Start `tailscale serve`
 
-Persists across reboots, so this is a one-time command:
+Persists across reboots, so this is a one-time command — but it needs root, and refuses with
+`Access denied: serve config denied` without it. Setting the operator once means this is the
+last `tailscale` command that needs `sudo`:
 
 ```bash
-ssh fe-pro "tailscale serve --bg 45660"
+ssh -t fe-pro "sudo tailscale set --operator=finne && tailscale serve --bg 45660"
 ```
+
+Confirm with `tailscale serve status`. It must say **`(tailnet only)`** — anything mentioning
+Funnel means Symr is exposed to the open internet, which trips the spec's §12 tripwire and
+makes app-level authentication a prerequisite rather than a follow-up.
 
 ## 10. Verify
 
