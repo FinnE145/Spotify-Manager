@@ -36,6 +36,22 @@ If port 45660 is occupied, **stop and flag it to Finn before writing any code** 
 - **One try, then ask.** If an approach fails on the first attempt, stop and ask — no second approach, no layered hacky workarounds. Surface the problem.
 - Number questions (sub-letters when nesting). KISS everywhere except security and never-touch-the-real-library, which get done fully and properly.
 
+## Writing tests
+A test's whole value is whether it can **fail**. A green test that a broken implementation would also satisfy is worth no more than a tautology, and it is harder to spot because it passes and cites a real spec clause. Step P found this defect in every session it ran without exception — treat it as a new test's default state, not a rare slip.
+
+Ask both questions. The second is not a refinement of the first, and the first cannot reach what it finds:
+- **Of each test** — what would a wrong implementation have produced here? If the answer is "the same thing", the test is decoration.
+- **Of each module** — what does it produce (a stored column, a returned key, a branch) that no test reads *at all*? There is no assertion there to interrogate, so the first question is blind to it.
+
+Three shapes, each of which has shipped green at least once:
+- **The fixture must disagree with every rule the implementation could fall back on**, not just the one the spec discusses. Ids that happen to sort the way the score ranks them pass against an implementation that never reads the score.
+- **Where a rule spans a function and its call site, the test has to cross the seam** — testing the function alone pins the half that cannot enforce the rule by itself.
+- **A status code is not an assertion.** `assert response.status_code == 200` is the cheapest un-failable route test there is; assert something that is actually *on* the page.
+
+**Then break it.** Before handing off, change the thing each new test covers — invert the comparison, empty the returned value, drop the sort — and confirm that *exactly that test* fails. Writing a test and watching it pass proves none of the above, and mutation is the only thing that has ever caught these.
+
+Every test carries a one-line comment naming the spec clause it derives from, or `characterization` (enforced mechanically). Never obtain an expected value by running the code and then call it a specification test — that pins current behaviour, bugs included, which is the distinction the suite is built on (`docs/specs/codebase-health-P.md` §2).
+
 ## Before handing off
 **Run `venv/bin/python -m pytest` before you tell Finn you're done**, whether or not you wrote tests. Breakage caught here belongs to the session that caused it; caught in Verify it belongs to a session that has to work out what happened first (`docs/specs/codebase-health-P.md` §7).
 
