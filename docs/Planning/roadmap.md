@@ -10,7 +10,7 @@
 
 ## Spec index
 
-What each of the 18 audited specs in `docs/specs/` actually covers, and the code it's
+What each of the 19 audited specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
@@ -41,6 +41,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `grouping-fixes-backfill-M.md` | Three review-UI bugs (M1/M1b/M1c) + the album-tracklist backfill job | `canonical.py`, `backfill.py`, `entities.py` | M | no |
 | `async-recompute-N.md` | Moves `scoring.recompute()` off the request path for queue-driven writes | `scoring.py` (worker/backstop) | N | no |
 | `host-on-fe-pro-Q.md` | Symr on `fe-pro`: Docker + waitress behind `tailscale serve`, graceful shutdown, nightly backups, bootstrap/deploy | `serve.py`, `deploy/`, `config.py`, `jobs.drain()` | Q | no |
+| `scrobbling-R.md` | Polls recently-played into `play` as non-authoritative scrobbles, superseded by the export; ISRC upgrade path | `scrobble.py`, `roundtrip.py`, `history_import.py`, `serve.py` | R | no |
 
 ---
 
@@ -898,17 +899,15 @@ is larger than this.
 request Symr spends is attached to a button someone pressed. This is the first that spends forever,
 unattended.
 
-**Two things to verify before designing anything**, both checked 2026-08-22:
+**Both pre-design checks are now done — probed 2026-08-23 during R's planning session**, and the
+results are in `docs/spotify_constraints.md` and `docs/specs/scrobbling-R.md` §1. Read those, not
+this summary. In short: **the endpoint works** (no 403); the scope change needs **no cache
+deletion**, just one browser consent per token cache; the item's `track` is the **simplified**
+object with **no ISRC**; `played_at` is a **stop**-stamp like the export's `ts`; and the `next`
+link is always present but returns nothing, so the endpoint serves **only the last 50 plays** and a
+missed window is unrecoverable.
 
-- **`user-read-recently-played` is not in `config.SPOTIFY_SCOPES`.** Adding it means a scope change
-  and a **fresh consent**, which is an interactive browser step — worth planning deliberately when
-  the app lives on a headless server.
-- **The endpoint is unprobed.** It appears nowhere in `docs/spotify_constraints.md`. Given that
-  `/v1/tracks?ids=`, `/v1/artists?ids=` and `/v1/audio-features` all **403** on this app while their
-  singular equivalents work, "recently-played works" is an assumption. Probe it first, and record
-  the result there.
-
-**Design questions for that session, not decisions to take now:**
+**Those design questions are settled in `docs/specs/scrobbling-R.md`; kept here for the reasoning:**
 
 - **Provenance.** `play` rows dedupe on a SHA-1 `row_hash` over 16 named keys *from the export's
   shape*. A scrobbled row does not have that shape, so it needs its own identity — and the import

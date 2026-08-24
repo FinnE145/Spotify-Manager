@@ -24,7 +24,9 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 - Modifying playlists: `playlist-modify-private`, `playlist-modify-public` (note: adding tracks to a *public* playlist still needs `playlist-modify-public`).
 - Saved tracks (Liked Songs): `user-library-read`, `user-library-modify`.
 - Cover upload: `ugc-image-upload`.
-- **Symr's token currently carries four scopes** (`config.py`): `playlist-read-private`, `playlist-read-collaborative`, `user-library-read`, and — since 2026-08-06 — **`playlist-modify-private`**, granted for the foreign-track round-trip. It is the only write scope, and `roundtrip.py` is the only module that uses it. Adding a scope means deleting `.spotipy_cache` and re-authing; the cached token does not gain scopes on its own.
+- **Symr's token currently carries four scopes** (`config.py`): `playlist-read-private`, `playlist-read-collaborative`, `user-library-read`, and — since 2026-08-06 — **`playlist-modify-private`**, granted for the foreign-track round-trip. It is the only write scope, and `roundtrip.py` is the only module that uses it.
+- **Adding a scope needs no cache deletion — corrected 2026-08-23.** The cached token does not gain scopes on its own, but spotipy's `SpotifyOAuth.validate_token` rejects any cached token whose scope is not a superset of the requested one, so widening `SPOTIFY_SCOPES` makes the next request re-auth by itself. Deleting `.spotipy_cache` is unnecessary (the earlier claim here was untested). Each token cache re-consents independently, so the laptop and `fe-pro` owe one browser consent each.
+- **`user-read-recently-played`** — required by `/v1/me/player/recently-played`. Read-only. Probed 2026-08-23, see below.
 
 ## Playlist writes (verified Aug 2026, `docs/specs/foreign-roundtrip-D.md`)
 - **Add: 100 items per request maximum** (`POST /playlists/{id}/tracks`, Spotipy `playlist_add_items()`). Adds **append**.
@@ -113,6 +115,33 @@ like `GET /v1/tracks/{id}` and **work**, which changes what is obtainable:
   popularity, no followers, no album label**, and **no audio features** (tempo, key, energy,
   valence, danceability, loudness). Genre- or audio-feature-based analytics must still come
   from a non-Spotify source (MusicBrainz / Last.fm tags) or not be built.
+
+## Recently-played — works, but returns a *simplified* track (verified 2026-08-23, `docs/specs/scrobbling-R.md` §1)
+
+`GET /v1/me/player/recently-played` (Spotipy `current_user_recently_played()`) **works** with
+`user-read-recently-played` — it is not in the dev-mode 403 set above.
+
+- **The `track` in each item is the simplified object with an `album` attached, NOT the full track
+  object.** Keys returned: `album`, `artists`, `disc_number`, `duration_ms`, `explicit`,
+  `external_urls`, `href`, `id`, `is_local`, `name`, `preview_url`, `track_number`, `type`, `uri`.
+  **Absent: `external_ids` (so no ISRC), `is_playable`, `linked_from`, `popularity`,
+  `available_markets`.** A track row built from this endpoint alone therefore has a NULL `isrc`,
+  which matters because `canonical_detect._same_recording_identity` keys recording identity on it.
+- **`played_at` is when the track STOPPED**, matching the export's `ts`. Measured, not assumed:
+  across 12 consecutive items `played_at[i] - played_at[i+1]` equalled the **newer** track's
+  `duration_ms` to within 0.2s, which holds only for stop-stamps. Format is millisecond-precision
+  (`2026-08-23T19:00:54.813Z`); the export's `ts` is second-precision.
+- **The `next` link is a lie.** It is always present, but following it returns **zero items**. The
+  endpoint serves only the **last 50 plays**, full stop — there is no paging back and no history
+  beyond the window. A missed window is unrecoverable by any number of requests.
+- Consequently the `after` / `before` cursors only filter that same 50-item window; they are a
+  convenience, never a way to reach older data.
+- `limit=50` is the maximum. The envelope carries `cursors`, `href`, `items`, `limit`, `next` — and
+  **no `total`**.
+- Each item also carries `context` (the playlist/album/artist uri played from), which the export
+  does not have.
+- The same uri recurs within a single window (41 unique uris in 50 items when probed), so a play's
+  identity needs `played_at`, not just the uri.
 
 ## Dead track-object fields (verified Jul 2026)
 - **`popularity`** — NULL for all 3,589 library tracks, from both working endpoints (see above).
