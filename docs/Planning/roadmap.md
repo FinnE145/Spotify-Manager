@@ -964,11 +964,11 @@ whether any part of it is worth wiring into `symr-verify` as a per-session check
 one-off — the skill already asks for mutation on a session's *own* new tests, which is a much
 smaller thing than this.
 
-## T — Small fixes: OAuth host mismatch, round-trip request clarity, queue colors
+## T — Small fixes: OAuth host mismatch, round-trip request clarity, queue colors, review-queue exit
 
 **Not specced.** Own `/symr-plan` session, though each item here is likely small enough that the
 whole step doesn't need much of one. Placed after **S** by decision — see the Order notes. A
-grab-bag on purpose: three unrelated papercuts, each cheap enough not to deserve its own step,
+grab-bag on purpose: four unrelated papercuts, each cheap enough not to deserve its own step,
 found or raised in the days around R's implementation (2026-08-24).
 
 **T1 — the `localhost`/`127.0.0.1` OAuth state mismatch.** `/callback` has been failing with
@@ -1009,6 +1009,16 @@ degrades further once more than ~3-4 groups are visible together — six colors 
 enough headroom, but only a few of the six are reliably distinguishable before the cycle repeats
 or the eye starts confusing adjacent chips. Wants a larger, deliberately-chosen palette (varying
 lightness as well as hue, not just hue) rather than a bigger version of the same six.
+
+**T4 — the review queue's "done" screen has no keyboard/button way out.** Raised by Finn
+2026-08-24. `canonical_review.js`'s `#save-btn` (labelled "Save >", title `Enter`) and the
+`Enter` keydown handler both guard on `itemSection.hidden` and do nothing once the last item is
+committed and `finishQueue()` reveals the `#review-done` screen — the only way off that screen
+today is clicking its small "&larr; Canonical Tracks" link by hand. Wants: once the done screen
+is showing, relabel the button (e.g. "Save & exit") and re-wire both it and `Enter` to navigate
+to `dev_canonical` (what that link already points at) instead of no-op'ing, so finishing the
+queue is still one press to commit-and-reveal-done exactly as today, and one more press of the
+same control to leave — no reach for the mouse in between.
 
 ## L — Better search
 
