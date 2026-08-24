@@ -87,6 +87,40 @@ _SQL_CASE_INSENSITIVE = frozenset()
 FOR_IN = re.compile(r"\bfor\s+[\w,\s()\*]+?\s+(in)\b")
 
 
+#: Python 3.12+ (PEP 701) tokenizes an f-string as FSTRING_START / one or more
+#: FSTRING_MIDDLE literal chunks / FSTRING_END, **not** as a single STRING.
+#: Anything keying on tokenize.STRING therefore sees straight through an
+#: f-string to its literal text, which is how the Python pass came to mutate
+#: `f"<h1>Error {code}.</h1>"` into `f"<=h1>..."`, and how the SQL pass missed
+#: every f-string query in the tree -- ~49 lines of it, all the
+#: `IN ({placeholders})` builders.
+_FSTRING_MIDDLE = getattr(tokenize, "FSTRING_MIDDLE", None)
+_FSTRING_START = getattr(tokenize, "FSTRING_START", None)
+_FSTRING_END = getattr(tokenize, "FSTRING_END", None)
+
+
+def _fstring_groups(toks):
+    """[(joined_literal_text, [middle_tokens])] -- one entry per f-string.
+
+    Eligibility has to be judged on the **whole** f-string, not a fragment:
+    `f"SELECT ... IN ({ph})"` splits into "SELECT ... IN (" and ")", and only
+    the first half would look like SQL on its own.
+    """
+    if _FSTRING_MIDDLE is None:
+        return []
+    stack, out = [], []
+    for t in toks:
+        if t.type == _FSTRING_START:
+            stack.append([])
+        elif t.type == _FSTRING_END:
+            if stack:
+                parts = stack.pop()
+                out.append(("".join(p.string for p in parts), parts))
+        elif t.type == _FSTRING_MIDDLE and stack:
+            stack[-1].append(t)
+    return out
+
+
 def _tokens(src):
     try:
         return list(tokenize.generate_tokens(io.StringIO(src).readline))
@@ -107,10 +141,20 @@ def _spans_by_line(tok):
 
 
 def string_comment_ranges(src):
-    """{line: [(col_start, col_end), ...]} covered by strings/comments."""
+    """{line: [(col_start, col_end), ...]} covered by strings/comments.
+
+    Includes f-string literal chunks, which are their own token type rather
+    than part of a STRING -- without them the Python operators apply inside
+    f-string text.
+    """
     out = {}
-    for t in _tokens(src):
+    toks = _tokens(src)
+    for t in toks:
         if t.type in (tokenize.COMMENT, tokenize.STRING):
+            for ln, lo, hi in _spans_by_line(t):
+                out.setdefault(ln, []).append((lo, hi))
+    for _text, parts in _fstring_groups(toks):
+        for t in parts:
             for ln, lo, hi in _spans_by_line(t):
                 out.setdefault(ln, []).append((lo, hi))
     return out
@@ -147,11 +191,15 @@ def sql_string_ranges(src):
     out = {}
     excluded = schema_span(src)
     lines = src.splitlines()
-    for t in _tokens(src):
-        if t.type != tokenize.STRING:
-            continue
-        if not SQL_ELIGIBLE.search(t.string):
-            continue
+    toks = _tokens(src)
+
+    eligible = [t for t in toks
+                if t.type == tokenize.STRING and SQL_ELIGIBLE.search(t.string)]
+    for text, parts in _fstring_groups(toks):
+        if SQL_ELIGIBLE.search(text):
+            eligible.extend(parts)
+
+    for t in eligible:
         if excluded and excluded[0] <= t.start[0] <= excluded[1]:
             continue
         for ln, lo, hi in _spans_by_line(t):

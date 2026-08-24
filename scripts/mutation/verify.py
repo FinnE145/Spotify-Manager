@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
@@ -168,26 +169,46 @@ def cmd_caught(args):
             for m in generate.generate(os.path.join(work, "proto", path))[2]
         }
 
-    jobs = []
+    buckets = [[] for _ in range(args.workers)]
+    queued = 0
     for r in want:
         m = by_module[r["file"]].get((r["line"], r["op"], r["col"]))
         if m is not None:
-            jobs.append((len(jobs) % args.workers, r["file"], m))
+            buckets[queued % args.workers].append((r["file"], m))
+            queued += 1
 
-    def run_one(job):
-        wid, path, m = job
-        status, rc = sweep.run_mutant(os.path.join(work, f"w{wid}"), path, m)
-        return {"file": path, "line": m["line"], "op": m["op"],
-                "status": status, "rc": rc, "before": m["before"]}
-
+    proto = os.path.join(work, "proto")
     out, anomalies = [], 0
+    lock = threading.Lock()
+
+    def run_bucket(wid):
+        """One worker directory, one thread -- see sweep.run_bucket.
+
+        This had the same race sweep.py was fixed for: jobs assigned
+        round-robin and mapped across a pool of the same size do **not** stay
+        one-per-directory, so two overlapped in one copy and the restore wrote
+        a mutated file back as the original. Every later run in that worker
+        was then red, which this pass reports as `!! SURVIVED` -- a false
+        anomaly, in the one tool whose entire job is catching false results.
+        Fixed here only after it had already produced three of them.
+        """
+        worker_dir = os.path.join(work, f"w{wid}")
+        for path, m in buckets[wid]:
+            status, rc = sweep.run_mutant(worker_dir, path, m, proto=proto)
+            rec = {"file": path, "line": m["line"], "op": m["op"],
+                   "status": status, "rc": rc, "before": m["before"]}
+            with lock:
+                out.append(rec)
+                if status != "caught":
+                    nonlocal_anomaly[0] += 1
+                    print(f"  !! {status} {path}:{m['line']} "
+                          f"[{m['op']}] {m['before'][:70]}", flush=True)
+
+    nonlocal_anomaly = [0]
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for r in ex.map(run_one, jobs):
-            out.append(r)
-            if r["status"] != "caught":
-                anomalies += 1
-                print(f"  !! {r['status']} {r['file']}:{r['line']} "
-                      f"[{r['op']}] {r['before'][:70]}", flush=True)
+        list(ex.map(run_bucket, range(args.workers)))
+    anomalies = nonlocal_anomaly[0]
+
     dest = os.path.join(work, "verify_caught.json")
     json.dump(out, open(dest, "w"), indent=1)
     print(f"\n{Counter(r['status'] for r in out)}")
