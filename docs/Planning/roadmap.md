@@ -948,9 +948,9 @@ missed window is unrecoverable.
 
 ## S — Whole-codebase mutation sweep
 
-**Not specced.** Own `/symr-plan` session, though it may not need much of one — the method is
-already written down and already run once. **Gated on nothing**; placed after R by decision (see
-the Order notes).
+**Specced 2026-08-23 → `docs/specs/mutation-sweep-S.md`.** Read that spec, not this section —
+planning measured three of the numbers below and they came back different. **Gated on nothing**;
+placed after R by decision (see the Order notes).
 
 **The precedent, with numbers: `docs/codebase-health/post_P_sweep.md`.** That is the bounded
 version, run 2026-08-23 over the four highest-risk modules: **372 mutants, 364 killed**, with
@@ -977,14 +977,28 @@ and re-deriving them costs a session.
   the column rather than the computation filling it.
 
 **Cost, measured:** 372 mutants took ~45 minutes wall-clock across six parallel worker copies on
-an 8-core laptop, and **zero** Spotify requests. The whole tree is maybe 3–4× that. It is CPU and
-patience, not quota.
+an 8-core laptop, and **zero** Spotify requests. It is CPU and patience, not quota.
 
-**Consider at plan time:** whether the operator set should grow (the bounded run used a
-deliberately small one), whether to keep hand-rolled tooling or adopt `mutmut`/`cosmic-ray`, and
-whether any part of it is worth wiring into `symr-verify` as a per-session check rather than a
-one-off — the skill already asks for mutation on a session's *own* new tests, which is a much
-smaller thing than this.
+**The "3–4× that" this section used to estimate for the whole tree was wrong — it is 1.8×**
+(measured 2026-08-23 by generating them). The remaining root modules come to **668** Python
+mutants against the bounded run's 372, because mutant density tracks branching rather than line
+count and nothing left is as dense as `scoring.py`. Adding the SQL pass below brings it to
+**911**, or roughly two hours of laptop CPU.
+
+**The three "consider at plan time" questions, answered 2026-08-23** (spec §0, §2, §4):
+
+- **The operator set grows in one direction only — SQL.** The Python set stays byte-identical so
+  the two sweeps' kill rates compare. What the bounded run could not reach is SQL inside string
+  literals, which its generator masks wholesale: **759 lines** of it live in these modules, and
+  `db.py`, `entities.py` and `history_import.py` keep most of their logic there. Note the
+  `.pyc` trap above was itself found on SQL mutants, run by hand-written side scripts precisely
+  because the sweep could not do it.
+- **The tooling question was moot: the bounded run's scripts still existed**, in a session
+  scratchpad under `/private/tmp`, and were recovered rather than replaced with `mutmut`. They
+  now get committed to `scripts/mutation/` — which is the actual fix, since a method doc plus a
+  vanished script is what made this planning session start with archaeology.
+- **Nothing gets wired into `symr-verify`.** It already asks for mutation on a session's own new
+  tests, and that stays the per-session instrument.
 
 ## T — Small fixes: OAuth host mismatch, round-trip request clarity, queue colors, review-queue exit
 
