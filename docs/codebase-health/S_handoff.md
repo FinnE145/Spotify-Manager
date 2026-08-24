@@ -14,7 +14,7 @@ pushed, not merged**. Suite green at 983 passed / 3 skipped.
 | §10 criterion | state |
 |---|---|
 | sweep has run over §1's scope | ✅ twice — §2 (997) and §2.4's corrected re-run (1018) |
-| `broken`/`crashed` classified, **crash pass clean** | ❌ crash pass never completed — see §4 |
+| `broken`/`crashed` classified, **crash pass clean** | ✅ 719/719, zero anomalies (`S_sweep.md` §2.5) |
 | every survivor has a verdict and a reason | ❌ **212 of 252 outstanding** (`S_survivors.md`) |
 | every "gap — fixed" has a proven test | ✅ for the 40 done; 39 tests, each proven |
 | survivor set re-runs with fixed mutants caught | ❌ end-of-step, not yet run |
@@ -94,13 +94,10 @@ with a reason. There is deliberately **no kill-rate floor**.
 
 They are not the same kind of thing, which is easy to get wrong:
 
-- **Crash pass** (`verify.py caught`) validates the *measurement*, so it wants
-  the measured tree — every test added afterwards weakens it, because a mutant
-  that was a crash-in-disguise may now be genuinely caught, masking the
-  anomaly. **Never completed.** It was started, immediately exposed a bug in
-  itself (§5), was killed, and the fix has not been re-run. Run it against
-  `/private/tmp/symr-sweep-S2` before adding more tests, **alone** — under
-  agent CPU load its timeouts report as false anomalies.
+- **Crash pass** (`verify.py caught`) validates the *measurement*. **Done —
+  719/719 caught, zero anomalies** (`S_sweep.md` §2.5), run against the §2.4
+  tree before any further tests landed, which is the only point at which it
+  means anything. Nothing to repeat unless the sweep itself is re-run.
 - **Survivor-set re-run** validates the *fixes*, so it is genuinely
   end-of-step: confirm every "gap — fixed" mutant is now caught.
 

@@ -103,6 +103,24 @@ region the bounded run's operator set could not reach at all. Spec §0 called SQ
 `db.py` is the sharpest instance: 18 survivors, **17 of them SQL**. Its Python
 half is almost perfectly covered and its queries are almost entirely unasserted.
 
+### 2.5 The crash-verification pass — clean
+
+Spec §3.3 closes the sweep by re-running every mutant classified `caught`,
+asking whether any was really a signal-killed child that `if rc:` read as a
+kill. Run against the §2.4 tree: **719/719 came back `caught`, zero anomalies,
+zero negative return codes** — matching the bounded run's 366/366.
+
+That is the §2.4 measurement's `caught` half confirmed, and it is worth
+recording that it took two attempts. The first run of this pass reported three
+`!! SURVIVED` anomalies, all false: `verify.py`'s `cmd_caught` still carried
+the worker race §1.1 had fixed in `sweep.py` four commits earlier, applied to
+one call site rather than to the class. The tool whose entire job is catching
+false results was manufacturing them. See §5.
+
+Run **before** any further tests land and **alone** — a later run measures a
+different tree, and under competing CPU load its timeouts surface as anomalies
+that read exactly like findings.
+
 ### 2.3 What the totals do and do not say
 
 The bounded run's 97.8% was never a tree-wide baseline — it measured the four
