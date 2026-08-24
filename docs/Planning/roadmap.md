@@ -164,7 +164,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
                            DONE            DONE       DONE
-  ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (OAuth host-mismatch fix)
+  ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
       DONE
   ──► F/G ──► L (search)
 ```
@@ -215,8 +215,9 @@ budget against and O has nothing to display. Time spent on other steps is not ti
 blocked by; it is time the log is collecting.
 
 **T sits after S — placed after whichever of R/S is later, per Finn's call 2026-08-24, made
-when the bug surfaced during R's implementation.** No technical dependency on either; it's simply
-positioned past both rather than jumping the queue.
+when the first of its three items (the OAuth bug) surfaced during R's implementation.** No
+technical dependency on either R or S; it's simply positioned past both rather than jumping the
+queue.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
@@ -963,28 +964,51 @@ whether any part of it is worth wiring into `symr-verify` as a per-session check
 one-off — the skill already asks for mutation on a session's *own* new tests, which is a much
 smaller thing than this.
 
-## T — Fix the `localhost`/`127.0.0.1` OAuth state mismatch
+## T — Small fixes: OAuth host mismatch, round-trip request clarity, queue colors
 
-**Not specced.** Own `/symr-plan` session, though it's likely small enough not to need much of
-one. Placed after **S** by decision — see the Order notes.
+**Not specced.** Own `/symr-plan` session, though each item here is likely small enough that the
+whole step doesn't need much of one. Placed after **S** by decision — see the Order notes. A
+grab-bag on purpose: three unrelated papercuts, each cheap enough not to deserve its own step,
+found or raised in the days around R's implementation (2026-08-24).
 
-**The bug, found and confirmed 2026-08-24 during R's implementation.** `/callback` has been
-failing with "Invalid OAuth state" on every re-auth for months, previously assumed each time to
-be a mistake on Finn's part rather than the app's. It isn't, and it's fully mechanical: `/login`
-sets the Flask session's `oauth_state` cookie scoped to whichever host served that request, but
+**T1 — the `localhost`/`127.0.0.1` OAuth state mismatch.** `/callback` has been failing with
+"Invalid OAuth state" on every re-auth for months, previously assumed each time to be a mistake
+on Finn's part rather than the app's. It isn't, and it's fully mechanical: `/login` sets the
+Flask session's `oauth_state` cookie scoped to whichever host served that request, but
 `get_auth_manager()`'s `redirect_uri` is hardcoded from `config.SPOTIFY_REDIRECT_URI`
 (`http://127.0.0.1:45660/callback` on the laptop) regardless of how `/login` was reached.
 Browsers never share cookies between `localhost` and `127.0.0.1` — they're unrelated hostnames —
 so reaching `/login` via `localhost:45660` guarantees the callback's session lookup comes back
 empty, deterministically, every time. Confirmed by reproducing it (a preview tool defaulted to
 `localhost`) and then succeeding by going through `127.0.0.1` consistently for both legs.
-
 **The fix, roughly:** have `/login` (or a `before_request` check ahead of it) redirect onto the
 canonical host — `127.0.0.1` on the laptop, matching `SPOTIFY_REDIRECT_URI` — before it sets the
 session cookie, so the cookie's host can never mismatch the callback's regardless of how the app
 was reached. Confirm the equivalent can't happen on `fe-pro` before assuming it's laptop-only —
 its redirect URI is a single `*.ts.net` tailnet hostname, but check `docs/specs/
 host-on-fe-pro-Q.md` §3 rather than assuming.
+
+**T2 — `/dev/roundtrip`'s request estimates don't say what contributes what.** Raised by Finn
+2026-08-24 while looking at the page R's fourth queue row landed on. Two separate estimates sit
+on the same page with nothing tying them together: the round-trip's own Status panel shows
+`requests_estimate` (`roundtrip.py` — `2 * batches + 3`, the load/read cost of resolving whatever
+is currently queued), and each Album backfill **Add** button shows its own estimate
+(`backfill._requests_estimate` — one request per album, to fetch its tracklist) that is spent
+immediately on click, *before* any of those newly-queued uris show up in the round-trip's own
+number above. A user has no way to read "clicking Add for 7 generations, then running the
+round-trip, costs how many requests total" off the page as it stands — the two numbers are
+adjacent but uncombined, and it's not obvious the backfill's spend and the round-trip's spend
+happen at different times for different reasons. Worth solving alongside **O**, which is already
+about surfacing request cost — may turn out to be the same UI work.
+
+**T3 — the canonical queue's group colors are too close together.** Raised by Finn 2026-08-24.
+`static/js/canonical_review.js`'s `COLORS` array (`["#2563eb", "#dc2626", "#059669", "#d97706",
+"#7c3aed", "#db2777"]`, cycled per distinct group in the review queue's chip cells) has a
+red/green pair too similar in perceived lightness to tell apart at a glance, and the whole set
+degrades further once more than ~3-4 groups are visible together — six colors sounds like
+enough headroom, but only a few of the six are reliably distinguishable before the cycle repeats
+or the eye starts confusing adjacent chips. Wants a larger, deliberately-chosen palette (varying
+lightness as well as hue, not just hue) rather than a bigger version of the same six.
 
 ## L — Better search
 
