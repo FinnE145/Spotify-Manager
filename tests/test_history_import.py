@@ -213,6 +213,43 @@ def test_the_played_range_spans_every_file(conn, folder):
     assert counts["range_end"] == "2024-06-01T00:00:00Z"
 
 
+def test_a_reimport_of_an_empty_folder_records_zero_of_everything(conn, folder):
+    # source: S_sweep.md §3.4 E -- `_run_import`'s local `counts` dict
+    # initialises files_parsed/rows_read/rows_inserted to 0 (lines 128-130).
+    # Calling `_run_import` directly (bypassing jobs.try_start's slot, which
+    # isn't this line's concern) with a folder holding no matching JSON files
+    # means `_parse_folder` never touches any of the three counters, so
+    # whatever `_finish` writes to `play_import` is exactly the literal these
+    # lines initialise them to -- 1, under the mutant, not 0.
+    history_import._run_import("reimport", folder, "export.zip")
+
+    # `_run_import` inserts its own play_import row (that's the point of
+    # calling it rather than _parse_folder directly), so it's read back by
+    # folder rather than by a pre-made id.
+    row = conn.execute(
+        "SELECT files_parsed, rows_read, rows_inserted FROM play_import WHERE folder = ?",
+        (folder,),
+    ).fetchone()
+    assert row["files_parsed"] == 0
+    assert row["rows_read"] == 0
+    assert row["rows_inserted"] == 0
+
+
+def test_a_freshly_reset_status_reports_zero_of_everything(conn):
+    # source: S_sweep.md §3.4 E -- `_status`'s JobStatus constructor defaults
+    # (lines 63-66). `jobs.JobStatus.reset()` rebuilds `_fields` from exactly
+    # these defaults before applying whatever `_reset_status` passes (phase,
+    # action, started_at) -- none of which touch the four counters -- so a
+    # freshly reset status is a direct read of the constructor's literals.
+    history_import._reset_status("upload")
+
+    status = history_import.get_status()
+    assert status["files_total"] == 0
+    assert status["files_done"] == 0
+    assert status["rows_read"] == 0
+    assert status["rows_inserted"] == 0
+
+
 # -- `_extract` treats the archive as hostile -------------------------------
 
 

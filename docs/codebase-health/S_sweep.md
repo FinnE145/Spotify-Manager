@@ -315,15 +315,42 @@ the fallback substitutes, because `ceil(0/50)` and `ceil(1/50)` are both `0`
 or `1` — either way `max(1, ·)` erases the difference. No fixture, for any
 value of `total_tracks`, can make the two literals disagree.
 
-#### E. Counter initialisers — 11 lines
+#### E. Counter initialisers — 11 lines, closed
 
 `history_import.py:63`, `64`, `65`, `66`, `128`, `129`, `130`, `199`, `239`,
-`243`; `backfill.py:28`.
+`243`; `backfill.py:28`. 8 fixed, 3 recorded — not fixed.
 
 A fresh status object must report **zero** before any work happens. The trap
 here is the mirror of D: assert the initial value on a *newly created* status,
 not after a run that would overwrite it — a test that reads the counter after
 processing kills nothing, because the initialiser's value is gone by then.
+Two shapes needed it: `_status`'s `JobStatus` constructor defaults
+(`history_import.py:63-66`, `backfill.py:28`), read back through
+`.reset()` — which rebuilds from exactly those defaults before applying
+whatever the caller passes, none of which touch the counters — and
+`history_import._run_import`'s local `counts` dict (`128-130`), read back
+through `_finish`'s write to `play_import`, calling `_run_import` on a
+folder with no matching JSON files so `_parse_folder` never touches any of
+the three.
+
+**`199`, `239` and `243` are `recorded, not fixed`, and not by the trap
+above.** All three are the *same* local variable, `pending`, inside
+`_parse_folder`'s row loop — a chunk counter that decides when to call the
+loop's `checkpoint()` closure, nothing else. It is never returned, never
+part of `counts` or `_status`, and every value `checkpoint()` writes is an
+absolute running total (`files_done`, `rows_read`,
+`conn.total_changes - before`), not a delta — so an extra, redundant
+`checkpoint()` call produces byte-identical output to not calling it. The
+*only* way any of the three literals is ever observable is the **count of
+`checkpoint()` calls**, which only diverges at the `_COMMIT_EVERY = 5000`
+boundary — a fixture would need on the order of 5,000 JSON rows in one file
+to shift that boundary by the one-off the mutation introduces, and even
+then the only way to observe it is by monkeypatching `conn.commit` (or
+similar) to count invocations, since `checkpoint()` is a closure with no
+name reachable from outside `_parse_folder`. The property is real —
+committing on a slightly wrong cadence is a real behavior — but nothing
+about it is worth several thousand fixture rows and an internal-plumbing
+spy to pin one commit-timing off-by-one that changes no stored value.
 
 ---
 
@@ -337,10 +364,12 @@ representative picks (`members[0]`, `sorted(members)[0]`) where `[1]` survives.
 
 ## 4. What was added
 
-42 tests so far (§3.4 A, C and D fully closed), each proven by §6's gate — the
-named test observed failing under its mutant, the suite green without it —
-and each killing with **exactly one** failing test (D's two combined-mutant
-tests kill two named mutants each, both confirmed).
+**§3.4 is complete.** 47 tests total, each proven by §6's gate — the named
+test observed failing under its mutant, the suite green without it — and each
+killing with **exactly one** failing test (D's two combined-mutant tests kill
+two named mutants each, both confirmed). Groups A–E account for 45 of
+§3.3/§3.4's ~46 survivors (§3.2's 12 in the three 0% modules, §3.3's 26
+status codes, §3.4's 20 across D and E); 3 of E's are `recorded, not fixed`.
 
 - **`tests/test_serve.py`** (4). `serve.py` goes 0% → 100%. The import is
   deliberately lazy, inside a helper that patches `waitress.serve` first: the
@@ -358,8 +387,10 @@ tests kill two named mutants each, both confirmed).
   `fetch_artist_image` width tiebreak and all four `album_detail` sort-key
   survivors (§3.4 D) — see §3.4 D's account of the two false starts these
   needed before they actually killed anything.
-- **`tests/test_backfill.py`** (2 group-D tests). `_settled_map`'s NULL and
-  no-owned-tracks boundaries.
+- **`tests/test_backfill.py`** (3 group-D/E tests). `_settled_map`'s NULL
+  and no-owned-tracks boundaries, plus its own `_status` reset default.
+- **`tests/test_history_import.py`** (2 group-E tests). `_status`'s reset
+  defaults and `_run_import`'s `counts` dict on an empty-folder reimport.
 
 **Group B (5 `not_authenticated` 401s) turned out not to need tests at all.**
 §3.4's plan for them was wrong — building the obvious test and running it
@@ -377,7 +408,11 @@ Deriving each case's expected status by running the suite is characterization,
 not specification, and `codebase-health-P.md` §2 is explicit that the
 distinction is the point. The error paths are supplemented instead.
 
-Remaining from §3.4: group E (11 counter initialisers) is not yet written.
+**§3.4 leaves nothing outstanding.** What remains of the sweep as a whole is
+the untriaged majority of the 307 original survivors — the ~65 numeric ones
+outside §3.4's five named groups, and the ~178 non-numeric ones nothing in
+this document has looked at yet — plus the writeup's §5 (what this run says
+about the next sweep), which is written after triage finishes.
 
 ---
 

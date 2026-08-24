@@ -406,6 +406,20 @@ def test_a_plain_preview_writes_track_groups(conn):
     assert conn.execute("SELECT COUNT(*) FROM track_group").fetchone()[0] == 1
 
 
+def test_a_freshly_reset_status_reports_zero_albums(conn):
+    # source: S_sweep.md §3.4 E -- `_status`'s JobStatus constructor default
+    # `albums_total=0`. `jobs.JobStatus.reset()` rebuilds `_fields` from
+    # exactly this default before applying whatever the caller passes (phase,
+    # started_at, generations here, mirroring `_run`'s own reset call) --
+    # none of which touch albums_total -- so a freshly reset status is a
+    # direct read of the constructor's literal.
+    import jobs
+
+    backfill._status.reset(phase="working", started_at=jobs.now_iso(), generations=2)
+
+    assert backfill.get_status()["albums_total"] == 0
+
+
 # -- The job (§4.5) ---------------------------------------------------------
 
 
