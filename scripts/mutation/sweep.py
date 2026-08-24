@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
@@ -44,6 +45,12 @@ IGNORE = shutil.ignore_patterns(
 )
 
 TIMEOUT = 300
+
+#: One JSON object per line, flushed as each mutant finishes. The bounded run's
+#: runner held every result in memory and wrote once at the end, so anything
+#: that stopped it -- a crash, a laptop lid, a Ctrl-C eight hours in -- lost the
+#: entire run. A line per mutant costs nothing and makes `--resume` possible.
+RESULTS = "sweep_results.jsonl"
 
 
 def _child_env():
@@ -137,47 +144,39 @@ def run_mutant(worker_dir, path, mutant, timeout=TIMEOUT, attempts=2):
         os.utime(target, (stat.st_atime, stat.st_mtime))
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--work", default=os.path.join(
-        os.environ.get("TMPDIR", "/tmp"), "symr-mutation"))
-    ap.add_argument("--workers", type=int, default=6)
-    ap.add_argument("modules", nargs="*", default=None)
-    args = ap.parse_args()
+def _key(r):
+    """What identifies a finished mutant across runs.
 
-    targets = args.modules or TARGETS
-    work = os.path.abspath(args.work)
-    os.makedirs(work, exist_ok=True)
-    proto = build_workers(work, args.workers)
+    `before` is part of the key on purpose: if the source line has changed
+    since the interrupted run, the stored verdict is about code that no longer
+    exists, so the mutant is re-run rather than skipped.
+    """
+    return (r["file"], r["line"], r["op"], r["col"], r["before"])
 
-    jobs = []
-    for path in targets:
-        _, _, ms = generate.generate(os.path.join(proto, path))
-        for m in ms:
-            jobs.append((len(jobs) % args.workers, path, m))
-    print(f"{len(jobs)} mutants across {len(targets)} modules, "
-          f"{args.workers} workers", flush=True)
 
-    def run_one(job):
-        wid, path, m = job
-        status, rc = run_mutant(os.path.join(work, f"w{wid}"), path, m)
-        return {"file": path, "status": status, "rc": rc,
-                **{k: m[k] for k in ("op", "pass", "line", "col", "before", "after")}}
+def load_done(path):
+    """Completed mutants from a previous run, keyed by `_key`.
 
-    results, done = [], 0
-    out_path = os.path.join(work, "sweep_results.json")
-    with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for r in ex.map(run_one, jobs):
-            results.append(r)
-            done += 1
-            if r["status"] in ("SURVIVED", "crashed"):
-                print(f"  {r['status']} {r['file']}:{r['line']} "
-                      f"[{r['op']}]  {r['before']}", flush=True)
-            if done % 50 == 0:
-                print(f"  ... {done}/{len(jobs)}", flush=True)
-                json.dump(results, open(out_path, "w"), indent=1)
-    json.dump(results, open(out_path, "w"), indent=1)
+    A half-written final line (killed mid-flush) is skipped rather than
+    treated as fatal -- losing one mutant to a re-run is the cheap outcome.
+    """
+    done = {}
+    if not os.path.exists(path):
+        return done
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            done[_key(r)] = r
+    return done
 
+
+def summarise(results, targets):
     print("\n==== PER MODULE ====")
     for path in targets:
         c = Counter(r["status"] for r in results if r["file"] == path)
@@ -185,6 +184,86 @@ def main():
         rate = f"{100 * (c['caught'] + c['timeout']) / scored:.1f}%" if scored else "n/a"
         print(f"{path:24s} {rate:>6s}  {dict(c)}")
     print("\n==== TOTALS ====", Counter(r["status"] for r in results))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--work", default=os.path.join(
+        os.environ.get("TMPDIR", "/tmp"), "symr-mutation"))
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--resume", action="store_true",
+                    help="skip mutants already recorded in the results file")
+    ap.add_argument("--fresh", action="store_true",
+                    help="discard an existing results file and start over")
+    ap.add_argument("modules", nargs="*", default=None)
+    args = ap.parse_args()
+
+    targets = args.modules or TARGETS
+    work = os.path.abspath(args.work)
+    os.makedirs(work, exist_ok=True)
+    out_path = os.path.join(work, RESULTS)
+
+    done = load_done(out_path)
+    if done and not (args.resume or args.fresh):
+        raise SystemExit(
+            f"{out_path} already holds {len(done)} results.\n"
+            f"  --resume  continue, skipping those\n"
+            f"  --fresh   discard them and start over")
+    if args.fresh:
+        done = {}
+
+    # Unconditional, even on --resume: a run killed mid-mutant leaves a
+    # mutated source file in that worker, and inheriting it would mutate every
+    # subsequent mutant in the same copy on top of it.
+    proto = build_workers(work, args.workers)
+
+    jobs, skipped = [], 0
+    for path in targets:
+        _, _, ms = generate.generate(os.path.join(proto, path))
+        for m in ms:
+            if (path, m["line"], m["op"], m["col"], m["before"]) in done:
+                skipped += 1
+                continue
+            jobs.append((len(jobs) % args.workers, path, m))
+    total = len(jobs) + skipped
+    print(f"{total} mutants across {len(targets)} modules, "
+          f"{args.workers} workers"
+          + (f" -- {skipped} already done, {len(jobs)} to run" if skipped else ""),
+          flush=True)
+
+    lock = threading.Lock()
+    fh = open(out_path, "a" if done else "w")
+
+    def run_one(job):
+        wid, path, m = job
+        status, rc = run_mutant(os.path.join(work, f"w{wid}"), path, m)
+        r = {"file": path, "status": status, "rc": rc,
+             **{k: m[k] for k in ("op", "pass", "line", "col", "before", "after")}}
+        with lock:                      # one line per mutant, on disk, now
+            fh.write(json.dumps(r) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        return r
+
+    results, count = list(done.values()), 0
+    try:
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            for r in ex.map(run_one, jobs):
+                results.append(r)
+                count += 1
+                if r["status"] in ("SURVIVED", "crashed"):
+                    print(f"  {r['status']} {r['file']}:{r['line']} "
+                          f"[{r['op']}]  {r['before']}", flush=True)
+                if count % 25 == 0:
+                    print(f"  ... {count + skipped}/{total}", flush=True)
+    except KeyboardInterrupt:
+        print(f"\ninterrupted -- {count + skipped}/{total} recorded in {out_path}")
+        print(f"resume with:  --work {work} --resume")
+        return
+    finally:
+        fh.close()
+
+    summarise(results, targets)
     print(f"results -> {out_path}")
 
 

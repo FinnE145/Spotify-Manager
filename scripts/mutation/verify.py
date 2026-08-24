@@ -127,7 +127,10 @@ def cmd_caught(args):
     only discovered the misclassification afterwards; this closes the sweep by
     confirming the totals.
     """
-    prior = json.load(open(args.results))
+    if args.results.endswith(".jsonl"):
+        prior = list(sweep.load_done(args.results).values())
+    else:
+        prior = json.load(open(args.results))
     want = [r for r in prior if r["status"] == "caught"]
     work = os.path.dirname(os.path.abspath(args.results))
     print(f"re-running {len(want)} previously-'caught' mutants, "
@@ -183,7 +186,8 @@ def main():
         if name == "kill":
             s.add_argument("--test", required=True)
     s = sub.add_parser("caught")
-    s.add_argument("--results", required=True)
+    s.add_argument("--results", required=True,
+                   help="sweep_results.jsonl from the run being confirmed")
     s.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
     return {"kill": cmd_kill, "one": cmd_one, "caught": cmd_caught}[args.cmd](args)
