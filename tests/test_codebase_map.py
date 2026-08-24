@@ -47,21 +47,32 @@ def _named_py_files():
 
 
 def _repo_modules():
-    """Every module the map is expected to document, one bullet each."""
+    """Every module the map is expected to document, one bullet each.
+
+    `scripts/` is walked **recursively**: it grew a subfolder in step S
+    (`scripts/mutation/`), and a top-level-only listdir would have let three
+    files slip out of the map's guarantee entirely -- silently, since the
+    forward check can only report what the scan hands it.
+    """
     out = [f for f in os.listdir(ROOT) if f.endswith(".py")]
-    out += [
-        os.path.join("scripts", f)
-        for f in os.listdir(os.path.join(ROOT, "scripts"))
-        if f.endswith(".py")
-    ]
+    scripts = os.path.join(ROOT, "scripts")
+    for dirpath, dirnames, filenames in os.walk(scripts):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for f in filenames:
+            if f.endswith(".py"):
+                full = os.path.join(dirpath, f)
+                out.append(os.path.relpath(full, ROOT))
     return sorted(out)
 
 
 def _exists(named):
     """The map names files both by path (`tests/golden.py`) and by bare name
     inside the bullet for their directory (`conftest.py`), so a bare name is
-    resolved against the three directories that have such a bullet."""
-    candidates = [named] + [os.path.join(d, named) for d in ("tests", "scripts", "docs/scoring")]
+    resolved against the four directories that have such a bullet."""
+    candidates = [named] + [
+        os.path.join(d, named)
+        for d in ("tests", "scripts", "scripts/mutation", "docs/scoring")
+    ]
     return any(os.path.exists(os.path.join(ROOT, c)) for c in candidates)
 
 
@@ -95,3 +106,7 @@ def test_the_scan_actually_sees_the_map_and_the_tree():
     # stopped matching the way the map writes paths.
     assert "app.py" in _repo_modules()
     assert "app.py" in _named_py_files()
+    # And the `scripts/` walk must actually descend: a module in a subfolder
+    # is exactly what a top-level listdir would drop, and dropping it makes
+    # the forward check pass vacuously rather than fail.
+    assert "scripts/mutation/generate.py" in _repo_modules()
