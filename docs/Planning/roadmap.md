@@ -165,8 +165,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
                            DONE            DONE       DONE
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
-      DONE
+      DONE                                           DONE
   ──► F/G ──► L (search)
+
+  ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
 
   ──► U (extras: songdoku)
 ```
@@ -175,10 +177,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N, J, P and Q have landed** — P in all three of its parts, verified and
-merged 2026-08-22; Q verified and merged 2026-08-23. Their sections below are marked, and each
-points at the spec that is authoritative for what actually shipped — read the spec, not the summary
-here, before touching any of them.
+**A, I, C, D, E, B, K, H, M, N, J, P, Q and R have landed** — P in all three of its parts, verified
+and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged 2026-08-24. Their
+sections below are marked, and each points at the spec that is authoritative for what actually
+shipped — read the spec, not the summary here, before touching any of them.
 
 **`score` is now available to everything downstream** → `docs/specs/scoring-H.md`. Anything
 below that wants a ranking should read it rather than inventing one, and anything that
@@ -888,10 +890,24 @@ request would be read once and never again.
 **Useful when this is picked up:** `roundtrip_run.requests` remains the only *per-run* request
 count from before the log existed, kept deliberately for failed runs too.
 
-## R — Scrobbling from recently-played
+## R — Scrobbling from recently-played ✅ DONE
 
-**Not specced.** Own `/symr-plan` session. **Gated on Q** (it needs a process that is always up),
-and placed after **O** by decision — see the Order notes.
+**✅ DONE → `docs/specs/scrobbling-R.md`.** That spec is authoritative for what actually shipped;
+read it, not this summary. Verified and merged 2026-08-24. Was gated on **Q** (it needs a process
+that is always up) and placed after **O** by decision — see the Order notes.
+
+**Two things below were disproved in verification, and the spec records both.** *"The import
+backfills and corrects everything scrobbling recorded"* understates what shipped: supersession
+**deletes** the scrobbles an export's range covers rather than correcting them — and deleting alone
+proved insufficient, because it destroys the `row_hash` that would stop the next poll re-inserting
+them from the still-live 50-deep window (measured: 26 double-counted plays on the real library, one
+of them crediting a 3.6-second skip as a full 241-second play). §6.1 is the guard. Separately, the
+budget arithmetic below **held** — 14.4 requests/day, unchanged by the probe.
+
+**It is running on the laptop only by hand.** §8's scope change means the deployed server is logged
+out until someone consents once at `https://fe-pro.tail78f5ec.ts.net/callback`; the poller waits
+rather than dying (§4.5), so nothing is lost, but scrobbling is not actually *always-on* until that
+happens and `fe-pro` is back.
 
 Poll `GET /v1/me/player/recently-played` on a schedule and record what comes back as plays, so the
 library reflects listening without waiting on a GDPR export. **Explicitly non-authoritative**: the
@@ -910,7 +926,7 @@ is larger than this.
 request Symr spends is attached to a button someone pressed. This is the first that spends forever,
 unattended.
 
-**Both pre-design checks are now done — probed 2026-08-23 during R's planning session**, and the
+**Both pre-design checks were done — probed 2026-08-23 during R's planning session**, and the
 results are in `docs/spotify_constraints.md` and `docs/specs/scrobbling-R.md` §1. Read those, not
 this summary. In short: **the endpoint works** (no 403); the scope change needs **no cache
 deletion**, just one browser consent per token cache; the item's `track` is the **simplified**
@@ -1039,6 +1055,84 @@ or a half-remembered title still finds the track, and **ranked results** — acr
 artist you have 358 tracks by outranks a one-play song whose title happens to contain their
 name. Ranking is the part with real design in it, and it wants H's score to exist first, which
 is why this sits at the end rather than next to K.
+
+## W — UI clean-up: adopt a CSS framework
+
+**Not specced.** Own `/symr-plan` session. Placed third-last by decision, 2026-08-24, immediately
+before **V**: re-laying the pages out changes where copy sits and how much of it a page needs, so
+rewriting the words first would mean revisiting them.
+
+**Deliberately not a custom design.** Finn's ask, verbatim: *"i dont want a super fancy custom ui,
+just maybe wrap it all with bootstrap or something."* This is the explicit request that `CLAUDE.md`'s
+*Function over form — don't spend effort on visual polish unless I ask* defers to; it licenses
+**adopting a framework's defaults**, not designing a look. A session that starts inventing
+components has misread the step.
+
+The surface, measured 2026-08-24: **25 templates**, one hand-rolled stylesheet at **961 lines /
+16KB**, **54 class names**. Small enough to convert in one pass, big enough that the conversion is
+the work.
+
+**Constraints that are not up for grabs.** `CLAUDE.md`'s stack rules still hold: server-rendered
+Jinja and vanilla JS, **no SPA framework and no bundler**. That points at a plain CSS file plus,
+at most, the framework's own optional JS — nothing that needs a build step.
+
+**Open for the planning session:**
+- **Which framework**, and Bootstrap is a candidate rather than a decision — it carries a JS bundle
+  (and Popper) that Symr may want none of. A CSS-only option, or Bootstrap's CSS without its JS, is
+  worth pricing against it first.
+- **Vendored file vs CDN.** Vendoring is the safer default here: the server sits behind
+  `tailscale serve`, and a vendored asset also keeps the page working with no outbound internet and
+  pins the version the way `deploy/Dockerfile` pins its interpreter.
+- **The three `immersive` pages are the risk** — `canvas.html`, `canonical_review.html` and
+  `canonical_cross.html` opt out of the normal shell via `body_class`, and the canvas is
+  absolutely-positioned geometry that a framework's global reset and `box-sizing` can quietly break.
+  Convert these last, and check them against `grouping.py`'s coordinate maths rather than by eye.
+- **What happens to `style.css`** — how much survives as genuinely Symr-specific (the canvas, the
+  scoring banner, the review queue) versus dissolving into framework classes.
+- **`docs/style_guide.md`**, named in `CLAUDE.md` as the thing to follow "once it exists", is
+  plausibly answered by this step rather than written by it — if the framework *is* the design
+  system, the guide may be a short page pointing at it plus the handful of local rules.
+
+---
+
+## V — Site writing clean-up
+
+**Not specced.** Own `/symr-plan` session. Placed second-last by decision, 2026-08-24 — it depends
+on nothing, but it wants the pages to have stopped moving, and every step above it adds or reworks
+copy. Doing it before T and L would mean writing some of it twice.
+
+The site is full of small explanatory notes — 70 `class="meta"` paragraphs across the templates as
+of 2026-08-24, plus button captions, empty states and list descriptions. They are genuinely load-
+bearing: they are why the dev pages are usable without opening a spec. **This is a rewrite pass,
+not a deletion pass.** Three distinct faults, and they want different fixes:
+
+**Stale, or built to go stale.** Measured 2026-08-24, not hypothetical:
+- `dev.html` says *"the 36 current-favs playlists"*. The `generation` table holds **37**. Already
+  wrong, silently, and nothing could have caught it.
+- `roundtrip.html`: *"it's the only way we learn where the app's quota ceiling actually is"* —
+  true today, false the moment **O** lands.
+
+The durable fix for the first kind is a rule, not an edit: **a count in prose is rendered from the
+data or it isn't stated.** Worth landing in `CLAUDE.md`'s *Frontend* section, next to the
+thousands-separators rule it sits beside naturally.
+
+**Too specific — implementation vocabulary leaking into the UI.** `scoring.html` renders a literal
+spec citation, *"the read-time backstop (docs/specs/scoring-H.md §9.3)"*; `scrobble.html` says
+*"production-only by construction"*. These read as notes-to-self rather than as writing for the
+person using the page, and the spec reference in particular will outlive the section number.
+
+**Too conversational.** `canonical_cross.html`: *"Usually the answer is no — just hit Enter."*
+Chatty, and it also asserts something about the data that nothing keeps true.
+
+Open for the planning session: whether there's a house voice worth writing down (terse and
+declarative is the obvious candidate, and `docs/style_guide.md` is already the named home for it —
+still TBD); whether the fix is per-page or a pass over all of them at once; and how much of the
+detail currently in UI prose belongs in the specs instead, with the page saying only what someone
+needs to act. Note `feedback-canonical-ui-terminology` — "membership(s)", not "Live#", and no
+negative framing like "non-singleton" — is an existing decision this step should absorb rather than
+re-litigate.
+
+---
 
 ## U — Extras page: Songdoku
 
