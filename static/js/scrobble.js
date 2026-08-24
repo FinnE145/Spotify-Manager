@@ -72,7 +72,28 @@
     enabledStateEl.textContent = enabled ? "Enabled" : "Paused";
     pauseBtn.hidden = !enabled;
     resumeBtn.hidden = enabled;
-    nextPollEl.hidden = !enabled;
+  }
+
+  // Three states, matching the template: no thread scheduled in this process
+  // (the laptop's permanent case), a real forthcoming poll, or a scheduled
+  // wake-up that will skip because scrobbling is paused. The time is exact
+  // rather than relative -- it is a fixed sleep, known to the second.
+  function renderNextPoll(data) {
+    nextPollEl.textContent = "";
+    if (!data.next_poll_at) {
+      nextPollEl.textContent =
+        "No poller running in this process — polls happen on the deployed server only.";
+      return;
+    }
+    const when = makeExactDateSpan(data.next_poll_at);
+    if (data.enabled) {
+      nextPollEl.appendChild(document.createTextNode("Next poll at "));
+      nextPollEl.appendChild(when);
+    } else {
+      nextPollEl.appendChild(document.createTextNode("Paused — the "));
+      nextPollEl.appendChild(when);
+      nextPollEl.appendChild(document.createTextNode(" wake-up will skip without polling."));
+    }
   }
 
   function applyStatus(data) {
@@ -80,11 +101,7 @@
     setField("gap_warning_count", data.gap_warning_count);
     renderLastPoll(data.last_poll);
     setEnabledUi(data.enabled);
-    if (data.enabled && data.next_poll_estimate) {
-      nextPollEl.textContent = "";
-      nextPollEl.appendChild(document.createTextNode("Next poll ~"));
-      nextPollEl.appendChild(makeDateSpan(data.next_poll_estimate));
-    }
+    renderNextPoll(data);
   }
 
   pollBtn.addEventListener("click", () => {
@@ -113,7 +130,10 @@
     })
       .then(({ ok, data }) => {
         if (!ok) throw new Error(data.detail || data.error || "toggle failed");
-        setEnabledUi(data.enabled);
+        // The toggle returns the same status payload the poll does, so the
+        // next-poll line can re-render with it -- pausing changes what that
+        // line says, not just which button shows.
+        applyStatus(data);
       })
       .catch((e) => {
         errorEl.hidden = false;

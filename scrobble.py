@@ -33,6 +33,19 @@ from spotify_client import get_spotify_client
 # (§4.2) -- 14.4 requests/day.
 _POLL_INTERVAL_SECONDS = 100 * 60
 
+# When the poller thread will next wake, as an exact ISO-8601 Z string, or
+# None when no thread is polling in this process -- which is the laptop's
+# permanent state (§4.1), and the server's until start() runs.
+#
+# In-process module state, deliberately, exactly like jobs._active and the
+# JobStatus singletons: serve.py runs the thread and the app in one process,
+# and Q §6.5 rules out a second worker process as a correctness constraint,
+# so a request thread reads what the poller wrote. It is read off the *thread*
+# rather than derived from the last scrobble_poll row because a manual "Poll
+# now" writes a row without touching the thread's sleep -- deriving it from
+# the log reported a schedule that nothing was keeping.
+_next_wake_at = None
+
 
 def start():
     """Spawns the daemon poller thread. Called only from serve.py -- the
@@ -50,9 +63,39 @@ def _loop():
         conn = db.connect()
         try:
             poll(conn)
+        except Exception as e:
+            # poll() handles a failing *request* itself; this catches
+            # everything after it -- a KeyError on a malformed item, or the
+            # realistic one, "database is locked" from the commit while a job
+            # holds a long write. Nothing restarts this thread, so without
+            # this one exception ends scrobbling for the life of the
+            # container, and /dev/scrobble would go on showing a stale
+            # last-poll with no error at all (§4.5: "the loop continues").
+            _record_loop_error(e)
         finally:
             conn.close()
+        global _next_wake_at
+        _next_wake_at = _iso_after(_POLL_INTERVAL_SECONDS)
         time.sleep(_POLL_INTERVAL_SECONDS)
+
+
+def _record_loop_error(exc):
+    """Best-effort, on a *fresh* connection -- the one that raised may be the
+    problem. Swallows its own failures the way api_log.record does: the point
+    is that the thread survives, and a lost error row must never be the thing
+    that kills it."""
+    try:
+        conn = db.connect()
+        try:
+            conn.execute(
+                "INSERT INTO scrobble_poll (started_at, error) VALUES (?, ?)",
+                (jobs.now_iso(), f"poll failed: {exc}"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
 
 # -- The poll --------------------------------------------------------------
@@ -199,6 +242,24 @@ def _ingest(conn, started_at, items):
         "SELECT MAX(ts) FROM play WHERE source = 'scrobble'"
     ).fetchone()[0]
 
+    # §6's supersession is a DELETE, and the row it deletes carries the
+    # row_hash that INSERT OR IGNORE would have deduped against -- so
+    # without this guard the next poll simply puts every superseded row
+    # back. That is not theoretical: the window is 50 plays deep (~2 days
+    # of listening) and an export's range_end lags by about as much, so the
+    # overlap is most of the window. Measured on the real library
+    # 2026-08-24: an import cut 50 scrobbles to 23, and the next poll
+    # restored all 27, leaving 26 plays present as both an export row and a
+    # scrobble row -- exactly the double-count, with an invented ms_played
+    # beside the true one, that §6 exists to prevent.
+    #
+    # Derived from the data, not checkpointed: "the export is authoritative
+    # through here" is just its newest play. Inherits §6's already-accepted
+    # "a range is not coverage" risk rather than adding a new one.
+    export_through = conn.execute(
+        "SELECT MAX(ts) FROM play WHERE source = 'export'"
+    ).fetchone()[0]
+
     poll_id = conn.execute(
         "INSERT INTO scrobble_poll (started_at) VALUES (?)", (started_at,)
     ).lastrowid
@@ -211,6 +272,12 @@ def _ingest(conn, started_at, items):
         snapshot._upsert_track_full(conn, snapshot._parse_track_item(track, None, None))
 
         played_at = item["played_at"]
+        ts = _truncate_to_seconds(played_at)
+        # The track upsert above still runs -- the export supersedes the
+        # *play*, not what Symr knows about the track.
+        if export_through is not None and ts <= export_through:
+            continue
+
         album = track.get("album") or {}
         cursor = conn.execute(
             "INSERT OR IGNORE INTO play (row_hash, source, poll_id, ts, ms_played, "
@@ -219,7 +286,7 @@ def _ingest(conn, started_at, items):
             (
                 _row_hash(played_at, track["uri"]),
                 poll_id,
-                _truncate_to_seconds(played_at),
+                ts,
                 _derive_ms_played(conn, items, index, track["duration_ms"]),
                 track["uri"],
                 track.get("name"),
@@ -257,7 +324,9 @@ def index_data(conn):
         "enabled": db.get_meta(conn, "scrobble_enabled") != "0",
         "interval_seconds": _POLL_INTERVAL_SECONDS,
         "last_poll": last_poll,
-        "next_poll_estimate": _next_poll_estimate(last_poll),
+        # Exact, not an estimate, and None when nothing is scheduled -- the
+        # page says so rather than showing a time no thread intends to keep.
+        "next_poll_at": _next_wake_at,
         "total_scrobbles": conn.execute(
             "SELECT COUNT(*) FROM play WHERE source = 'scrobble'"
         ).fetchone()[0],
@@ -279,13 +348,6 @@ def _last_poll_row(conn):
         "gap_warning, retry_after, error FROM scrobble_poll ORDER BY id DESC LIMIT 1"
     ).fetchone()
     return dict(row) if row is not None else None
-
-
-def _next_poll_estimate(last_poll):
-    if last_poll is None:
-        return None
-    started = _parse_ts(last_poll["started_at"])
-    return (started + timedelta(seconds=_POLL_INTERVAL_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _recent_plays(conn, limit=50):

@@ -363,7 +363,10 @@ def create_app():
         body = request.get_json()
         conn = db.get_db()
         scrobble.set_enabled(conn, bool(body.get("enabled")))
-        return jsonify({"ok": True, "enabled": bool(body.get("enabled"))})
+        # The same payload /api/scrobble/poll returns, so the page's whole
+        # status block re-renders from one shape -- pausing changes the
+        # next-poll line too, not just which button is showing.
+        return jsonify(scrobble.index_data(conn))
 
     @app.route("/dev/canonical", endpoint="dev_canonical")
     def canonical_index():

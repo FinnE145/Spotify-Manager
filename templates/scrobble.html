@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, entity_link, spotify_track_link %}
+{% from "_macros.html" import datetime_span, datetime_exact_span, entity_link, spotify_track_link %}
 
 {% block title %}Symr — Scrobble{% endblock %}
 
@@ -25,7 +25,7 @@
       <span id="scrobble-enabled-state">{{ "Enabled" if enabled else "Paused" }}</span>
       &middot; <span data-field="total_scrobbles">{{ "{:,}".format(total_scrobbles) }}</span>
       scrobble<span data-plural-for="total_scrobbles">{{ "" if total_scrobbles == 1 else "s" }}</span> stored
-      &middot; <span data-field="gap_warning_count">{{ gap_warning_count }}</span>
+      &middot; <span data-field="gap_warning_count">{{ "{:,}".format(gap_warning_count) }}</span>
       poll<span data-plural-for="gap_warning_count">{{ "" if gap_warning_count == 1 else "s" }}</span> with a gap warning
     </p>
     <p class="meta" id="scrobble-last-poll">
@@ -43,8 +43,14 @@
       No poll has run yet.
       {% endif %}
     </p>
-    <p class="meta" id="scrobble-next-poll" {{ 'hidden' if not enabled or not next_poll_estimate }}>
-      Next poll ~{{ datetime_span(next_poll_estimate) }}
+    <p class="meta" id="scrobble-next-poll">
+      {% if not next_poll_at %}
+      No poller running in this process — polls happen on the deployed server only.
+      {% elif enabled %}
+      Next poll at {{ datetime_exact_span(next_poll_at) }}
+      {% else %}
+      Paused — the {{ datetime_exact_span(next_poll_at) }} wake-up will skip without polling.
+      {% endif %}
     </p>
   </section>
 

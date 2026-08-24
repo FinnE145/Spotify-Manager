@@ -585,3 +585,508 @@ def test_polling_succeeds_while_a_job_holds_the_slot(fake_spotify, conn):
         jobs._active = None
 
     assert conn.execute("SELECT COUNT(*) FROM play").fetchone()[0] == 1
+
+
+# -- The export guard (§6.1) --------------------------------------------------
+
+
+def test_the_next_poll_does_not_restore_superseded_scrobbles(fake_spotify, conn):
+    # source: scrobbling-R.md §6.1 -- the regression for the bug this whole
+    # clause was written for. Deleting a scrobble destroys the row_hash
+    # INSERT OR IGNORE dedupes against, so before the guard the window simply
+    # served the same items back and every superseded row returned.
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")
+    scrobble.poll(conn)
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 1
+
+    # An export lands covering that play: §6 deletes it, and seeds the export
+    # row that the guard now reads its cutover from.
+    builders.make_play(conn, uri=track["uri"], source="export", ts="2026-06-15T10:00:00Z")
+    _finish_import(conn, range_end="2026-06-15T10:00:00Z")
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 0
+
+    scrobble.poll(conn)  # same 50-deep window, same item
+
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 0
+
+
+def test_an_item_the_export_already_covers_is_not_inserted(fake_spotify, conn):
+    # source: scrobbling-R.md §6.1 -- "skips the play insert for any item
+    # whose truncated ts is <= MAX(ts) FROM play WHERE source = 'export'".
+    builders.make_play(conn, uri=uri("exported"), source="export", ts="2026-06-15T11:00:00Z")
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")  # before the cutover
+
+    scrobble.poll(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 0
+
+
+def test_an_item_after_the_export_cutover_is_still_inserted(fake_spotify, conn):
+    # source: scrobbling-R.md §6.1 -- the partner to the test above. One
+    # asserting only the skip cannot tell the guard from "insert nothing".
+    builders.make_play(conn, uri=uri("exported"), source="export", ts="2026-06-15T09:00:00Z")
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")  # after the cutover
+
+    scrobble.poll(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 1
+
+
+def test_the_export_cutover_boundary_is_inclusive(fake_spotify, conn):
+    # source: scrobbling-R.md §6.1 -- the predicate is `<=`, matching §6's own
+    # DELETE. An item at exactly the cutover second is the export's to own, so
+    # a `<` here would re-insert precisely the row §6 just deleted.
+    builders.make_play(conn, uri=uri("exported"), source="export", ts="2026-06-15T10:00:00Z")
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.400Z")  # same second
+
+    scrobble.poll(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 0
+
+
+def test_the_track_is_still_upserted_for_an_item_the_export_covers(fake_spotify, conn):
+    # source: scrobbling-R.md §6.1 -- "The track upsert still runs -- the
+    # export supersedes the *play*, not what Symr knows about the track."
+    builders.make_play(conn, uri=uri("exported"), source="export", ts="2026-06-15T11:00:00Z")
+    track = fakes.spotify_track("t1", name="A Song", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    row = conn.execute("SELECT name FROM track WHERE track_id = 't1'").fetchone()
+    assert row is not None and row["name"] == "A Song"
+
+
+def test_an_existing_scrobble_does_not_suppress_an_older_item(fake_spotify, conn):
+    # source: scrobbling-R.md §6.1 -- the cutover is the newest **export**
+    # play. Only the export is authoritative; a scrobble already stored says
+    # nothing about whether some older play belongs. Dropping the source
+    # filter here would quietly turn the guard into "never insert anything
+    # older than what we already have", and every test without an export row
+    # would still pass.
+    builders.make_play(conn, uri=uri("s"), source="scrobble", ts="2026-06-15T11:00:00Z")
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")  # older, unexported
+
+    scrobble.poll(conn)
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM play WHERE spotify_track_uri = ?", (track["uri"],)
+    ).fetchone()[0] == 1
+
+
+def test_every_item_inserts_when_no_export_row_exists(fake_spotify, conn):
+    # source: scrobbling-R.md §6.1 -- the guard is derived from the export's
+    # newest play, so with no export at all it must not suppress anything. A
+    # NULL MAX(ts) compared with <= would silently drop every row.
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 1
+
+
+# -- The loop survives a failure after the request (§4.5) ---------------------
+
+
+class _StopLoop(Exception):
+    """Raised from the patched sleep to end _loop's infinite while."""
+
+
+def test_the_loop_survives_an_exception_raised_after_the_request(monkeypatch, conn):
+    # source: scrobbling-R.md §4.5 -- "That guarantee covers the whole loop
+    # body, not just the request." Nothing restarts this thread, so an escape
+    # here ends scrobbling until the container restarts. Reaching the patched
+    # sleep is what proves the exception did not escape the loop.
+    def boom(_conn):
+        raise KeyError("duration_ms")
+
+    def stop(_seconds):
+        raise _StopLoop
+
+    monkeypatch.setattr(scrobble, "poll", boom)
+    monkeypatch.setattr(scrobble.time, "sleep", stop)
+
+    try:
+        scrobble._loop()
+    except _StopLoop:
+        pass
+    else:
+        raise AssertionError("_loop returned without reaching sleep")
+
+    row = last_poll(conn)
+    assert row is not None and "duration_ms" in row["error"]
+
+
+def test_a_loop_error_is_recorded_without_the_failing_connection(conn):
+    # source: scrobbling-R.md §4.5 -- recorded "on a fresh connection (the one
+    # that raised may be the problem)". Asserting the row lands proves the
+    # recorder does not reuse a caller-supplied handle.
+    scrobble._record_loop_error(ValueError("database is locked"))
+
+    row = last_poll(conn)
+    assert row is not None
+    assert "database is locked" in row["error"]
+    assert row["items_read"] is None  # never reached the request
+
+
+# -- /dev/scrobble's read path (§7) -------------------------------------------
+
+
+def test_export_cutover_is_the_newest_export_play(conn):
+    # source: scrobbling-R.md §7 -- "the cutover is exactly MAX(ts) WHERE
+    # source = 'export'", which is what the page draws its divider from.
+    builders.make_play(conn, uri=uri("a"), source="export", ts="2026-06-14T00:00:00Z")
+    builders.make_play(conn, uri=uri("b"), source="export", ts="2026-06-15T00:00:00Z")
+    builders.make_play(conn, uri=uri("c"), source="scrobble", ts="2026-06-16T00:00:00Z")
+
+    assert scrobble.index_data(conn)["export_cutover"] == "2026-06-15T00:00:00Z"
+
+
+def test_total_scrobbles_counts_only_scrobbles(conn):
+    # source: scrobbling-R.md §7 -- "total source='scrobble' rows". With a
+    # 94k-row export in the real DB, dropping the filter would report the
+    # whole play table as scrobbles.
+    builders.make_play(conn, uri=uri("a"), source="export", ts="2026-06-14T00:00:00Z")
+    builders.make_play(conn, uri=uri("b"), source="scrobble", ts="2026-06-16T00:00:00Z")
+
+    assert scrobble.index_data(conn)["total_scrobbles"] == 1
+
+
+def test_gap_warning_count_counts_only_flagged_polls(conn):
+    # source: scrobbling-R.md §7 -- "count of polls with gap_warning set".
+    conn.execute(
+        "INSERT INTO scrobble_poll (started_at, gap_warning) "
+        "VALUES ('2026-06-15T10:00:00Z', 1)"
+    )
+    conn.execute(
+        "INSERT INTO scrobble_poll (started_at, gap_warning) "
+        "VALUES ('2026-06-15T11:00:00Z', 0)"
+    )
+    conn.commit()
+
+    assert scrobble.index_data(conn)["gap_warning_count"] == 1
+
+
+def test_the_page_shows_at_most_fifty_plays(conn):
+    # source: scrobbling-R.md §7 -- "The last 50 plays, ORDER BY ts DESC
+    # LIMIT 50". Nothing else pins the limit, so a smaller one is invisible.
+    for n in range(55):
+        builders.make_play(conn, uri=uri(f"t{n}"), ts=f"2026-06-15T10:{n:02d}:00Z")
+
+    rows = scrobble.index_data(conn)["recent_plays"]
+    assert len(rows) == 50
+    assert rows[0]["ts"] == "2026-06-15T10:54:00Z"  # newest first
+
+
+def test_the_page_shows_plays_of_every_source(conn):
+    # source: scrobbling-R.md §7 -- the last 50 plays "regardless of source",
+    # which is what makes the export/scrobble divider meaningful at all.
+    builders.make_play(conn, uri=uri("e"), source="export", ts="2026-06-14T00:00:00Z")
+    builders.make_play(conn, uri=uri("s"), source="scrobble", ts="2026-06-15T00:00:00Z")
+
+    sources = {row["source"] for row in scrobble.index_data(conn)["recent_plays"]}
+    assert sources == {"export", "scrobble"}
+
+
+def test_an_absent_enabled_key_reads_as_enabled(conn):
+    # source: scrobbling-R.md §3.5 -- "Absent means on -- a fresh deploy
+    # scrobbles with no manual step." poll() honours this (a paused-poller
+    # test covers that arm); this is the page agreeing with it, so a fresh
+    # deploy cannot show "Paused" while the thread is polling.
+    assert db.get_meta(conn, "scrobble_enabled") is None
+    assert scrobble.index_data(conn)["enabled"] is True
+
+
+# -- The play row's own columns (§3.3) ----------------------------------------
+
+
+def test_the_poll_row_records_how_many_items_it_read(fake_spotify, conn):
+    # source: scrobbling-R.md §3.1 -- items_read, which /dev/scrobble renders
+    # as "read N, stored M". The empty-poll test asserts 0, which a constant
+    # 0 would also satisfy.
+    for n in range(3):
+        fake_spotify.add_recently_played(
+            fakes.spotify_track(f"t{n}"), f"2026-06-15T10:0{n}:00.000Z"
+        )
+
+    scrobble.poll(conn)
+
+    assert last_poll(conn)["items_read"] == 3
+
+
+def test_a_scrobble_row_links_to_its_poll(fake_spotify, conn):
+    # source: scrobbling-R.md §3.1 -- "play.poll_id INTEGER REFERENCES
+    # scrobble_poll(id)". Nothing else reads the FK, so a NULL would be
+    # invisible.
+    fake_spotify.add_recently_played(fakes.spotify_track("t1"), "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    row = conn.execute(
+        "SELECT poll_id, import_id, source_file FROM play WHERE source='scrobble'"
+    ).fetchone()
+    assert row["poll_id"] == last_poll(conn)["id"]
+    assert row["import_id"] is None  # §3.3: NULL for a scrobble, as import_id is
+    assert row["source_file"] is None
+
+
+def test_the_reported_columns_carry_the_track_album_and_album_artist(fake_spotify, conn):
+    # source: scrobbling-R.md §3.3 -- reported_artist_name is the **album
+    # artist**, "matching the export's meaning of that column, which is the
+    # album artist and misses featured credits". Taking track.artists instead
+    # would look right and be wrong, so the fixture gives the two different
+    # names.
+    album = fakes.spotify_album("al1", name="The Album", artists=[fakes.spotify_artist("aa", name="Album Artist")])
+    track = fakes.spotify_track(
+        "t1", name="A Song", album=album, artists=[fakes.spotify_artist("ta", name="Track Artist")]
+    )
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    row = conn.execute(
+        "SELECT reported_track_name, reported_artist_name, reported_album_name "
+        "FROM play WHERE source='scrobble'"
+    ).fetchone()
+    assert row["reported_track_name"] == "A Song"
+    assert row["reported_artist_name"] == "Album Artist"
+    assert row["reported_album_name"] == "The Album"
+
+
+# -- Unusable items (§1.5) -----------------------------------------------------
+
+
+def test_an_unusable_item_is_skipped_without_shifting_its_neighbours_gap(fake_spotify, conn):
+    # source: scrobbling-R.md §1.5 -- episodes and local tracks are filtered
+    # by snapshot._usable_track. The batch is deliberately *not* pre-filtered,
+    # because _derive_ms_played indexes into it by position: the newest item's
+    # predecessor here is the unusable middle one, so a filtered list would
+    # derive its gap against the wrong item and silently store 300s not 60s.
+    newest = fakes.spotify_track("t-new", duration_ms=300_000)
+    oldest = fakes.spotify_track("t-old", duration_ms=300_000)
+    fake_spotify.add_recently_played(newest, "2026-06-15T10:05:00.000Z")
+    fake_spotify.recently_played.append(
+        {"track": {"id": "ep1", "type": "episode", "uri": "spotify:episode:ep1"},
+         "played_at": "2026-06-15T10:04:00.000Z", "context": None}
+    )
+    fake_spotify.add_recently_played(oldest, "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    uris = {r["spotify_track_uri"] for r in conn.execute("SELECT spotify_track_uri FROM play")}
+    assert uris == {newest["uri"], oldest["uri"]}  # the episode stored no play
+    ms = conn.execute(
+        "SELECT ms_played FROM play WHERE spotify_track_uri = ?", (newest["uri"],)
+    ).fetchone()[0]
+    assert ms == 60_000  # the gap to the episode's slot, not to t-old
+
+
+# -- gap_warning's comparison point (§4.6) ------------------------------------
+
+
+def test_gap_warning_compares_against_scrobbles_not_exports(fake_spotify, conn):
+    # source: scrobbling-R.md §4.6 -- "newer than the newest **scrobble**
+    # already stored". The export row is deliberately the *newer* of the two:
+    # with the source filter the comparison point is the 09:00 scrobble and
+    # this is a real gap, while dropping the filter would make it the 11:00
+    # export and silently suppress the warning. A fixture with the export
+    # older would pass either way.
+    builders.make_play(conn, uri=uri("e"), source="export", ts="2026-06-15T11:00:00Z")
+    builders.make_play(conn, uri=uri("s"), source="scrobble", ts="2026-06-15T09:00:00Z")
+    fake_spotify.add_recently_played(fakes.spotify_track("t1"), "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    assert last_poll(conn)["gap_warning"] == 1
+
+
+def test_gap_warning_does_not_fire_when_the_oldest_item_equals_the_newest_stored(
+    fake_spotify, conn
+):
+    # source: scrobbling-R.md §4.6 -- the test is "newer than", so an exact
+    # match is an overlap, not a gap. `>=` here would warn on every poll whose
+    # window happens to start on the stored second.
+    builders.make_play(conn, uri=uri("s"), source="scrobble", ts="2026-06-15T10:00:00Z")
+    fake_spotify.add_recently_played(fakes.spotify_track("t1"), "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    assert last_poll(conn)["gap_warning"] == 0
+
+
+# -- The unauthenticated and non-Spotify failure paths (§4.5) -----------------
+
+
+def test_a_missing_token_records_a_poll_row_and_returns(monkeypatch, conn):
+    # source: scrobbling-R.md §4.5 -- get_spotify_client() returning None
+    # "logs and continues rather than killing the thread, so a server that has
+    # been redeployed but not yet re-consented (§8) recovers on its own". §8's
+    # scope change makes this the *expected* state after every deploy.
+    monkeypatch.setattr(scrobble, "get_spotify_client", lambda: None)
+
+    scrobble.poll(conn)
+
+    row = last_poll(conn)
+    assert row["error"] == "not_authenticated"
+    assert row["items_read"] is None
+
+
+def test_a_non_spotify_exception_records_an_error(fake_spotify, conn):
+    # source: scrobbling-R.md §4.5 -- "Other exceptions record
+    # scrobble_poll.error and the loop continues." The 429 tests and the
+    # not_found test all raise SpotifyException, so nothing else reaches the
+    # bare `except Exception` around the request.
+    fake_spotify.fail("current_user_recently_played", ConnectionError("dns"))
+
+    scrobble.poll(conn)
+
+    row = last_poll(conn)
+    assert "dns" in row["error"]
+    assert db.get_meta(conn, "scrobble_backoff_until") is None
+
+
+# -- Settling the ISRC queue row (§5.3) ---------------------------------------
+
+
+def test_clearing_the_isrc_row_settles_every_matching_track(conn):
+    # source: scrobbling-R.md §5.3 -- "[Clear] ... INSERT OR IGNOREs every
+    # currently-matching track_id into track_isrc_absent". The route is in the
+    # catalog, which only proves it responds (P2-010) -- a no-op body passes
+    # that and leaves the queue reading the same count forever.
+    track_id = builders.make_track(conn, "t1", isrc=None)
+    track_uri = conn.execute(
+        "SELECT uri FROM track WHERE track_id = ?", (track_id,)
+    ).fetchone()["uri"]
+    builders.make_play(conn, uri=track_uri)
+    assert roundtrip.counts(conn)["incomplete_isrc_uris"] == 1
+
+    roundtrip.settle_incomplete_isrc(conn)
+
+    assert conn.execute(
+        "SELECT 1 FROM track_isrc_absent WHERE track_id = ?", (track_id,)
+    ).fetchone() is not None
+    assert roundtrip.counts(conn)["incomplete_isrc_uris"] == 0
+
+
+def test_clearing_the_isrc_row_leaves_tracks_that_have_an_isrc_alone(conn):
+    # source: scrobbling-R.md §5.3 -- it settles what the row *counts*, and a
+    # track with an ISRC was never in that set. Settling one would suppress a
+    # genuine future re-request if its ISRC were ever cleared.
+    track_id = builders.make_track(conn, "t1", isrc="ISRCT1")
+    track_uri = conn.execute(
+        "SELECT uri FROM track WHERE track_id = ?", (track_id,)
+    ).fetchone()["uri"]
+    builders.make_play(conn, uri=track_uri)
+
+    roundtrip.settle_incomplete_isrc(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM track_isrc_absent").fetchone()[0] == 0
+
+
+def test_the_clear_endpoint_settles_the_isrc_queue(client, conn):
+    # source: scrobbling-R.md §5.3 -- the wiring from the button to the
+    # settle, which only a route test can see.
+    track_id = builders.make_track(conn, "t1", isrc=None)
+    track_uri = conn.execute(
+        "SELECT uri FROM track WHERE track_id = ?", (track_id,)
+    ).fetchone()["uri"]
+    builders.make_play(conn, uri=track_uri)
+
+    resp = client.post("/api/roundtrip/incomplete-isrc/clear")
+
+    assert resp.status_code == 200
+    assert conn.execute(
+        "SELECT 1 FROM track_isrc_absent WHERE track_id = ?", (track_id,)
+    ).fetchone() is not None
+
+
+# -- The next-poll line (§7) --------------------------------------------------
+
+
+def test_no_poller_in_this_process_reports_no_next_poll(conn):
+    # source: scrobbling-R.md §7 -- the laptop's permanent state (§4.1: the
+    # thread starts only from serve.py). It previously derived a time from the
+    # last poll row, which on a machine that never polls is a schedule nothing
+    # intends to keep.
+    assert scrobble._next_wake_at is None
+    assert scrobble.index_data(conn)["next_poll_at"] is None
+
+
+def test_the_next_poll_time_comes_from_the_thread_not_the_last_poll(fake_spotify, conn):
+    # source: scrobbling-R.md §7 -- a manual "Poll now" writes a scrobble_poll
+    # row without touching the thread's sleep, so a value derived from that
+    # row drifts from the real schedule by up to a full interval. This asserts
+    # a poll does *not* move it.
+    scrobble._next_wake_at = "2026-06-15T14:00:00Z"
+
+    scrobble.poll(conn)
+
+    assert scrobble.index_data(conn)["next_poll_at"] == "2026-06-15T14:00:00Z"
+
+
+def test_the_loop_records_its_own_next_wake_time(monkeypatch, conn):
+    # source: scrobbling-R.md §7 -- exact, not an estimate: the interval is a
+    # fixed sleep, so the thread knows the second it will wake. FROZEN_NOW
+    # (12:00:00) + 6000s.
+    monkeypatch.setattr(scrobble, "poll", lambda _conn: None)
+    monkeypatch.setattr(scrobble.time, "sleep", lambda _s: (_ for _ in ()).throw(_StopLoop))
+
+    try:
+        scrobble._loop()
+    except _StopLoop:
+        pass
+
+    assert scrobble._next_wake_at == "2026-06-15T13:40:00Z"
+
+
+def test_the_page_names_the_deployed_server_when_nothing_is_scheduled(client, conn):
+    # source: scrobbling-R.md §7 -- "if the poller isn't running, it should say
+    # so, not a fake estimate". Asserting index_data's None is not enough; the
+    # template has three branches and only a render shows which one runs.
+    body = client.get("/dev/scrobble").get_data(as_text=True)
+
+    assert "No poller running in this process" in body
+    assert "Next poll at" not in body
+
+
+def test_the_page_gives_the_exact_next_poll_time_when_one_is_scheduled(client, conn):
+    # source: scrobbling-R.md §7 -- the exact-time branch, rendered through
+    # datetime_exact_span so the browser shows a clock time rather than
+    # format.js's relative phrasing.
+    scrobble._next_wake_at = "2026-06-15T13:40:00Z"
+
+    body = client.get("/dev/scrobble").get_data(as_text=True)
+
+    assert 'data-datetime-exact="2026-06-15T13:40:00Z"' in body
+    assert "Next poll at" in body
+
+
+def test_a_paused_poller_says_its_next_wake_up_will_skip(client, conn):
+    # source: scrobbling-R.md §7/§4.4 -- a scheduled wake-up still exists
+    # while paused; it just returns without polling. Showing a bare "Next poll
+    # at" there would promise a poll that will not happen.
+    scrobble._next_wake_at = "2026-06-15T13:40:00Z"
+    db.set_meta(conn, "scrobble_enabled", "0")
+    conn.commit()
+
+    body = client.get("/dev/scrobble").get_data(as_text=True)
+
+    assert "will skip without polling" in body
+    assert "Next poll at" not in body
+
+
+def test_the_toggle_returns_the_full_status_payload(client, conn):
+    # source: scrobbling-R.md §7 -- both controls "return JSON and update the
+    # page in place". Pausing changes the next-poll line as well as the
+    # buttons, so the toggle has to hand back the same shape the poll does or
+    # the line goes stale until a reload.
+    resp = client.post("/api/scrobble/toggle", json={"enabled": False})
+
+    assert resp.get_json()["enabled"] is False
+    assert set(resp.get_json()) == set(scrobble.index_data(conn))

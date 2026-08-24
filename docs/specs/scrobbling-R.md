@@ -251,7 +251,16 @@ exception's headers — falling back to one interval when absent — record it i
 Without this, an app-level 24h lockout tripped by a pull would be met with ~14 more useless requests
 a day against an exhausted quota.
 
-Other exceptions record `scrobble_poll.error` and the loop continues. A missing or scope-invalid
+Other exceptions record `scrobble_poll.error` and the loop continues. **That guarantee covers the
+whole loop body, not just the request** — found in verification, 2026-08-24: the `try`/`except`
+around the request leaves `_ingest` and its `conn.commit()` uncovered, and since nothing restarts
+the thread, one `database is locked` from a commit landing under a long job write would have ended
+scrobbling for the life of the container, silently, with `/dev/scrobble` still showing a stale
+last-poll and no error. `_loop` therefore catches around `poll()` too and records the failure on a
+fresh connection (the one that raised may be the problem), swallowing *that* write's own failures
+the way `api_log.record` does.
+
+A missing or scope-invalid
 token (`get_spotify_client()` returning `None`) is one of these: it logs and continues rather than
 killing the thread, so a server that has been redeployed but not yet re-consented (§8) recovers on
 its own the moment consent lands.
@@ -264,8 +273,18 @@ Per §1.4 the response is a bare 50-deep window, so:
 > between them were lost.
 
 Set `scrobble_poll.gap_warning = 1`. It is a **warning and a prompt to re-import**, not an error —
-the roadmap's "that is the design working, not failing". It is not raised on the first poll ever, or
-on the first poll after a pause, where there is no meaningful predecessor.
+the roadmap's "that is the design working, not failing". It is not raised on the first poll ever,
+where there is no predecessor to compare against.
+
+**It *is* raised on the first poll after a pause**, and this clause originally said the opposite —
+corrected in verification, 2026-08-24. A pause longer than one window genuinely loses plays, so the
+warning there is true, and it is exactly the prompt to re-import that §4.6 exists to give.
+Suppressing it would mean introducing state (a resumed-at marker) for no purpose but muting a
+correct signal, which is the opposite of how everything else here is derived.
+
+The comparison point is the newest stored **scrobble**, not the newest `play`: with a 94k-row export
+in the database the latter is an export row, and comparing against it would fire on the first poll
+after every import.
 
 ### 4.7 It is not a job
 
@@ -376,6 +395,25 @@ no filter and no touching of `scoring.py`'s hot query.
 It also makes §7's page simpler. With superseded scrobbles gone there is no overlap band: the cutover
 is exactly `MAX(ts) WHERE source = 'export'`, and everything after it is a scrobble.
 
+### 6.1 The delete is not enough on its own — the next poll undoes it
+
+Found in verification, 2026-08-24, against the real library. Deleting a scrobble destroys the
+`row_hash` that `INSERT OR IGNORE` would have deduped against, and the 50-deep window goes on
+serving those same items for days. An import cut 50 stored scrobbles to 23; the next poll, 57
+minutes later, restored all 27 — leaving **26 plays present as both an export row and a scrobble
+row**, with `Lisztomania` credited 241.6s by the scrobble against the export's true 3.6s. That is
+precisely the double-count, and precisely the invented `ms_played` beside the true one, that §6
+exists to prevent; the delete alone buys it only until the next poll.
+
+So `_ingest` **skips the `play` insert** for any item whose truncated `ts` is `<=`
+`MAX(ts) FROM play WHERE source = 'export'`. The track upsert still runs — the export supersedes
+the *play*, not what Symr knows about the track.
+
+Derived, not checkpointed, like everything else here: "the export is authoritative through here" is
+just its newest play, so there is no cutoff to store and none to go stale. It adds no new risk
+beyond the one the next paragraph already accepts — a uri inside an export's internal gap is now
+skipped rather than deleted, which is the same outcome by a cheaper route.
+
 **Accepted risk, stated rather than discovered later:** the predicate uses the import's `range_end`,
 and a *range* is not the same as *coverage*. An export with an internal gap would delete scrobbles it
 does not actually replace. Q §7.2's nightly backups with 30-day retention are the recovery path.
@@ -394,8 +432,24 @@ logic lives in the module that owns its data and the route is a 404-free
 `render_template(..., **data)`.
 
 **Status** — enabled or paused; the interval; last poll (when, items read, rows inserted, error,
-`gap_warning`); approximate next poll; total `source='scrobble'` rows; count of polls with
+`gap_warning`); the next poll (below); total `source='scrobble'` rows; count of polls with
 `gap_warning` set.
+
+**The next poll is exact, and read off the thread.** Corrected in verification, 2026-08-24: it was
+derived as `last_poll.started_at + one interval` and rendered through the relative-time formatter,
+which was wrong twice over. The interval is a fixed `time.sleep`, so the wake-up is known *to the
+second* — "~in 2 hours" made a known quantity look like a guess. And the derivation was not the
+thread's schedule at all: a manual **Poll now** writes a `scrobble_poll` row without touching the
+sleep, so after any manual poll the page named a time nothing intended to keep, and on the laptop —
+where §4.1 guarantees no thread ever runs — it was pure invention.
+
+So `_loop` records `_next_wake_at` before each sleep, and `index_data` reports that. It is
+in-process module state like `jobs._active` and the `JobStatus` singletons, which Q §6.5's
+single-process constraint is what makes readable from a request thread. Three states, and the page
+renders each differently: **no thread in this process** (say so — the laptop's permanent case),
+**scheduled** (the exact clock time), and **scheduled but paused** (the wake-up will skip). Rendered
+through a new `datetime_exact_span` macro and `format.js`'s `formatExactTime`, the exact-time
+counterpart to the relative pair beside them.
 
 **Controls** — `POST /api/scrobble/poll` (Poll now) and `POST /api/scrobble/toggle` (Pause/Resume).
 Both return JSON and update the page in place via `static/js/scrobble.js`, no reload.

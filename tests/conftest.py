@@ -277,14 +277,20 @@ def _reset_module_state():
     """Returns every module-level global to its start-of-process value.
 
     Wiping the database is not enough on its own: this project keeps real
-    state outside it -- the job slot, four JobStatus singletons, and seven
-    scoring globals, one of which (`_checker_conn`) is an *open handle* to the
-    database file. Left alone, that handle would survive the wipe and keep
-    reading the unlinked inode, so the backstop would compare the new
-    database against the old one's data_version and quietly do nothing.
+    state outside it -- the job slot, four JobStatus singletons, seven
+    scoring globals (one of which, `_checker_conn`, is an *open handle* to the
+    database file) and the scrobble poller's next-wake time. Left alone, that
+    handle would survive the wipe and keep reading the unlinked inode, so the
+    backstop would compare the new database against the old one's
+    data_version and quietly do nothing.
     """
     jobs._active = None
     jobs._stop_requested = False
+
+    # scrobbling-R.md §7: deliberately in-process rather than in the DB, so
+    # the wipe above does not touch it. A test that sets it would otherwise
+    # leave the next test's /dev/scrobble claiming a poller is scheduled.
+    scrobble._next_wake_at = None
 
     for status in _JOB_STATUSES:
         status.reset()

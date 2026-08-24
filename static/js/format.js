@@ -45,10 +45,40 @@ function makeDateSpan(isoValue) {
   return span;
 }
 
+// The exact clock time, in the viewer's own timezone. For the handful of
+// values where "in 2 hours" is the wrong shape of answer -- a fixed schedule
+// someone wants to check against a clock, rather than a past event whose
+// distance is the interesting part.
+function formatExactTime(isoString) {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  if (isNaN(date)) return isoString;
+  return date.toLocaleString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    day: "numeric",
+    month: "short",
+  });
+}
+
+// The exact-time counterpart to makeDateSpan, for text built in JS.
+function makeExactDateSpan(isoValue) {
+  const span = document.createElement("span");
+  span.dataset.datetimeExact = isoValue;
+  span.title = isoValue;
+  span.textContent = formatExactTime(isoValue);
+  return span;
+}
+
 function applyRelativeTimes(root = document) {
   root.querySelectorAll("[data-datetime]").forEach((el) => {
     const iso = el.dataset.datetime;
     el.textContent = formatRelativeTime(iso);
+    if (iso) el.title = iso;
+  });
+  root.querySelectorAll("[data-datetime-exact]").forEach((el) => {
+    const iso = el.dataset.datetimeExact;
+    el.textContent = formatExactTime(iso);
     if (iso) el.title = iso;
   });
 }
