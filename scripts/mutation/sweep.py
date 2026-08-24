@@ -117,10 +117,19 @@ def build_workers(work, n):
     return proto
 
 
-def run_mutant(worker_dir, path, mutant, timeout=TIMEOUT, attempts=2):
-    """Apply, run the suite, restore. Returns (status, rc)."""
+def run_mutant(worker_dir, path, mutant, proto=None, timeout=TIMEOUT, attempts=2):
+    """Apply, run the suite, restore. Returns (status, rc).
+
+    Restoring copies the file back **from the pristine proto tree** rather than
+    from a string read at entry. Reading the "original" off the worker assumes
+    nothing else has touched it, and when that assumption broke -- two jobs
+    overlapping in one directory -- the restore wrote a mutated file back as
+    the original and welded it into the copy for every later mutant, turning
+    the whole run's kill rate into a measurement of a red baseline.
+    """
     target = os.path.join(worker_dir, path)
-    with open(target) as fh:
+    source = os.path.join(proto, path) if proto else target
+    with open(source) as fh:
         original = fh.read()
     stat = os.stat(target)
     lines = original.splitlines(keepends=True)
@@ -191,6 +200,28 @@ def summarise(results, targets):
     print("\n==== TOTALS ====", Counter(r["status"] for r in results))
 
 
+def baseline_check(worker_dir):
+    """The suite must be GREEN in an unmutated worker copy before anything runs.
+
+    Without this the tool's worst failure is silent: if the suite is red in the
+    copy for any reason -- a stale mutant welded in by a bug, a file the copy
+    excludes but a test needs -- then *every* mutant's run fails, every failure
+    reads as a kill, and the sweep reports a near-perfect kill rate that is
+    really a measurement of the broken baseline. That is the one wrong answer
+    nobody would question, so it is worth 12 seconds to rule out.
+    """
+    p = subprocess.run(
+        [PY, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:randomly"],
+        cwd=worker_dir, capture_output=True, text=True, env=_child_env(),
+    )
+    if p.returncode != 0:
+        tail = "\n".join((p.stdout + p.stderr).strip().splitlines()[-15:])
+        raise SystemExit(
+            f"BASELINE IS RED in {worker_dir} -- refusing to run.\n"
+            f"Every mutant would read as 'caught'.\n\n{tail}")
+    print("baseline: GREEN", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--work", default=os.path.join(
@@ -221,16 +252,20 @@ def main():
     # mutated source file in that worker, and inheriting it would mutate every
     # subsequent mutant in the same copy on top of it.
     proto = build_workers(work, args.workers)
+    baseline_check(proto)
 
-    jobs, skipped = [], 0
+    buckets = [[] for _ in range(args.workers)]
+    queued, skipped = 0, 0
     for path in targets:
         _, _, ms = generate.generate(os.path.join(proto, path))
         for m in ms:
             if (path, m["line"], m["op"], m["col"], m["before"]) in done:
                 skipped += 1
                 continue
-            jobs.append((len(jobs) % args.workers, path, m))
-    total = len(jobs) + skipped
+            buckets[queued % args.workers].append((path, m))
+            queued += 1
+    jobs = [j for b in buckets for j in b]
+    total = queued + skipped
     print(f"{total} mutants across {len(targets)} modules, "
           f"{args.workers} workers"
           + (f" -- {skipped} already done, {len(jobs)} to run" if skipped else ""),
@@ -238,31 +273,43 @@ def main():
 
     lock = threading.Lock()
     fh = open(out_path, "a" if done else "w")
+    results, counter = list(done.values()), [0]
 
-    def run_one(job):
-        wid, path, m = job
-        status, rc = run_mutant(os.path.join(work, f"w{wid}"), path, m)
-        r = {"file": path, "status": status, "rc": rc,
-             **{k: m[k] for k in ("op", "pass", "line", "col", "before", "after")}}
-        with lock:                      # one line per mutant, on disk, now
+    def record(r):
+        with lock:
             fh.write(json.dumps(r) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
-        return r
+            results.append(r)
+            counter[0] += 1
+            n = counter[0]
+            if r["status"] in ("SURVIVED", "crashed"):
+                print(f"  {r['status']} {r['file']}:{r['line']} "
+                      f"[{r['op']}]  {r['before']}", flush=True)
+            if n % 25 == 0:
+                print(f"  ... {n + skipped}/{total}", flush=True)
 
-    results, count = list(done.values()), 0
+    def run_bucket(wid):
+        """One worker directory, one thread, strictly sequential.
+
+        Assigning jobs round-robin and mapping them across a pool does **not**
+        keep one directory to one thread: the pool hands whichever thread is
+        free the next job, so two jobs for the same copy overlap as soon as
+        mutants start taking unequal time. Owning the queue is what makes the
+        apply/run/restore cycle in that directory atomic.
+        """
+        worker_dir = os.path.join(work, f"w{wid}")
+        for path, m in buckets[wid]:
+            status, rc = run_mutant(worker_dir, path, m, proto=proto)
+            record({"file": path, "status": status, "rc": rc,
+                    **{k: m[k] for k in
+                       ("op", "pass", "line", "col", "before", "after")}})
+
     try:
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
-            for r in ex.map(run_one, jobs):
-                results.append(r)
-                count += 1
-                if r["status"] in ("SURVIVED", "crashed"):
-                    print(f"  {r['status']} {r['file']}:{r['line']} "
-                          f"[{r['op']}]  {r['before']}", flush=True)
-                if count % 25 == 0:
-                    print(f"  ... {count + skipped}/{total}", flush=True)
+            list(ex.map(run_bucket, range(args.workers)))
     except KeyboardInterrupt:
-        print(f"\ninterrupted -- {count + skipped}/{total} recorded in {out_path}")
+        print(f"\ninterrupted -- {counter[0] + skipped}/{total} recorded in {out_path}")
         print(f"resume with:  --work {work} --resume")
         return
     finally:
