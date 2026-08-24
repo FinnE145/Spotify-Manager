@@ -103,6 +103,16 @@ region the bounded run's operator set could not reach at all. Spec §0 called SQ
 `db.py` is the sharpest instance: 18 survivors, **17 of them SQL**. Its Python
 half is almost perfectly covered and its queries are almost entirely unasserted.
 
+### 2.3 What the totals do and do not say
+
+The bounded run's 97.8% was never a tree-wide baseline — it measured the four
+modules P had *just finished* working on. 68% is the first honest reading of
+everything else, and the two numbers should not be subtracted from one another.
+
+What can be compared fairly is `scrobble.py`: **76.0%**, 18 survivors. That is
+step R, the newest module in the tree, written with every P-era convention in
+force and shipped with a 1092-line test file of its own. See §5.
+
 ### 2.4 The corrected re-run — 74.1%, and why it does not replace §2
 
 Persisting the survivor list surfaced a **third generator bug** (after §1.1's
@@ -149,16 +159,6 @@ questions, and subtracting one from the other means nothing.
 no test of ours touched it, so that is the f-string SQL pass finding real
 survivors the original run could not generate. Same for `api_log.py` and
 `canonical_autogroup.py`'s new SQL survivors.
-
-### 2.3 What the totals do and do not say
-
-The bounded run's 97.8% was never a tree-wide baseline — it measured the four
-modules P had *just finished* working on. 68% is the first honest reading of
-everything else, and the two numbers should not be subtracted from one another.
-
-What can be compared fairly is `scrobble.py`: **76.0%**, 18 survivors. That is
-step R, the newest module in the tree, written with every P-era convention in
-force and shipped with a 1092-line test file of its own. See §5.
 
 ---
 
