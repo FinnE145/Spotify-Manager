@@ -54,13 +54,36 @@ def find_mutant(worker_dir, module, line, op, col=None):
 
 
 def _run_suite(cwd, extra=()):
-    p = subprocess.run(
+    """Run the suite, bounded by the sweep's own timeout.
+
+    A mutant that *hangs* the suite (one that starts a server on import, say)
+    would otherwise wedge the proof indefinitely. It is not a kill either way,
+    and the caller needs to hear that promptly rather than wait it out.
+    """
+    try:
+        p = subprocess.run(
         [PY, "-m", "pytest", "-q", "--no-header", "-p", "no:randomly",
          "--tb=no", "-rf", *extra],
-        cwd=cwd, capture_output=True, text=True, timeout=1800,
+        cwd=cwd, capture_output=True, text=True, timeout=sweep.TIMEOUT,
         env=sweep._child_env(),
     )
-    return p.returncode, p.stdout + p.stderr
+        return p.returncode, p.stdout + p.stderr
+    except subprocess.TimeoutExpired:
+        return None, "TIMEOUT: the suite did not finish under this mutant"
+
+
+def _names(failed_id, wanted):
+    """Does `wanted` name the test `failed_id`?
+
+    Three forms, because a node id is not always what the caller has to hand:
+    the exact id; a suffix, so a bare `test_x` works; and a **prefix**, which
+    covers the two cases that bite -- a parametrized test, whose real id ends
+    in `[...]` brackets the caller cannot be expected to reproduce, and a whole
+    test file, which is the honest answer for a table-driven case.
+    """
+    return (failed_id == wanted
+            or failed_id.endswith(wanted)
+            or failed_id.startswith(wanted))
 
 
 def _failed(out):
@@ -95,10 +118,10 @@ def cmd_kill(args):
     finally:
         open(target, "w").write(original)
     failed = _failed(out)
-    killed = any(f == args.test or f.endswith(args.test) for f in failed)
+    killed = any(_names(f, args.test) for f in failed)
     print(f"2. suite with the mutant: {len(failed)} failing")
     for f in sorted(failed):
-        print(f"   {'>>' if (f == args.test or f.endswith(args.test)) else '  '} {f}")
+        print(f"   {'>>' if _names(f, args.test) else '  '} {f}")
 
     ok = clean_green and killed
     print(f"\nKILL PROOF: {'PASS' if ok else 'FAIL'} -- {args.test}")
