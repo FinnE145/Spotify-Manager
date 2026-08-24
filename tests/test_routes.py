@@ -547,6 +547,34 @@ def test_the_tenure_page_rejects_an_unwhitelisted_sort_instead_of_using_it(clien
     assert client.get("/dev/generations").status_code == 200
 
 
+def test_the_tenure_page_clamps_page_zero_and_a_missing_page_to_one(client, conn, monkeypatch):
+    # source: S_sweep.md §3.4 D -- app.py's
+    # `request.args.get("page", 1, type=int) or 1`, which carries two separate
+    # literals and needs both halves exercised. The trailing `or 1` only has
+    # an effect when `?page=` resolves to the falsy int 0; the `1` inside
+    # `get(...)` only has an effect when `page` is absent from the query
+    # string entirely. P2-010's rule in practice: a query-string variant that
+    # merely *responds* proves nothing, so this asserts the page the route
+    # actually computed.
+    import entities
+
+    # 1 row per page, so two groups are enough to need two pages -- rather
+    # than the 101 the real _TENURE_PAGE_SIZE would demand.
+    monkeypatch.setattr(entities, "_TENURE_PAGE_SIZE", 1)
+    builders.make_generation(conn, ordinal=1, playlist_id="gen-1")
+    g1 = builders.make_group(conn, ["t-a"])
+    g2 = builders.make_group(conn, ["t-b"])
+    builders.make_membership(conn, playlist_id="gen-1", track_id="t-a")
+    builders.make_membership(conn, playlist_id="gen-1", track_id="t-b")
+    # sanity: both groups tie on tenure length (one generation each), so the
+    # group_id tiebreak decides page order -- and g1 must sort first for the
+    # assertions below to mean what they say.
+    assert g1["version"] < g2["version"]
+
+    assert "Page 1 of 2" in client.get("/dev/generations/tenure?page=0").get_data(as_text=True)
+    assert "Page 1 of 2" in client.get("/dev/generations/tenure").get_data(as_text=True)
+
+
 # -- The entity pages' 404 branches -----------------------------------------
 #
 # Each is three lines and individually dull; together they are the difference

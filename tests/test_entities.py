@@ -104,6 +104,29 @@ def test_play_stats_very_stale_data_nulls_both_windows_but_not_total(conn):
     assert stats["total"] == 1
 
 
+def test_play_stats_null_month_and_week_display_as_zero_not_none(conn):
+    # source: S_sweep.md §3.4 D -- entities.py:65-66. `row["month"]` and
+    # `row["week"]` are NULL when the SUM(CASE ...) sees zero matching rows
+    # (SQLite's SUM over no rows is NULL, not 0), and `or 0` is what turns
+    # that into a real integer rather than leaving None where a genuine zero
+    # belongs. The mirror of the two staleness tests above: those assert
+    # `is None` for a window that predates the data, this asserts a real 0
+    # for a window that is current but empty, so neither answer can drift
+    # into the other's case.
+    #
+    # A target track with zero plays, alongside a recent play on a
+    # *different* track (so data_through stays recent and the staleness
+    # override at lines 67-70 does not also null the windows for its own
+    # reason), isolates exactly the `or 0` line.
+    builders.make_track(conn, "t-target")
+    builders.make_play(conn, track_id="t-other")  # days_ago(1) -- recent
+
+    stats = entities.play_stats(conn, ["t-target"])
+
+    assert stats["month"] == 0
+    assert stats["week"] == 0
+
+
 def test_play_stats_data_through_is_whole_table_not_scoped_to_track_ids(conn):
     # source: entity-pages-K.md §8 -- "data_through is MAX(play.ts) across
     # the whole play table." A play against a track *not* in track_ids must

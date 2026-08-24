@@ -139,15 +139,22 @@ instead of re-deriving it.
 
 ### 3.2 The three 0% modules — 14 survivors, and one real finding
 
-`spotify_client.py`, `config.py` and `serve.py` scored 0%. Twelve of the
+`spotify_client.py`, `config.py` and `serve.py` scored 0%. Eleven of the
 fourteen are **recorded, not fixed**: urllib3 retry tuning (`total=3`,
-`status=3`, the four entries of `status_forcelist`, `read=False`),
-`MAX_CONTENT_LENGTH = 150 * 1024 * 1024`, and `sys.exit(0)` in the SIGTERM
-handler. No behaviour hinges on the exact values, and the exit code needs a
-subprocess-level test of the container entrypoint that the suite has no shape
-for.
+`status=3`, the four entries of `status_forcelist`, `read=False`), and
+`MAX_CONTENT_LENGTH = 150 * 1024 * 1024` / `APP_DEBUG`'s comparison in
+`config.py`. No behaviour hinges on the exact values.
 
-Two are not tuning:
+**Three were fixed**, and the first triage pass got one of them wrong. This
+section originally counted `sys.exit(0)` in the SIGTERM handler among the
+recorded ones, on the reasoning that it "needs a subprocess-level test of the
+container entrypoint that the suite has no shape for". That was wrong: the
+handler is an ordinary function, and calling it with `jobs.drain` patched
+raises `SystemExit` whose `.code` is directly assertable. Both of
+`serve.py`'s survivors died to `tests/test_serve.py` (§4), taking the module
+from 0% to 100%.
+
+The other two are not tuning:
 
 - **`respect_retry_after_header=False` → `True` survives.** This is a
   documented, deliberate, correctness-critical setting: `CLAUDE.md` records
@@ -157,10 +164,12 @@ Two are not tuning:
   removed, and **nothing asserts it**. This is the sharpest single gap in the
   three modules — a load-bearing constant, named in the codebase map, with no
   test.
-- **`serve.py` is untested outright.** Both its mutants survive, including
-  `if __name__ == "__main__":` → `!=`, which under the mutation would run the
-  server body on *import*. Nothing imports it, so nothing notices. That is a
-  statement about the module's coverage, not about either line.
+- **`serve.py` was untested outright.** Both its mutants survived, including
+  `if __name__ == "__main__":` → `!=`, which under the mutation runs the
+  server body on *import*. Nothing imported it, so nothing noticed — a
+  statement about the module's coverage, not about either line. Fixed; and
+  that mutant turned out to shape the test, since a top-level `import serve`
+  would hang collection inside `waitress.serve()` rather than fail (§4).
 
 ### 3.3 The mechanical numeric classes — 129 survivors sorted
 
@@ -364,12 +373,25 @@ representative picks (`members[0]`, `sorted(members)[0]`) where `[1]` survives.
 
 ## 4. What was added
 
-**§3.4 is complete.** 47 tests total, each proven by §6's gate — the named
-test observed failing under its mutant, the suite green without it — and each
-killing with **exactly one** failing test (D's two combined-mutant tests kill
-two named mutants each, both confirmed). Groups A–E account for 45 of
-§3.3/§3.4's ~46 survivors (§3.2's 12 in the three 0% modules, §3.3's 26
-status codes, §3.4's 20 across D and E); 3 of E's are `recorded, not fixed`.
+**§3.4 is complete.** **39 new test cases**, taking the suite from 944 to 983.
+Each is proven by §6's gate — the named test observed failing under its
+mutant, the suite green without it — and each kills with **exactly one**
+failing test (D's two combined-mutant tests kill two named mutants each, both
+confirmed).
+
+**63 mutants are now accounted for**, across four disjoint sets:
+
+| set | mutants | fixed | equivalent | recorded |
+|---|---:|---:|---:|---:|
+| §3.2 — the three 0% modules | 14 | 3 | 0 | 11 |
+| §3.3 — status codes | 26 | 21 | 5 | 0 |
+| §3.4 D — `or` NULL defaults | 12 | 11 | 1 | 0 |
+| §3.4 E — counter initialisers | 11 | 8 | 0 | 3 |
+| **total** | **63** | **43** | **6** | **14** |
+
+The status-code row splits as 4 in the first batch, 12 in group A, 5 in group
+C, and group B's 5 equivalents. That leaves **244 of the original 307
+survivors untriaged** — see the end of this section.
 
 - **`tests/test_serve.py`** (4). `serve.py` goes 0% → 100%. The import is
   deliberately lazy, inside a helper that patches `waitress.serve` first: the
