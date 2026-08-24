@@ -136,9 +136,17 @@ def schema_span(src):
 
 
 def sql_string_ranges(src):
-    """{line: [(col_start, col_end), ...]} covered by SQL-bearing strings."""
+    """{line: [(col_start, col_end), ...]} covered by SQL-bearing strings.
+
+    A range stops at a `--` SQL comment. Without that clip the numeric operator
+    happily mutates the prose inside one -- the first sweep spent four
+    survivors on the digits in a comment reading "6,070 membership-less
+    round-tripped tracks", every one of them equivalent by construction. It is
+    the SQL-side counterpart of the Python pass masking `#`.
+    """
     out = {}
     excluded = schema_span(src)
+    lines = src.splitlines()
     for t in _tokens(src):
         if t.type != tokenize.STRING:
             continue
@@ -147,7 +155,12 @@ def sql_string_ranges(src):
         if excluded and excluded[0] <= t.start[0] <= excluded[1]:
             continue
         for ln, lo, hi in _spans_by_line(t):
-            out.setdefault(ln, []).append((lo, hi))
+            text = lines[ln - 1] if ln - 1 < len(lines) else ""
+            comment = text.find("--", lo)
+            if comment != -1 and comment < hi:
+                hi = comment
+            if hi > lo:
+                out.setdefault(ln, []).append((lo, hi))
     return out
 
 

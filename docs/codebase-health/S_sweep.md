@@ -117,8 +117,74 @@ force and shipped with a 1092-line test file of its own. See §5.
 
 ## 3. The survivors, and what each turned out to be
 
-*Triage in progress. Every survivor gets exactly one verdict and a reason
-(spec §5); this section is the committed ledger.*
+Triage runs mechanical-classes-first, to shrink 307 before anything is
+delegated. This section is the committed ledger; the classes below are settled,
+the remainder is not yet.
+
+### 3.1 Two classes are equivalent by construction — 15 survivors
+
+- **`EXISTS (SELECT 1 …)` → `SELECT 2`, 11 survivors.** The constant inside an
+  `EXISTS` subquery is meaningless in SQL; any value behaves identically. No
+  test can kill these and none should be written.
+- **Digits inside a SQL `--` comment, 4 survivors.** A generator defect, not a
+  gap: `sql_string_ranges` masked nothing inside an eligible string, so the
+  numeric operator mutated the prose in comments — four of them landed on
+  "6,070 membership-less round-tripped tracks". **Fixed**: SQL ranges now stop
+  at `--`, the mirror of the Python pass masking `#`. Scope drops 997 → 988 and
+  these nine mutants are no longer generated at all.
+
+The first class is worth recording rather than suppressing: `SELECT 1` is
+idiomatic, it will recur, and the next sweep should recognise it on sight
+instead of re-deriving it.
+
+### 3.2 The three 0% modules — 14 survivors, and one real finding
+
+`spotify_client.py`, `config.py` and `serve.py` scored 0%. Twelve of the
+fourteen are **recorded, not fixed**: urllib3 retry tuning (`total=3`,
+`status=3`, the four entries of `status_forcelist`, `read=False`),
+`MAX_CONTENT_LENGTH = 150 * 1024 * 1024`, and `sys.exit(0)` in the SIGTERM
+handler. No behaviour hinges on the exact values, and the exit code needs a
+subprocess-level test of the container entrypoint that the suite has no shape
+for.
+
+Two are not tuning:
+
+- **`respect_retry_after_header=False` → `True` survives.** This is a
+  documented, deliberate, correctness-critical setting: `CLAUDE.md` records
+  that it exists so a 429 raises immediately instead of blocking for an
+  hours-long app-quota `Retry-After`, with `snapshot._call()` handling the wait
+  itself. Flipping it reinstates exactly the hours-long block the design
+  removed, and **nothing asserts it**. This is the sharpest single gap in the
+  three modules — a load-bearing constant, named in the codebase map, with no
+  test.
+- **`serve.py` is untested outright.** Both its mutants survive, including
+  `if __name__ == "__main__":` → `!=`, which under the mutation would run the
+  server body on *import*. Nothing imports it, so nothing notices. That is a
+  statement about the module's coverage, not about either line.
+
+### 3.3 The mechanical numeric classes — 129 survivors sorted
+
+| class | n | verdict |
+|---|---:|---|
+| HTTP status codes in `abort()` / `api_error()` | 25 | gap — nothing asserts which code |
+| `EXISTS (SELECT 1 …)` | 11 | equivalent (§3.1) |
+| retry tuning constants | 8 | recorded, not fixed |
+| `or 1` / `or 0` NULL defaults | 6 | gap — narrow, bites only on NULL |
+| counter initialisers (`rows_read=0`, `pending=0`) | 4 | gap |
+| digits in SQL comments | 4 | equivalent, generator fixed (§3.1) |
+| percentage and display precision | 4 | mixed — needs eyes |
+| batch sizes (`range(0, len(ids), 500)`) | 2 | cosmetic |
+| remainder | 65 | not yet triaged |
+
+The 25 status codes are the **P2-010 shape the spec predicted for `app.py`**:
+`test_routes.py` sweeps every route for non-5xx, and a 400 mutated to a 401 is
+still non-5xx, so the sweep passes and the code goes unasserted.
+
+Visible in the untriaged remainder, and worth naming before it is lost:
+`_BACKFILL_GENERATION_COUNTS = (2, 7)` — `CLAUDE.md` says those two fixed
+buttons *are* the backfill's budget control, and neither value is asserted;
+`CASE WHEN MAX(is_album_artist) = 1` in a `db.VIEWS` definition; and several
+representative picks (`members[0]`, `sorted(members)[0]`) where `[1]` survives.
 
 ---
 
