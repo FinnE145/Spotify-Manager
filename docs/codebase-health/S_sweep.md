@@ -103,6 +103,53 @@ region the bounded run's operator set could not reach at all. Spec §0 called SQ
 `db.py` is the sharpest instance: 18 survivors, **17 of them SQL**. Its Python
 half is almost perfectly covered and its queries are almost entirely unasserted.
 
+### 2.4 The corrected re-run — 74.1%, and why it does not replace §2
+
+Persisting the survivor list surfaced a **third generator bug** (after §1.1's
+race and §3.1's SQL comments): Python 3.12's PEP 701 tokenizes an f-string as
+`FSTRING_START`/`FSTRING_MIDDLE`/`FSTRING_END` rather than one `STRING`, so
+both passes saw straight through to the literal text. The Python pass mutated
+*inside* f-strings (`f"<h1>Error {code}."` → `f"<=h1>..."`, 11 mutants, 6 of
+them sitting in the survivor list as junk) and the SQL pass **missed every
+f-string query in the tree** — ~49 lines across six modules, all the
+`IN ({placeholders})` builders. That is a hole in the measurement, not an
+imprecision: 34 SQL mutants had never been executed at all.
+
+Fixed, and the sweep re-run: **1018 mutants, 44 broken, 974 scored, 722 killed
+— 74.1%**, 252 survivors.
+
+| module | kill rate | Δ vs §2 |
+|---|---:|---|
+| `serve.py` | 100.0% | +100.0 |
+| `backfill.py` | 85.5% | +3.9 |
+| `generations.py` | 88.2% | −7.4 |
+| `db.py` | 81.7% | +6.0 |
+| `entities.py` | 81.6% | +6.6 |
+| `canonical_detect.py` | 78.3% | +2.0 |
+| `scrobble.py` | 76.0% | 0.0 |
+| `jobs.py` | 71.4% | 0.0 |
+| `app.py` | 69.5% | +16.0 |
+| `canonical_autogroup.py` | 68.4% | +5.9 |
+| `artists.py` | 68.0% | 0.0 |
+| `history_import.py` | 56.0% | +8.0 |
+| `api_log.py` | 50.0% | 0.0 |
+| `spotify_client.py` | 12.5% | +12.5 |
+| `config.py` | 0.0% | 0.0 |
+| `grouping.py` | 87.5% | 0.0 |
+| `normalize.py` | 100.0% | 0.0 |
+
+**§2 stays as the headline and this does not replace it.** The two numbers
+measure different trees: §2 is the pre-fix, pre-test measurement, and by the
+time this ran the suite had gained the 39 tests of §4. The rise is mostly
+those tests doing their job — `serve.py` 0→100, `app.py` +16.0 — mixed with
+the operator-set correction. Neither number is wrong; they answer different
+questions, and subtracting one from the other means nothing.
+
+`generations.py` moving **down** 7.4 points is the one figure worth reading:
+no test of ours touched it, so that is the f-string SQL pass finding real
+survivors the original run could not generate. Same for `api_log.py` and
+`canonical_autogroup.py`'s new SQL survivors.
+
 ### 2.3 What the totals do and do not say
 
 The bounded run's 97.8% was never a tree-wide baseline — it measured the four
