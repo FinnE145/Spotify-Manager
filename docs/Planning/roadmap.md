@@ -167,6 +167,8 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
       DONE
   ──► F/G ──► L (search)
+
+  ──► U (extras: songdoku)
 ```
 
 **P is three parts on one branch, not a normal step.** It is specced, but its entry point
@@ -215,9 +217,13 @@ budget against and O has nothing to display. Time spent on other steps is not ti
 blocked by; it is time the log is collecting.
 
 **T sits after S — placed after whichever of R/S is later, per Finn's call 2026-08-24, made
-when the first of its three items (the OAuth bug) surfaced during R's implementation.** No
+when the first of its four items (the OAuth bug) surfaced during R's implementation.** No
 technical dependency on either R or S; it's simply positioned past both rather than jumping the
 queue.
+
+**U sits at the very end, on its own branch, by decision, 2026-08-24.** No dependency on
+anything above — it's a toy feature, not library management, and Finn asked for it to sit last
+rather than be slotted in among the more load-bearing steps.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
@@ -1033,6 +1039,34 @@ or a half-remembered title still finds the track, and **ranked results** — acr
 artist you have 358 tracks by outranks a one-play song whose title happens to contain their
 name. Ranking is the part with real design in it, and it wants H's score to exist first, which
 is why this sits at the end rather than next to K.
+
+## U — Extras page: Songdoku
+
+**Not specced.** Own `/symr-plan` session. Placed last by decision, 2026-08-24 — it isn't part of
+the listening-data chain and has no dependency on anything above it, and it's the one step here
+that's a toy rather than a library-management tool.
+
+A new **Extras** page (alongside Home/Canvas/Audit/Cover Library/Folder Structure/Analytics in
+the navbar), holding at minimum one daily grid game, **Songdoku** — the same shape as
+"Puckdoku"/Immaculate-Grid-style sports trivia grids, where rows and columns are each a
+criterion and every cell is the intersection: name something that satisfies both. Here, a song
+rather than a player.
+
+**Candidate criteria, Finn's list to start from:**
+- Two different songs, by two different artists, that happen to share the exact same title — a
+  "title collision." Possibly cheap to source: `canonical_detect`'s candidate-grouping already
+  surfaces title-matching pairs across artists as review candidates, and a `reviewed_pair` marked
+  "not even the same song" *despite* a title match is close to this criterion already labelled by
+  hand — worth checking before building a second detector.
+- Release year (`album.release_date` / `release_year`).
+- Stats from Symr's own data — score (H), play counts, generation/tenure membership, ATG status,
+  anything already materialized rather than fetched fresh.
+- Featured-artist credits (`track_artist_role = 'featured'`) — "a song featuring X."
+
+Wide open at this stage: daily-vs-anytime, how a guess is checked (exact track match? any track
+satisfying both criteria?), scoring/sharing, and how criteria get picked so the same grid isn't
+trivially easy or impossible on a library this size. All Extras-page and game-design questions
+for the eventual `/symr-plan` session, not decided here.
 
 ---
 
