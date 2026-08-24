@@ -226,17 +226,35 @@ share a status.
 and the test asserts nothing. 949 pins `_BACKFILL_GENERATION_COUNTS = (2, 7)`,
 which `CLAUDE.md` says *is* the backfill's budget control; send a third value.
 
-#### B. The `not_authenticated` 401s — 5
+#### B. The `not_authenticated` 401s — 5, and the plan below was wrong
 
 `app.py` lines **769** (`/api/snapshot/pull`), **777** (`/refresh`), **785**
 (`/backfill`), **858** (`/api/roundtrip/reconcile`), **945**
 (`/api/backfill/start`).
 
-`conftest.py` bypasses auth for every route test, so these need
-`monkeypatch.setattr(app_module, "get_spotify_client", lambda: None)` —
-the pattern already in `tests/test_api_errors.py`. Assert the 401 **and** the
-`not_authenticated` error key; five routes share one code, so the key is what
-tells them apart.
+This section originally read the same as A: monkeypatch `get_spotify_client`
+to `None`, hit the route, assert 401. **That plan was wrong, and it is
+recorded because it would have produced a green, worthless test.**
+
+`require_login` (`app.py`'s first-registered `before_request` hook) already
+returns `api_error("not_authenticated", 401)` for **any** unauthenticated
+`/api/*` request, before the view function runs at all — none of these five
+routes is in `_PUBLIC_ENDPOINTS`. So the in-view
+`if get_spotify_client() is None: return api_error(...)` block on each of
+these five lines is **dead code**, unreachable through any HTTP request in
+the suite or in production, because the hook always answers first.
+
+Verified rather than assumed: the obvious test (monkeypatch to `None`, POST
+the route, assert 401) passes against the real code — and run through
+`verify.py kill` against the 769 mutant, reports **0 failing under the
+mutant**. The test cannot distinguish 401 from 402 because it never observes
+the mutated line; the hook's own identical 401 is what the response actually
+carries.
+
+**Verdict: equivalent**, not gap. No test can kill these five, and none
+should be written to try. Worth flagging to Finn as a possible cleanup — the
+five blocks are redundant with the hook and could be deleted — but that is a
+behavior-shape decision, out of scope for a testing pass.
 
 #### C. `abort(400, description=str(e))` wrappers — 5
 
@@ -286,9 +304,9 @@ representative picks (`members[0]`, `sorted(members)[0]`) where `[1]` survives.
 
 ## 4. What was added
 
-Twelve tests so far, each proven by §6's gate — the named test observed failing
-under its mutant, the suite green without it — and each killing with **exactly
-one** failing test.
+31 tests so far (§3.4 A + C fully closed), each proven by §6's gate — the
+named test observed failing under its mutant, the suite green without it —
+and each killing with **exactly one** failing test.
 
 - **`tests/test_serve.py`** (4). `serve.py` goes 0% → 100%. The import is
   deliberately lazy, inside a helper that patches `waitress.serve` first: the
@@ -298,13 +316,28 @@ one** failing test.
 - **`tests/test_spotify_client.py`** (2). `respect_retry_after_header=False`,
   the sharpest single gap in the sweep. The tuning constants stay unasserted
   per §3.2.
-- **`tests/test_error_status_codes.py`** (5 cases). Five of the 26
-  status-code survivors; the remaining 22 are §3.4 A–C.
+- **`tests/test_error_status_codes.py`** (25). §3.4 group A (12) and group C
+  (5) both fully closed, on top of the 5 already there — 22 of the 26
+  status-code survivors. Group B is *not* among them: see below.
+
+**Group B (5 `not_authenticated` 401s) turned out not to need tests at all.**
+§3.4's plan for them was wrong — building the obvious test and running it
+through `verify.py kill` showed 0 failing under the mutant, because
+`require_login`'s `before_request` hook answers every unauthenticated
+`/api/*` request before the view body runs, making the in-view check dead
+code. Verdict corrected to **equivalent** in §3.3 B. This is the sweep's
+second finding of the "the ledger's own plan was wrong" shape (the first
+being §3.1's SQL-comment generator bug), and it is why §6's gate is framed as
+mandatory rather than a formality — it caught a plan that read perfectly
+reasonably and would have shipped a green test asserting nothing.
 
 `test_routes.py`'s non-5xx sweep was **not** widened to assert exact codes.
 Deriving each case's expected status by running the suite is characterization,
 not specification, and `codebase-health-P.md` §2 is explicit that the
 distinction is the point. The error paths are supplemented instead.
+
+Remaining from §3.4: group D (8 `or`-default lines) and group E (11 counter
+initialisers) are not yet written.
 
 ---
 
