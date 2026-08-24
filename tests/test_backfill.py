@@ -174,6 +174,30 @@ def test_a_null_total_tracks_album_is_permanently_settled(conn):
     assert settled(conn, "al-real") is False
 
 
+def test_a_null_total_tracks_album_with_nothing_owned_is_settled_at_the_boundary(conn):
+    # source: S_sweep.md §3.4 D -- the sibling test above always has one
+    # owned track, so `missing` lands at -1 (real, NULL treated as 0) or 0
+    # (mutant, NULL treated as 1) -- both <= 0, and the two literals never
+    # disagree (P2-005's shape). With nothing owned at all, missing is
+    # exactly 0 (real, settled) or exactly 1 (mutant, not settled) -- the
+    # boundary `missing <= 0` actually turns on.
+    builders.make_album(conn, album_id="al-null-empty", total_tracks=None)
+
+    assert settled(conn, "al-null-empty") is True
+
+
+def test_an_album_with_no_owned_tracks_at_all_is_not_settled(conn):
+    # source: S_sweep.md §3.4 D -- `owned.get(row["album_id"], 0)`'s default
+    # only fires when the album has zero owned tracks, since `owned` is built
+    # by grouping the `track` table and an album with no tracks never becomes
+    # a key. total_tracks=1 makes the default's value the entire answer: real
+    # (default 0) gives missing=1, not settled; the `0` -> `1` mutant gives
+    # missing=0, wrongly settled.
+    builders.make_album(conn, album_id="al-unowned", total_tracks=1)
+
+    assert settled(conn, "al-unowned") is False
+
+
 # -- Handled generations (§4.2) ---------------------------------------------
 
 

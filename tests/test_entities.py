@@ -385,6 +385,41 @@ def test_fetch_artist_image_missing_width_treated_as_zero(conn, fake_spotify):
     assert row["image_url"] == "https://img/50"
 
 
+def test_fetch_artist_image_missing_width_ties_a_width_of_one_and_loses_the_tiebreak(
+    conn, fake_spotify
+):
+    # source: S_sweep.md §3.4 D -- the sibling test above doesn't kill the
+    # `or 0` -> `or 1` mutant: its competing real width is 50, which beats
+    # both 0 and 1 outright, so the mutant is unobservable through it (a
+    # fixture that agrees with the rule the implementation could fall back
+    # on, P2-005's shape). An earlier attempt at this test used a competing
+    # width of exactly 0 -- also wrong, since 0 is just as falsy as the
+    # missing width and both values shift together under `or`, so nothing
+    # ever disagrees.
+    #
+    # The missing-width image is listed *first*. Real code: its key is
+    # (None or 0) = 0, strictly below the width=1 image's key of 1, so width=1
+    # wins outright regardless of list order. Under the mutant, the missing
+    # width's key becomes (None or 1) = 1 -- tying the explicit width=1 image
+    # -- and Python's max() documents that a tie keeps the first-encountered
+    # maximal element, which is now the missing-width image.
+    builders.make_artist(conn, "ar-1")
+    fake_spotify.add_artist(
+        {
+            "id": "ar-1",
+            "images": [
+                {"url": "https://img/no-width"},
+                {"url": "https://img/width-one", "width": 1},
+            ],
+        }
+    )
+
+    entities.fetch_artist_image(conn, "ar-1")
+
+    row = conn.execute("SELECT image_url FROM artist WHERE artist_id = ?", ("ar-1",)).fetchone()
+    assert row["image_url"] == "https://img/width-one"
+
+
 def test_fetch_artist_image_no_images_leaves_url_null_but_stamps(conn, fake_spotify):
     # source: entity-pages-K.md, via P1-016 -- a fetch that returns no usable
     # image still stamps `detail_pulled_at`, or the page retries forever.
@@ -641,6 +676,91 @@ def test_album_detail_appends_owned_tracks_the_stored_tracklist_does_not_contain
     assert data["known_count"] == 2
 
 
+def _album_with_unlisted_owned_tracks(conn, album_id, **tracks):
+    """An album whose fetched tracklist names none of `tracks`, so every one
+    of them lands in `appended` rather than `rows` -- the only way to
+    exercise `appended.sort`'s key at all (S_sweep.md §3.4 D)."""
+    album = builders.make_album(
+        conn,
+        album_id,
+        tracklist_json='[{"id":"t-other","name":"Other","artists":[],'
+        '"track_number":1,"disc_number":1}]',
+        tracklist_pulled_at="2026-01-01T00:00:00Z",
+    )
+    for track_id, overrides in tracks.items():
+        builders.make_track(conn, track_id, album_id=album, **overrides)
+    conn.commit()
+    return album
+
+
+def test_album_detail_appended_a_missing_disc_number_sorts_as_disc_one(conn):
+    # source: S_sweep.md §3.4 D -- appended.sort's own `disc_number or 1`,
+    # same construction as rows.sort's version above but through the
+    # owned-tracks-not-in-the-tracklist path, which is the only way
+    # `appended` is ever populated.
+    album = _album_with_unlisted_owned_tracks(
+        conn, "al-appended-disc",
+        t_e={"disc_number": None, "track_number": 1},
+        t_f={"disc_number": 1, "track_number": 2},
+    )
+
+    data = entities.album_detail(conn, album)
+
+    assert [r["track_id"] for r in data["appended"]] == ["t_e", "t_f"]
+
+
+def test_album_detail_appended_disc_and_instead_of_or_crashes_on_a_null_disc(conn):
+    # source: S_sweep.md §3.4 D -- the `or` -> `and` mutant on
+    # `disc_number or 1`. `None and 1` evaluates to `None` (short-circuit
+    # keeps the falsy left operand as-is, unlike `or`, which would substitute
+    # the right operand), so a None-disc row's sort key keeps a bare `None`
+    # in its first slot. Sorting it against another row whose disc slot is a
+    # real int then compares None to an int, which Python 3 refuses --
+    # exactly the TypeError this line exists to avoid, so a fixture with one
+    # of each is proof enough without inspecting order at all.
+    album = _album_with_unlisted_owned_tracks(
+        conn, "al-appended-disc-crash",
+        t_m={"disc_number": None, "track_number": 5},
+        t_n={"disc_number": 1, "track_number": 1},
+    )
+
+    data = entities.album_detail(conn, album)
+
+    assert [r["track_id"] for r in data["appended"]] == ["t_n", "t_m"]
+
+
+def test_album_detail_appended_a_missing_track_number_sorts_as_track_zero(conn):
+    # source: S_sweep.md §3.4 D -- covers two survivors. Both tracks share
+    # disc 1; the "none" track has no track_number, the "explicit" one is 1
+    # (deliberately not 0 -- a competing 0 is *also* falsy, so it would shift
+    # under the same `or` mutation as the None row and never actually
+    # disagree with it, which is exactly the P2-005 shape: a fixture that
+    # doesn't disagree with the rule the implementation could fall back on).
+    #
+    # Real code strictly orders them: (1, 0) < (1, 1), so "none" sorts first
+    # regardless of anything else. Under `track_number or 0` -> `or 1`, both
+    # keys become (1, 1) -- a genuine tie, and `_owned_rows`'s scan (no
+    # ORDER BY in its SQL) breaks ties by track_id, not by creation order, as
+    # confirmed empirically; the ids below are deliberately alphabetical in
+    # the *opposite* direction from the real-code result, so the tie's
+    # resolution is observably different from the forced real order rather
+    # than accidentally matching it.
+    #
+    # Under `or 0` -> `and 0`, the none row's key becomes (1, None)
+    # (short-circuit keeps the falsy None rather than substituting 0)
+    # against the explicit row's (1, 0) -- disc ties at 1, forcing a
+    # None-vs-int comparison in the second slot, which raises TypeError.
+    album = _album_with_unlisted_owned_tracks(
+        conn, "al-appended-track",
+        t_a_explicit={"disc_number": 1, "track_number": 1},
+        t_z_none={"disc_number": 1, "track_number": None},
+    )
+
+    data = entities.album_detail(conn, album)
+
+    assert [r["track_id"] for r in data["appended"]] == ["t_z_none", "t_a_explicit"]
+
+
 def test_album_detail_orders_the_tracklist_by_disc_then_track_number(conn):
     # source: characterization -- app.py's album_page sorted on
     # (disc_number or 1, track_number or 0) and the sort moved verbatim.
@@ -663,6 +783,55 @@ def test_album_detail_orders_the_tracklist_by_disc_then_track_number(conn):
     data = entities.album_detail(conn, album)
 
     assert [r["track_id"] for r in data["rows"]] == ["d1t1", "d1t2", "d2t1"]
+
+
+def test_album_detail_a_missing_disc_number_sorts_as_disc_one_not_disc_two(conn):
+    # source: S_sweep.md §3.4 D -- the sibling test above never gives the
+    # sort a None disc_number, so it can't tell `or 1` from `or 2`. Track A
+    # has no disc_number at all; track B is explicitly disc 1 with a later
+    # track_number. Real: A's key is (1, 1), B's is (1, 2) -- tied on disc,
+    # A wins on track_number, so A comes first. Under `or 1` -> `or 2`, A's
+    # key becomes (2, 1); B's disc (1) now beats it outright regardless of
+    # track_number, so B comes first instead -- a clean, order-independent
+    # flip that doesn't rely on sort stability.
+    album = builders.make_album(
+        conn,
+        "al-disc-default",
+        tracklist_json=(
+            '[{"id":"t-a","name":"A","artists":[],"track_number":1,"disc_number":null},'
+            '{"id":"t-b","name":"B","artists":[],"track_number":2,"disc_number":1}]'
+        ),
+        tracklist_pulled_at="2026-01-01T00:00:00Z",
+    )
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+
+    assert [r["track_id"] for r in data["rows"]] == ["t-a", "t-b"]
+
+
+def test_album_detail_a_missing_track_number_sorts_as_track_zero_not_track_one(conn):
+    # source: S_sweep.md §3.4 D -- same shape for `track_number or 0`. Both
+    # tracks share disc 1; C has no track_number, D is explicitly 1. Real:
+    # C's key is (1, 0), strictly less than D's (1, 1), so C sorts first
+    # regardless of the source list's own order (unlike the tie the mutant
+    # produces below). Source order is deliberately [D, C] -- under `or 0`
+    # -> `or 1`, C's key becomes (1, 1), tying D's, and Python's stable sort
+    # then preserves that source order, putting D first instead.
+    album = builders.make_album(
+        conn,
+        "al-track-default",
+        tracklist_json=(
+            '[{"id":"t-d","name":"D","artists":[],"track_number":1,"disc_number":1},'
+            '{"id":"t-c","name":"C","artists":[],"track_number":null,"disc_number":1}]'
+        ),
+        tracklist_pulled_at="2026-01-01T00:00:00Z",
+    )
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+
+    assert [r["track_id"] for r in data["rows"]] == ["t-c", "t-d"]
 
 
 def test_album_detail_falls_back_to_owned_tracks_when_no_tracklist_is_stored(conn):

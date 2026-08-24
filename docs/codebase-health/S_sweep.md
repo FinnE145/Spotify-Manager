@@ -266,21 +266,54 @@ produces a test that hits a different branch and asserts nothing. Assert the
 400 and that the raised message reaches the body: the mutation being killed is
 the *code*, but a test that never exercises the wrapper kills nothing.
 
-#### D. `or` NULL defaults — 8 lines
+#### D. `or` NULL defaults — 8 lines, closed
 
 `app.py:706`; `entities.py:65`, `66`, `191`, `502`, `510`; `backfill.py:77`,
-`133`.
+`133`. 12 mutants total (some lines carry more than one) — 11 fixed, 1
+equivalent.
 
-**This group has one trap and it will eat a careless test.** Each default
-bites *only when the column is NULL* — a fixture that always stores a real
-`disc_number` passes against an implementation with no default at all. Use
-`builders.py`'s `UNSET` sentinel, which exists for exactly this: `None` means a
-SQL NULL, not "give me the default".
+**This group had one predicted trap, and a second one the plan didn't
+predict, and the second one bit twice before the fix stuck.**
 
-`entities.py:191` (`max(images, key=lambda im: im.get("width") or 0)`) should be
-**checked for equivalence before a test is written** — with a single image, or
-with all widths present, `or 1` and `or 0` select the same image, and the
-honest verdict may be `equivalent`.
+The predicted trap: a fixture that always stores a real `disc_number` passes
+against an implementation with no default at all, since the default only
+bites when the column is NULL. Real, and avoided throughout by giving the
+None-valued row an explicit, non-degenerate competitor.
+
+**The trap the plan missed: a competing value that is itself falsy is
+just as blind to the mutation as no competitor at all.** `x or 0` and
+`x or 1` only disagree when `x` is falsy — so a fixture built to "disagree
+with the rule" by pairing a `None` row against a `0` row doesn't disagree
+with anything: both values are falsy, both get the *same* substituted
+default under the mutant, and the two rows shift together with their
+relative order unchanged. This is the P2-005 shape one level down — not "the
+fixture agrees with a rule the implementation could fall back on" but "the
+fixture's control value is degenerate for the specific literal under test" —
+and it produced a red herring twice in this group alone:
+
+- `entities.py:502`/`510`'s track_number tests initially paired the None row
+  against an explicit `0`. Both entries in verify.py's kill table came back
+  FAIL. The fix was a competing value of `1` (truthy, immune to the `or`
+  entirely) instead of `0`.
+- `entities.py:191`'s `fetch_artist_image` test made the identical mistake
+  against `or 0` → `or 1` on an image width, with the same FAIL and the same
+  fix (a competing width of `1`, not `0`).
+
+**A second, unrelated wrinkle surfaced only in `_owned_rows`' unordered
+scan**, which line 510's tests read through: with no `ORDER BY` in that
+query, a genuine tie's resolution order was empirically confirmed to follow
+`track_id`'s own lexical order, not insertion order — the opposite of what
+the first construction assumed. Verified by direct probing (build the tie,
+print the order, mutate, print again) rather than guessed, after the first
+guess was wrong. Tests that rely on a tie now name their ids so the tie
+breaks in the direction the test needs, with the reasoning recorded inline.
+
+`backfill.py:133`'s `or 0` → `or 1` mutant is the group's one **equivalent**
+verdict, and it doesn't need a probe to see why: `max(1, ceil(total_tracks /
+50))` clamps the whole expression to at least 1 regardless of which literal
+the fallback substitutes, because `ceil(0/50)` and `ceil(1/50)` are both `0`
+or `1` — either way `max(1, ·)` erases the difference. No fixture, for any
+value of `total_tracks`, can make the two literals disagree.
 
 #### E. Counter initialisers — 11 lines
 
@@ -304,9 +337,10 @@ representative picks (`members[0]`, `sorted(members)[0]`) where `[1]` survives.
 
 ## 4. What was added
 
-31 tests so far (§3.4 A + C fully closed), each proven by §6's gate — the
+42 tests so far (§3.4 A, C and D fully closed), each proven by §6's gate — the
 named test observed failing under its mutant, the suite green without it —
-and each killing with **exactly one** failing test.
+and each killing with **exactly one** failing test (D's two combined-mutant
+tests kill two named mutants each, both confirmed).
 
 - **`tests/test_serve.py`** (4). `serve.py` goes 0% → 100%. The import is
   deliberately lazy, inside a helper that patches `waitress.serve` first: the
@@ -316,9 +350,16 @@ and each killing with **exactly one** failing test.
 - **`tests/test_spotify_client.py`** (2). `respect_retry_after_header=False`,
   the sharpest single gap in the sweep. The tuning constants stay unasserted
   per §3.2.
-- **`tests/test_error_status_codes.py`** (25). §3.4 group A (12) and group C
-  (5) both fully closed, on top of the 5 already there — 22 of the 26
-  status-code survivors. Group B is *not* among them: see below.
+- **`tests/test_error_status_codes.py`** (25 cases + 2 group-D tests). §3.4
+  group A (12) and group C (5) both fully closed, on top of the 5 already
+  there — 22 of the 26 status-code survivors. Group B is *not* among them:
+  see below. Plus the `app.py:706` and `entities.py:65`/`66` group-D tests.
+- **`tests/test_entities.py`** (7 group-D tests, 1 rewritten). The
+  `fetch_artist_image` width tiebreak and all four `album_detail` sort-key
+  survivors (§3.4 D) — see §3.4 D's account of the two false starts these
+  needed before they actually killed anything.
+- **`tests/test_backfill.py`** (2 group-D tests). `_settled_map`'s NULL and
+  no-owned-tracks boundaries.
 
 **Group B (5 `not_authenticated` 401s) turned out not to need tests at all.**
 §3.4's plan for them was wrong — building the obvious test and running it
@@ -336,8 +377,7 @@ Deriving each case's expected status by running the suite is characterization,
 not specification, and `codebase-health-P.md` §2 is explicit that the
 distinction is the point. The error paths are supplemented instead.
 
-Remaining from §3.4: group D (8 `or`-default lines) and group E (11 counter
-initialisers) are not yet written.
+Remaining from §3.4: group E (11 counter initialisers) is not yet written.
 
 ---
 
