@@ -180,6 +180,102 @@ The 25 status codes are the **P2-010 shape the spec predicted for `app.py`**:
 `test_routes.py` sweeps every route for non-5xx, and a 400 mutated to a 401 is
 still non-5xx, so the sweep passes and the code goes unasserted.
 
+### 3.4 The settled gaps, as a work order
+
+41 mutants across 41 distinct source lines, verdict **gap — fixed**, grouped by
+what it takes to kill them. Everything below is settled: the reading is done,
+and what remains is writing the test. Twelve more of this class are already
+closed (§4).
+
+**Every test carries** `# source: S_sweep.md §3.4 -- <op> at <module>:<line>`,
+and **is not accepted until proven**:
+
+```
+venv/bin/python scripts/mutation/verify.py --work /tmp/symr-kill kill \
+    --module app.py --line 446 --op num --test tests/test_error_status_codes.py
+```
+
+That must print `KILL PROOF: PASS`, and the suite must be green without the
+mutant. A test that cannot fail cannot kill anything, which is the defect step
+P found in every session it ran.
+
+#### A. Status codes reachable by one malformed request — 12
+
+Target `tests/test_error_status_codes.py`, extending its existing parametrize
+table. Assert the exact code **and** the description fragment; the code alone
+cannot distinguish a working guard from a deleted one where several refusals
+share a status.
+
+| line | route | refusal |
+|---:|---|---|
+| 418 | `/dev/canonical/group/<int:group_id>` | 404 "Group has no members." — needs a group row **with no members**, distinct from 414's "no such group" |
+| 446 | `/api/canonical/cross` | 400 "tracks= needs at least 2 known track ids" |
+| 519 | `/api/canonical/cross/apply` | 400 "tracks not in this bucket: …" |
+| 536 | `/api/canonical/cross/apply` | 400 "no track_group row for …" |
+| 820 | `/api/history/import` | 400 "A .zip export file is required." |
+| 822 | `/api/history/import` | 400 "Upload the export .zip itself, not its contents." |
+| 837 | `/api/history/reimport` | 400 "Nothing uploaded yet…" |
+| 885 | `/api/roundtrip/alias` | 400 "aliases must be a non-empty list…" |
+| 912 | `/api/roundtrip/wanted/clear` | 400 "source must be one of …" |
+| 949 | `/api/backfill/start` | 400 "generations must be one of …" |
+| 974 | `/api/artists/alias` | 400 "artist_id_a and artist_id_b required" |
+| 987 | `/api/artists/unmerge` | 400 "artist_id required" |
+
+**418 and 949 are the two worth care.** 418 needs a `canonical_group` row whose
+`track_group` set is empty — if the fixture gives it members, the request 302s
+and the test asserts nothing. 949 pins `_BACKFILL_GENERATION_COUNTS = (2, 7)`,
+which `CLAUDE.md` says *is* the backfill's budget control; send a third value.
+
+#### B. The `not_authenticated` 401s — 5
+
+`app.py` lines **769** (`/api/snapshot/pull`), **777** (`/refresh`), **785**
+(`/backfill`), **858** (`/api/roundtrip/reconcile`), **945**
+(`/api/backfill/start`).
+
+`conftest.py` bypasses auth for every route test, so these need
+`monkeypatch.setattr(app_module, "get_spotify_client", lambda: None)` —
+the pattern already in `tests/test_api_errors.py`. Assert the 401 **and** the
+`not_authenticated` error key; five routes share one code, so the key is what
+tells them apart.
+
+#### C. `abort(400, description=str(e))` wrappers — 5
+
+`app.py` lines **546**, **608**, **652**, **729**, **890**.
+
+These fire only when the domain call underneath raises. **Read the called
+function first** — the input that makes it raise is the test, and guessing
+produces a test that hits a different branch and asserts nothing. Assert the
+400 and that the raised message reaches the body: the mutation being killed is
+the *code*, but a test that never exercises the wrapper kills nothing.
+
+#### D. `or` NULL defaults — 8 lines
+
+`app.py:706`; `entities.py:65`, `66`, `191`, `502`, `510`; `backfill.py:77`,
+`133`.
+
+**This group has one trap and it will eat a careless test.** Each default
+bites *only when the column is NULL* — a fixture that always stores a real
+`disc_number` passes against an implementation with no default at all. Use
+`builders.py`'s `UNSET` sentinel, which exists for exactly this: `None` means a
+SQL NULL, not "give me the default".
+
+`entities.py:191` (`max(images, key=lambda im: im.get("width") or 0)`) should be
+**checked for equivalence before a test is written** — with a single image, or
+with all widths present, `or 1` and `or 0` select the same image, and the
+honest verdict may be `equivalent`.
+
+#### E. Counter initialisers — 11 lines
+
+`history_import.py:63`, `64`, `65`, `66`, `128`, `129`, `130`, `199`, `239`,
+`243`; `backfill.py:28`.
+
+A fresh status object must report **zero** before any work happens. The trap
+here is the mirror of D: assert the initial value on a *newly created* status,
+not after a run that would overwrite it — a test that reads the counter after
+processing kills nothing, because the initialiser's value is gone by then.
+
+---
+
 Visible in the untriaged remainder, and worth naming before it is lost:
 `_BACKFILL_GENERATION_COUNTS = (2, 7)` — `CLAUDE.md` says those two fixed
 buttons *are* the backfill's budget control, and neither value is asserted;
@@ -190,7 +286,25 @@ representative picks (`members[0]`, `sorted(members)[0]`) where `[1]` survives.
 
 ## 4. What was added
 
-*Pending triage.*
+Twelve tests so far, each proven by §6's gate — the named test observed failing
+under its mutant, the suite green without it — and each killing with **exactly
+one** failing test.
+
+- **`tests/test_serve.py`** (4). `serve.py` goes 0% → 100%. The import is
+  deliberately lazy, inside a helper that patches `waitress.serve` first: the
+  `__name__ != "__main__"` mutant runs the guarded block on import, so a
+  top-level import hangs collection inside waitress instead of failing, and a
+  hanging suite is billed as a 300-second timeout rather than a kill.
+- **`tests/test_spotify_client.py`** (2). `respect_retry_after_header=False`,
+  the sharpest single gap in the sweep. The tuning constants stay unasserted
+  per §3.2.
+- **`tests/test_error_status_codes.py`** (5 cases). Five of the 26
+  status-code survivors; the remaining 22 are §3.4 A–C.
+
+`test_routes.py`'s non-5xx sweep was **not** widened to assert exact codes.
+Deriving each case's expected status by running the suite is characterization,
+not specification, and `codebase-health-P.md` §2 is explicit that the
+distinction is the point. The error paths are supplemented instead.
 
 ---
 
