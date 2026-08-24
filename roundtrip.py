@@ -149,6 +149,11 @@ def counts(conn):
         "album_backfill_uris": conn.execute(
             _WANTED_REMAINING_BY_SOURCE_SQL, ("backfill",)
         ).fetchone()[0],
+        # The fourth partition (scrobbling-R.md §5.3): resolved tracks a
+        # scrobble ingest left without an ISRC. Sums into remaining_uris with
+        # the other three, no double-counting -- it is disjoint from arm 1
+        # (x.track_id IS NULL there) by construction.
+        "incomplete_isrc_uris": conn.execute(_INCOMPLETE_ISRC_REMAINING_SQL).fetchone()[0],
         # Worth one more look: recorded as not-returned and still unresolved.
         "reconcilable": len(_reconcile_list(conn)),
         "review_uris": conn.execute(
@@ -274,6 +279,22 @@ def clear_failures(conn):
     conn.commit()
 
 
+def settle_incomplete_isrc(conn):
+    """[Clear] on the fourth queue row (scrobbling-R.md §5.3): stop asking
+    about every currently-matching track. Unlike the album rows this is not a
+    free undo -- there is nothing to re-add -- so it reads as a settle, not a
+    delete."""
+    conn.execute(
+        "INSERT OR IGNORE INTO track_isrc_absent (track_id) "
+        "SELECT DISTINCT t.track_id FROM track t "
+        "JOIN played_uri_track x ON x.track_id = t.track_id "
+        "JOIN play p             ON p.spotify_track_uri = x.uri "
+        "WHERE t.isrc IS NULL AND t.uri IS NOT NULL "
+        "AND t.track_id NOT IN (SELECT track_id FROM track_isrc_absent)"
+    )
+    conn.commit()
+
+
 # -- The work list -------------------------------------------------
 
 # Ordered by play count descending, so a run that dies at 30% has done the
@@ -316,8 +337,41 @@ SELECT spotify_track_uri, plays FROM (
     WHERE x.track_id IS NULL
       AND w.uri NOT IN (SELECT requested_uri FROM roundtrip_failed_uri)
       AND w.uri NOT IN (SELECT spotify_track_uri FROM play)
+
+    UNION ALL
+
+    -- The third arm (docs/specs/scrobbling-R.md §5.2): a track resolved
+    -- perfectly but scrobble.py's recently-played ingest could give it no
+    -- ISRC (the endpoint's track object omits external_ids entirely). "Done"
+    -- is derived the same way as the other two arms -- isrc IS NULL is the
+    -- marker, no flag introduced -- and track_isrc_absent is this arm's own
+    -- settled-exceptions stop condition, so the one genuinely ISRC-less
+    -- track in the library doesn't re-request forever.
+    SELECT t.uri AS spotify_track_uri, COUNT(p.id) AS plays
+    FROM track t
+    JOIN played_uri_track x ON x.track_id = t.track_id
+    JOIN play p             ON p.spotify_track_uri = x.uri
+    WHERE t.isrc IS NULL
+      AND t.uri IS NOT NULL
+      AND t.track_id NOT IN (SELECT track_id FROM track_isrc_absent)
+    GROUP BY t.uri
 )
 ORDER BY plays DESC, spotify_track_uri ASC
+"""
+
+# Arm 3's own contribution, so counts() can report it as its own partition
+# rather than folding it into the two-way split M shipped with.
+_INCOMPLETE_ISRC_REMAINING_SQL = """
+SELECT COUNT(*) FROM (
+    SELECT t.uri
+    FROM track t
+    JOIN played_uri_track x ON x.track_id = t.track_id
+    JOIN play p             ON p.spotify_track_uri = x.uri
+    WHERE t.isrc IS NULL
+      AND t.uri IS NOT NULL
+      AND t.track_id NOT IN (SELECT track_id FROM track_isrc_absent)
+    GROUP BY t.uri
+)
 """
 
 # The listening arm's own contribution, *without* the mute filter -- counts()
@@ -761,6 +815,21 @@ def _load_and_read(conn, sp, label, uris):
         # The same upsert a pull uses, so track / album / artist /
         # track_artist / album_artist are filled exactly as a pull fills them.
         snapshot._upsert_track_full(conn, snapshot._parse_track_item(track, None, None))
+        # scrobbling-R.md §5.2's stop condition: this is arm 3's one write
+        # path (a full track object, read back from the playlist-items
+        # endpoint, can fill the ISRC a scrobble-only row was missing). If
+        # the stored value is *still* NULL after the upsert -- checked
+        # against the row, not this response's own it["isrc"], since COALESCE
+        # can have preserved an older non-NULL value the response didn't
+        # carry -- the track genuinely has none to give, and settling it here
+        # is what stops it re-requesting forever.
+        stored_isrc = conn.execute(
+            "SELECT isrc FROM track WHERE track_id = ?", (track["id"],)
+        ).fetchone()["isrc"]
+        if stored_isrc is None:
+            conn.execute(
+                "INSERT OR IGNORE INTO track_isrc_absent (track_id) VALUES (?)", (track["id"],)
+            )
         requested_uri = _linked_from_uri(track)
         if requested_uri:
             # Spotify substituted this track for one it wouldn't serve. The

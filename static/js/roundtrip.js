@@ -18,6 +18,7 @@
   const listeningExcludedNote = document.getElementById("listening-excluded-note");
   const listeningClearBtn = document.getElementById("listening-clear-btn");
   const listeningReaddBtn = document.getElementById("listening-readd-btn");
+  const incompleteIsrcClearBtn = document.getElementById("incomplete-isrc-clear-btn");
 
   // ---------- album backfill ----------
   const backfillStopBtn = document.getElementById("backfill-stop-btn");
@@ -39,6 +40,7 @@
     "listening_uris",
     "album_page_uris",
     "album_backfill_uris",
+    "incomplete_isrc_uris",
     "reconcilable",
     "review_uris",
     "requests",
@@ -96,6 +98,7 @@
       const field = btn.dataset.wantedClear === "album" ? "album_page_uris" : "album_backfill_uris";
       btn.disabled = !status[field];
     });
+    incompleteIsrcClearBtn.disabled = !status.incomplete_isrc_uris;
   }
 
   function phaseLabel(status) {
@@ -389,6 +392,15 @@
 
   listeningClearBtn.addEventListener("click", () => setListeningMuted(true, listeningClearBtn));
   listeningReaddBtn.addEventListener("click", () => setListeningMuted(false, listeningReaddBtn));
+
+  incompleteIsrcClearBtn.addEventListener("click", () => {
+    incompleteIsrcClearBtn.disabled = true;
+    api("/api/roundtrip/incomplete-isrc/clear", { method: "POST" })
+      .then(() => poll())
+      .catch(() => {
+        incompleteIsrcClearBtn.disabled = false;
+      });
+  });
 
   // ---------- album backfill ----------
 

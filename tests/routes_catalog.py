@@ -137,6 +137,7 @@ CASES = (
     Case("dev_artists", "GET", "/dev/artists"),
     Case("dev_import", "GET", "/dev/import"),
     Case("dev_roundtrip", "GET", "/dev/roundtrip"),
+    Case("dev_scrobble", "GET", "/dev/scrobble"),
     Case("dev_snapshot", "GET", "/dev/snapshot"),
     Case("dev_canonical", "GET", "/dev/canonical"),
     Case("dev_generations", "GET", "/dev/generations"),
@@ -205,6 +206,10 @@ CASES = (
         "/api/roundtrip/listening/mute",
         json={"muted": True},
     ),
+    Case("clear_incomplete_isrc", "POST", "/api/roundtrip/incomplete-isrc/clear"),
+    # -- Scrobble API -------------------------------------------------------
+    Case("api_scrobble_poll", "POST", "/api/scrobble/poll"),
+    Case("api_scrobble_toggle", "POST", "/api/scrobble/toggle", json={"enabled": True}),
     # -- Backfill API -----------------------------------------------------
     Case("backfill_status", "GET", "/api/backfill/status"),
     Case("start_backfill_job", "POST", "/api/backfill/start", json={"generations": 2}),

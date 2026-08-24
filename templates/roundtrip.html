@@ -76,8 +76,19 @@
           </td>
           <td><button type="button" data-wanted-clear="backfill" {{ 'disabled' if not counts.album_backfill_uris }}>Clear</button></td>
         </tr>
+        <tr>
+          <td>
+            <span data-field="incomplete_isrc_uris">{{ "{:,}".format(counts.incomplete_isrc_uris) }}</span>
+            resolved track<span data-plural-for="incomplete_isrc_uris">{{ "" if counts.incomplete_isrc_uris == 1 else "s" }}</span> missing an ISRC
+          </td>
+          <td><button id="incomplete-isrc-clear-btn" type="button" {{ 'disabled' if not counts.incomplete_isrc_uris }}>Clear</button></td>
+        </tr>
       </tbody>
     </table>
+    <p class="meta">
+      The ISRC row isn't a free undo like the three above it — clearing settles what's currently
+      missing rather than deleting anything, since there's nothing to re-add.
+    </p>
     <p class="meta">
       Every clear is one click, no confirm step -- each comes back for free: the listening row
       by Re-add, the other two by revisiting the album page or clicking Add again.

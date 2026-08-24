@@ -223,6 +223,7 @@ import fakes  # noqa: E402
 import jobs  # noqa: E402
 import roundtrip  # noqa: E402
 import scoring  # noqa: E402
+import scrobble  # noqa: E402
 import snapshot  # noqa: E402
 
 # The instant every test runs at (P2_tests.md §4.3). Mid-month, mid-day, UTC --
@@ -435,7 +436,7 @@ def recompute_calls(monkeypatch):
 # source reaches none of them -- each has to be rebound individually, and a
 # module missing from this list silently gets the real client (which, with no
 # cached token, returns None and makes the code under test quietly no-op).
-_SPOTIFY_CLIENT_IMPORTERS = (app_module, backfill, entities, roundtrip, snapshot)
+_SPOTIFY_CLIENT_IMPORTERS = (app_module, backfill, entities, roundtrip, scrobble, snapshot)
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ import sys
 import waitress
 
 import jobs
+import scrobble
 from app import create_app
 from config import APP_PORT
 
@@ -26,6 +27,10 @@ def _handle_sigterm(signum, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_sigterm)
     app = create_app()
+    # Started only here, never from app.py's app.run() laptop dev loop --
+    # scrobbling is production-only by construction (docs/specs/scrobbling-R.md
+    # §4.1).
+    scrobble.start()
     # 0.0.0.0 is correct here: it's the address inside the container's own
     # network namespace. The compose file's 127.0.0.1:45660:45660 publish is
     # what decides reachability from outside (docs/specs/host-on-fe-pro-Q.md

@@ -442,6 +442,36 @@ CREATE TABLE IF NOT EXISTS api_request (
     error          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_api_request_ts ON api_request(ts);
+
+-- One row per scrobble poll (docs/specs/scrobbling-R.md §3.1), kept forever
+-- like roundtrip_run and api_request -- a poll that read 50 items and
+-- inserted 0 is still a row, since that is the only way "the poller is
+-- alive" is visible at all. play_import can't host this: its kind CHECK and
+-- NOT NULL folder are meaningless for a poll, and widening it would need a
+-- table rebuild to write dummies into four dead columns of a table whose own
+-- comment calls it the per-run log of *export* imports.
+CREATE TABLE IF NOT EXISTS scrobble_poll (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    items_read    INTEGER,
+    rows_inserted INTEGER,
+    oldest_played TEXT,
+    newest_played TEXT,
+    gap_warning   INTEGER NOT NULL DEFAULT 0,
+    retry_after   INTEGER,
+    error         TEXT
+);
+
+-- A track that resolved perfectly but Spotify gave no external_ids.isrc for
+-- -- settled the same way as reviewed_pair: a track_id that's been asked
+-- about and answered "no ISRC to give", so roundtrip.py's arm 3 stops
+-- re-requesting it. Not roundtrip_failed_uri: that table's key is a *uri
+-- that failed to resolve*, the opposite of this case, and its `state` CHECK
+-- can't be widened without a table rebuild.
+CREATE TABLE IF NOT EXISTS track_isrc_absent (
+    track_id     TEXT PRIMARY KEY REFERENCES track(track_id),
+    confirmed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 """
 
 # Rebuilt whenever the definition here changes (see _ensure_views) rather than
@@ -723,6 +753,10 @@ def _migrate(conn):
     ):
         if column not in artist_columns:
             conn.execute(ddl)
+
+    play_columns = {row[1] for row in conn.execute("PRAGMA table_info(play)")}
+    if "poll_id" not in play_columns:
+        conn.execute("ALTER TABLE play ADD COLUMN poll_id INTEGER REFERENCES scrobble_poll(id)")
 
     wanted_uri_columns = {row[1] for row in conn.execute("PRAGMA table_info(wanted_uri)")}
     if "album_id" not in wanted_uri_columns:

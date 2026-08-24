@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_macros.html" import datetime_span, entity_link, spotify_track_link %}
+
+{% block title %}Symr — Scrobble{% endblock %}
+
+{% block content %}
+<main class="page">
+  <h1>Scrobbling</h1>
+  <p class="meta">
+    Polls <code>GET /v1/me/player/recently-played</code> every
+    {{ (interval_seconds // 60) }} minutes and records what comes back as <code>play</code> rows,
+    so the library reflects listening without waiting on a GDPR export. Explicitly
+    non-authoritative — the streaming-history export stays the source of truth, and every
+    scrobble a later export's range covers is deleted, not merged.
+    &middot; <a href="{{ url_for('dev_import') }}">Play History</a>
+  </p>
+  <p class="meta">
+    The poller thread only runs on the deployed server (production-only by construction) — on
+    the laptop, use <strong>Poll now</strong> below, which calls the identical function.
+  </p>
+
+  <section class="panel" id="scrobble-status">
+    <h2>Status</h2>
+    <p>
+      <span id="scrobble-enabled-state">{{ "Enabled" if enabled else "Paused" }}</span>
+      &middot; <span data-field="total_scrobbles">{{ "{:,}".format(total_scrobbles) }}</span>
+      scrobble<span data-plural-for="total_scrobbles">{{ "" if total_scrobbles == 1 else "s" }}</span> stored
+      &middot; <span data-field="gap_warning_count">{{ gap_warning_count }}</span>
+      poll<span data-plural-for="gap_warning_count">{{ "" if gap_warning_count == 1 else "s" }}</span> with a gap warning
+    </p>
+    <p class="meta" id="scrobble-last-poll">
+      {% if last_poll %}
+      Last poll {{ datetime_span(last_poll.started_at) }}
+      {% if last_poll.error %}
+      &middot; <span class="error">failed: {{ last_poll.error }}</span>
+      {% elif last_poll.retry_after %}
+      &middot; <span class="error">rate limited, backing off {{ last_poll.retry_after }}s</span>
+      {% else %}
+      &middot; read {{ last_poll.items_read }}, stored {{ last_poll.rows_inserted }}
+      {% if last_poll.gap_warning %} &middot; <span class="error">gap warning — some plays may be missing; re-import an export to recover</span>{% endif %}
+      {% endif %}
+      {% else %}
+      No poll has run yet.
+      {% endif %}
+    </p>
+    <p class="meta" id="scrobble-next-poll" {{ 'hidden' if not enabled or not next_poll_estimate }}>
+      Next poll ~{{ datetime_span(next_poll_estimate) }}
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Controls</h2>
+    <button id="scrobble-poll-btn" type="button">Poll now</button>
+    <button id="scrobble-pause-btn" type="button" {{ 'hidden' if not enabled }}>Pause</button>
+    <button id="scrobble-resume-btn" type="button" {{ 'hidden' if enabled }}>Resume</button>
+    <p id="scrobble-error" class="error" hidden></p>
+  </section>
+
+  <section class="panel">
+    <h2>Last {{ recent_plays|length }} plays</h2>
+    {% if recent_plays %}
+    <table class="data-table" id="scrobble-recent-plays">
+      <thead>
+        <tr><th>Track</th><th>Source</th><th>When</th></tr>
+      </thead>
+      <tbody>
+        {% set ns = namespace(divider_shown=false) %}
+        {% for p in recent_plays %}
+        {% if export_cutover and not ns.divider_shown and p.ts <= export_cutover %}
+        <tr class="divider-row"><td colspan="3" class="meta">— export data begins here —</td></tr>
+        {% set ns.divider_shown = true %}
+        {% endif %}
+        <tr>
+          <td>
+            {% if p.track_id %}
+            {{ entity_link('track', p.track_id, p.track_name) }}
+            {% else %}
+            {{ spotify_track_link(p.spotify_track_uri, p.reported_track_name) }}
+            {% endif %}
+          </td>
+          <td>{{ p.source }}</td>
+          <td>{{ datetime_span(p.ts) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No plays recorded yet.</p>
+    {% endif %}
+  </section>
+</main>
+<script src="{{ url_for('static', filename='js/scrobble.js') }}"></script>
+{% endblock %}

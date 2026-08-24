@@ -19,6 +19,7 @@ import pytest
 
 import builders
 import canonical
+import db
 import jobs
 import routes_catalog
 import scoring
@@ -1247,3 +1248,32 @@ def test_the_snapshot_page_offers_an_undeclared_generation(client, corpus, conn)
 
     assert 'id="generation-confirm-form"' in body
     assert "v2.0.0" in body
+
+
+# -- Scrobbling (docs/specs/scrobbling-R.md) ---------------------------------
+
+
+def test_the_scrobble_page_shows_a_stored_scrobble(client, corpus, conn):
+    # source: scrobbling-R.md §7 -- "The last 50 plays ... each linked
+    # through the entity_link macro." The catalog's dev_scrobble case only
+    # proves the page responds (P2-010); this proves a real play renders on
+    # it rather than an empty state.
+    builders.make_play(
+        conn, track_id=corpus["tracks"][0], source="scrobble", ts=builders.days_ago(0)
+    )
+
+    body = client.get("/dev/scrobble").get_data(as_text=True)
+
+    assert "Corpus Track One" in body
+
+
+def test_the_scrobble_toggle_flips_the_meta_key_in_both_directions(client, corpus, conn):
+    # source: scrobbling-R.md Tests clause 14 -- "/api/scrobble/toggle flips
+    # the meta key in both directions."
+    resp = client.post("/api/scrobble/toggle", json={"enabled": False})
+    assert resp.status_code == 200
+    assert db.get_meta(conn, "scrobble_enabled") == "0"
+
+    resp = client.post("/api/scrobble/toggle", json={"enabled": True})
+    assert resp.status_code == 200
+    assert db.get_meta(conn, "scrobble_enabled") == "1"

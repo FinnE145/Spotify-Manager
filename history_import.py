@@ -257,6 +257,16 @@ def _finish(conn, import_id, counts, error):
             import_id,
         ),
     )
+    # scrobbling-R.md §6: a successful import supersedes every scrobble its
+    # range covers -- deleted, not merged or flagged, since a scrobble is a
+    # low-fidelity placeholder (a derived ms_played, NULL reason/skip/shuffle)
+    # that must not sit beside the export's real row and double-count the
+    # play. scoring.recompute already runs on this path, so the deletion is
+    # reflected without a second call.
+    if error is None and counts["range_end"] is not None:
+        conn.execute(
+            "DELETE FROM play WHERE source = 'scrobble' AND ts <= ?", (counts["range_end"],)
+        )
     conn.commit()
 
 

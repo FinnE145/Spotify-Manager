@@ -1,6 +1,6 @@
 """The fake Spotify client (P2_tests.md §4.4).
 
-Covers **only the endpoints the job loops actually call** -- ten of them -- not
+Covers **only the endpoints the job loops actually call** -- eleven of them -- not
 spotipy in general. It earns its keep on roundtrip.py, whose replace-never-append
 and read-as-a-bag-never-a-sequence invariants were both learned the hard way and
 are the highest-corruption-risk logic in the tree.
@@ -166,6 +166,7 @@ class FakeSpotify:
         self.playlists = []
         self.items = {}
         self.saved_tracks = []
+        self.recently_played = []
         self.albums = {}
         self.artists = {}
         self.tracks = {}
@@ -215,6 +216,14 @@ class FakeSpotify:
         for track in tracks or []:
             self.tracks[track["id"]] = track
         return playlist
+
+    def add_recently_played(self, track, played_at):
+        """Seeds one item for current_user_recently_played, in the order
+        added (most-recent-first, matching the real endpoint -- callers
+        should add newest first). Registers the track so it's also servable
+        by sp.track()."""
+        self.tracks.setdefault(track["id"], track)
+        self.recently_played.append({"track": track, "played_at": played_at, "context": None})
 
     def add_saved_tracks(self, tracks):
         """Seeds Liked Songs, which snapshot pulls through its own endpoint
@@ -328,6 +337,22 @@ class FakeSpotify:
         if artist_id not in self.artists:
             raise not_found(f"artist {artist_id}")
         return self.artists[artist_id]
+
+    def current_user_recently_played(self, limit=50, after=None, before=None):
+        """§1.4 of scrobbling-R.md: `next` is always present but following it
+        always yields zero items -- the store is a bare 50-deep window, not a
+        real page sequence. Deliberately not built on _paginate, which pages
+        properly: a fake that did would let an implementation that tries to
+        page past the first response silently pass."""
+        self._record("current_user_recently_played", limit=limit, after=after, before=before)
+        token = f"recently-played-end-{self._page_counter}"
+        self._page_counter += 1
+        self._pages[token] = {"items": [], "next": None, "cursors": None}
+        return {
+            "items": list(self.recently_played[:limit]),
+            "next": token,
+            "cursors": {"after": None, "before": None},
+        }
 
     def next(self, page):
         self._record("next")

@@ -17,6 +17,7 @@ import history_import
 import jobs
 import roundtrip
 import scoring
+import scrobble
 import snapshot
 from config import APP_DEBUG, APP_PORT, MAX_CONTENT_LENGTH, SECRET_KEY
 from grouping import render_export_text
@@ -338,6 +339,31 @@ def create_app():
             # preview-then-confirm step.
             backfill_previews=backfill.previews(conn),
         )
+
+    @app.route("/dev/scrobble", endpoint="dev_scrobble")
+    def scrobble_index():
+        conn = db.get_db()
+        return render_template(
+            "scrobble.html", active="dev_scrobble", **scrobble.index_data(conn)
+        )
+
+    @app.route("/api/scrobble/poll", methods=["POST"])
+    def api_scrobble_poll():
+        # poll() handles a missing/invalid token itself (records a
+        # scrobble_poll row and returns, docs/specs/scrobbling-R.md §4.5)
+        # rather than needing a 401 pre-check like the job-starting routes --
+        # it's designed to work everywhere, including the laptop where
+        # nothing is authenticated to scrobble against yet.
+        conn = db.get_db()
+        scrobble.poll(conn)
+        return jsonify(scrobble.index_data(conn))
+
+    @app.route("/api/scrobble/toggle", methods=["POST"])
+    def api_scrobble_toggle():
+        body = request.get_json()
+        conn = db.get_db()
+        scrobble.set_enabled(conn, bool(body.get("enabled")))
+        return jsonify({"ok": True, "enabled": bool(body.get("enabled"))})
 
     @app.route("/dev/canonical", endpoint="dev_canonical")
     def canonical_index():
@@ -895,6 +921,15 @@ def create_app():
         conn = db.get_db()
         db.set_meta(conn, "roundtrip_listening_muted", "1" if body.get("muted") else "0")
         conn.commit()
+        return jsonify({"ok": True})
+
+    @app.route("/api/roundtrip/incomplete-isrc/clear", methods=["POST"])
+    def clear_incomplete_isrc():
+        # Not a free undo like the album rows above -- there's nothing to
+        # re-add, so this settles the current set into track_isrc_absent
+        # rather than deleting anything (scrobbling-R.md §5.3).
+        conn = db.get_db()
+        roundtrip.settle_incomplete_isrc(conn)
         return jsonify({"ok": True})
 
     # -- Album backfill (spec M §4.5) ----------------------------------
