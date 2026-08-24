@@ -164,7 +164,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
                            DONE            DONE       DONE
-  ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep)
+  ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (OAuth host-mismatch fix)
       DONE
   ──► F/G ──► L (search)
 ```
@@ -213,6 +213,10 @@ version landed.
 wait is for that log to *catch a real lockout* — until it has, there is no measured ceiling to
 budget against and O has nothing to display. Time spent on other steps is not time O is
 blocked by; it is time the log is collecting.
+
+**T sits after S — placed after whichever of R/S is later, per Finn's call 2026-08-24, made
+when the bug surfaced during R's implementation.** No technical dependency on either; it's simply
+positioned past both rather than jumping the queue.
 
 B is deliberately late **not** because it's low value — it's the cheapest high-value slice — but because it needs **zero Spotify requests**. It's the work to pick up on a day the API budget is already spent. **I** has the same property.
 
@@ -958,6 +962,29 @@ deliberately small one), whether to keep hand-rolled tooling or adopt `mutmut`/`
 whether any part of it is worth wiring into `symr-verify` as a per-session check rather than a
 one-off — the skill already asks for mutation on a session's *own* new tests, which is a much
 smaller thing than this.
+
+## T — Fix the `localhost`/`127.0.0.1` OAuth state mismatch
+
+**Not specced.** Own `/symr-plan` session, though it's likely small enough not to need much of
+one. Placed after **S** by decision — see the Order notes.
+
+**The bug, found and confirmed 2026-08-24 during R's implementation.** `/callback` has been
+failing with "Invalid OAuth state" on every re-auth for months, previously assumed each time to
+be a mistake on Finn's part rather than the app's. It isn't, and it's fully mechanical: `/login`
+sets the Flask session's `oauth_state` cookie scoped to whichever host served that request, but
+`get_auth_manager()`'s `redirect_uri` is hardcoded from `config.SPOTIFY_REDIRECT_URI`
+(`http://127.0.0.1:45660/callback` on the laptop) regardless of how `/login` was reached.
+Browsers never share cookies between `localhost` and `127.0.0.1` — they're unrelated hostnames —
+so reaching `/login` via `localhost:45660` guarantees the callback's session lookup comes back
+empty, deterministically, every time. Confirmed by reproducing it (a preview tool defaulted to
+`localhost`) and then succeeding by going through `127.0.0.1` consistently for both legs.
+
+**The fix, roughly:** have `/login` (or a `before_request` check ahead of it) redirect onto the
+canonical host — `127.0.0.1` on the laptop, matching `SPOTIFY_REDIRECT_URI` — before it sets the
+session cookie, so the cookie's host can never mismatch the callback's regardless of how the app
+was reached. Confirm the equivalent can't happen on `fe-pro` before assuming it's laptop-only —
+its redirect URI is a single `*.ts.net` tailnet hostname, but check `docs/specs/
+host-on-fe-pro-Q.md` §3 rather than assuming.
 
 ## L — Better search
 
