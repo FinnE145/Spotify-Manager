@@ -32,6 +32,11 @@ TARGETS = [
     "db.py", "backfill.py", "generations.py", "jobs.py", "artists.py",
     "canonical_autogroup.py", "grouping.py", "api_log.py", "spotify_client.py",
     "config.py", "normalize.py", "serve.py",
+    # Step R, landed after §1's table was measured. The roadmap always scoped
+    # S as "the other ~11 modules plus whatever Q, O and R ship", and it is the
+    # newest module in the tree -- which makes it the most informative target
+    # here, since §8.5 asks whether the sessions after P kept P's standard.
+    "scrobble.py",
 ]
 
 #: §3.1 -- copying the 93 MB `symr.db` into six workers is pure cost; the suite
