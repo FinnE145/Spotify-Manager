@@ -1305,3 +1305,105 @@ def test_the_scrobble_toggle_flips_the_meta_key_in_both_directions(client, corpu
     resp = client.post("/api/scrobble/toggle", json={"enabled": True})
     assert resp.status_code == 200
     assert db.get_meta(conn, "scrobble_enabled") == "1"
+
+
+# -- The two app-wide hooks, and the OAuth pair (S sweep, app.py 80/95/741/761)
+
+
+def test_the_scoring_backstop_runs_on_authenticated_requests_but_not_public_ones(
+    client, monkeypatch
+):
+    """app.py's second `before_request` guards on the same
+    `_PUBLIC_ENDPOINTS` set as the login guard above it, and the two are
+    easy to confuse: inverting *this* one is not an auth hole, it silently
+    stops the scoring backstop ever running on a real request.
+    """
+    # source: S_sweep.md §3 -- in at app.py:80
+    calls = []
+    monkeypatch.setattr(scoring, "ensure_fresh", lambda: calls.append(True))
+
+    client.get("/login")
+    assert calls == [], "the backstop must not run on a public endpoint"
+
+    client.get("/")
+    assert calls == [True], "the backstop must run on an authenticated request"
+
+
+def test_the_scoring_banner_shows_only_when_the_last_recompute_failed(
+    client, monkeypatch
+):
+    """async-recompute-N.md §7.1: a background recompute failure has no
+    request to 500, so this banner is its only visible signal. Both
+    directions are asserted -- a banner that is always on is as useless as
+    one that never appears, and nothing else in the suite reads
+    `scoring_failed` at all.
+    """
+    # source: S_sweep.md §3 -- eq at app.py:95
+    monkeypatch.setattr(
+        scoring,
+        "recompute_status",
+        lambda: {"outcome": "error", "error": "a broken recompute"},
+    )
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert "Background score recompute is failing" in body
+    assert "a broken recompute" in body
+
+    monkeypatch.setattr(
+        scoring,
+        "recompute_status",
+        lambda: {"outcome": "ok", "error": None},
+    )
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert "Background score recompute is failing" not in body
+
+
+def test_the_oauth_state_carries_at_least_the_entropy_login_asks_for(client):
+    """The `num` mutant at app.py:741 -- `token_urlsafe(32)` to `(33)` -- is
+    **equivalent**: a longer state is strictly more entropy and nothing
+    observes its length. This test does not kill that mutant and is not
+    meant to. It pins the floor instead, which is the half worth having
+    (mutation-sweep-S.md §5's carve-out: record the equivalent, and test the
+    boundary's answer where that answer is itself worth pinning). Recorded
+    here so the next sweep does not re-derive the same verdict.
+    """
+    # source: S_sweep.md §3 -- num at app.py:741
+    client.get("/login")
+
+    with client.session_transaction() as sess:
+        state = sess["oauth_state"]
+
+    # token_urlsafe(n) base64url-encodes n random bytes, so 32 -> 43 chars.
+    assert len(state) >= 43
+
+
+def test_the_token_exchange_uses_spotipys_non_deprecated_form(client, monkeypatch):
+    """`get_access_token`'s return value is discarded at the call site, so
+    `as_dict` changes nothing Symr observes but spotipy's own
+    DeprecationWarning -- which a spy cannot raise. The argument is the only
+    observable left, so it is what this pins. The spy defaults it to `True`,
+    matching spotipy's real signature, so dropping the argument entirely
+    fails here too rather than silently passing.
+    """
+    # source: S_sweep.md §3 -- false at app.py:761
+    seen = {}
+
+    class _AuthManager:
+        def get_access_token(self, code, as_dict=True, check_cache=True):
+            seen["as_dict"] = as_dict
+            return "an-access-token"
+
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "get_auth_manager", lambda: _AuthManager())
+
+    with client.session_transaction() as sess:
+        sess["oauth_state"] = "the-real-state"
+
+    resp = client.get("/callback?state=the-real-state&code=an-auth-code")
+
+    assert resp.status_code == 302
+    assert seen["as_dict"] is False

@@ -17,6 +17,7 @@ being run twice safely and about not trusting the zip:
 (unset) otherwise resolves to Finn's real exports.
 """
 
+import io
 import json
 import os
 import zipfile
@@ -78,6 +79,30 @@ def import_into(conn, folder):
     return counts
 
 
+# -- save_upload --------------------------------------------------------
+
+
+class _FakeUpload:
+    """A minimal stand-in for Werkzeug's FileStorage -- save_upload only ever
+    calls .save(path) on whatever it's given."""
+
+    def save(self, path):
+        with open(path, "wb") as fh:
+            fh.write(b"fake zip bytes")
+
+
+def test_save_upload_reuses_the_same_folder_within_one_frozen_second(conn):
+    """The folder name is derived from the clock, and the suite's autouse
+    freezer never advances it -- so two uploads in the same test session (or
+    the same test) land on the identical folder path. Without exist_ok=True,
+    the second os.makedirs would raise FileExistsError."""
+    # source: S_sweep.md §3 -- true at history_import.py:90
+    first = history_import.save_upload(_FakeUpload())
+    second = history_import.save_upload(_FakeUpload())
+
+    assert first == second
+
+
 # -- The dedup hash ---------------------------------------------------------
 
 
@@ -136,12 +161,18 @@ def test_re_importing_the_same_rows_inserts_nothing_new(conn, folder):
         # as seconds.
         (1709287200000, "2024-03-01T10:00:00Z"),
         (None, None),
+        # Exactly at the threshold: the boundary is >=, so a value equal to
+        # 1e11 is treated as milliseconds-scale, not seconds-scale. A >
+        # comparison here would read this as seconds and land in the year
+        # 5138 instead.
+        (100_000_000_000, "1973-03-03T09:46:40Z"),
     ],
 )
 def test_offline_timestamps_are_read_in_whichever_unit_they_carry(value, expected):
-    # source: history_import._offline_ts -- "The export's offline_timestamp
-    # mixes units in a single column ... Anything treating it as one unit is
-    # wrong by 1000x on part of the data."
+    # source: S_sweep.md §3 -- cmp>= at history_import.py:295. Also:
+    # history_import._offline_ts -- "The export's offline_timestamp mixes
+    # units in a single column ... Anything treating it as one unit is wrong
+    # by 1000x on part of the data."
     assert history_import._offline_ts(value) == expected
 
 
@@ -250,6 +281,51 @@ def test_a_freshly_reset_status_reports_zero_of_everything(conn):
     assert status["rows_inserted"] == 0
 
 
+def test_reset_status_sets_the_starting_phase_for_the_action(conn):
+    """An upload still has a zip to pull apart first; a reimport re-reads
+    JSON that's already on disk and starts straight into parsing."""
+    # source: S_sweep.md §3 -- eq at history_import.py:112
+    history_import._reset_status("upload")
+    assert history_import.get_status()["phase"] == "extracting"
+
+    history_import._reset_status("reimport")
+    assert history_import.get_status()["phase"] == "parsing"
+
+
+def test_reimport_never_tries_to_extract_a_zip(conn, folder):
+    """A reimport's folder holds only the already-extracted JSON -- no
+    export.zip. If `_run_import` ever attempted to extract one anyway for a
+    reimport, it would fail immediately (no such file), and this would come
+    back as an error rather than a clean parse."""
+    # source: S_sweep.md §3 -- eq at history_import.py:142
+    write_history(folder, "Streaming_History_Audio_2024.json", [EXPORT_ROW])
+
+    history_import._run_import("reimport", folder, "export.zip")
+
+    status = history_import.get_status()
+    assert status["phase"] == "done"
+    assert status["error"] is None
+
+
+def test_a_failed_import_still_records_its_error_on_the_play_import_row(conn, folder):
+    """`_finish` is what writes the error onto the play_import row that
+    `/dev/import` reads back -- it has to run even when the parse itself
+    blew up partway through, or a failed import would leave its row looking
+    exactly like one still in progress."""
+    # source: S_sweep.md §3 -- isnot at history_import.py:161
+    with open(
+        os.path.join(folder, "Streaming_History_Audio_2024.json"), "w", encoding="utf-8"
+    ) as fh:
+        fh.write("not valid json{")
+
+    history_import._run_import("reimport", folder, "export.zip")
+
+    row = conn.execute(
+        "SELECT error FROM play_import WHERE folder = ?", (folder,)
+    ).fetchone()
+    assert row["error"] is not None
+
+
 # -- `_extract` treats the archive as hostile -------------------------------
 
 
@@ -284,6 +360,37 @@ def test_extract_refuses_anything_that_could_escape_the_upload_folder(conn, fold
     assert not os.path.exists(
         os.path.join(conftest.TMP_DIR, "Streaming_History_Audio_evil.json")
     )
+
+
+def test_extract_refuses_a_name_with_a_slash_even_without_a_backslash(conn, folder):
+    """The three refusal conditions are ORed independently -- a name needs
+    only one of them to be unsafe. This name has a "/" but no "\\" and no
+    "..", and the fnmatch glob's `*` happily spans the embedded slash, so
+    only the traversal check itself stands between this and a write into a
+    subdirectory of `folder` that doesn't exist."""
+    # source: S_sweep.md §3 -- or at history_import.py:183 col 27 (first `or`)
+    zip_path = os.path.join(folder, "export.zip")
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("top/Streaming_History_x/y.json", "[]")
+
+    history_import._extract(folder, zip_path)
+
+    assert os.listdir(folder) == ["export.zip"]
+
+
+def test_extract_refuses_a_name_with_a_backslash_even_without_a_slash(conn, folder):
+    """The mirror of the slash case: a name with only a literal backslash and
+    no "/" or ".." is still refused. On POSIX a lone backslash is just an
+    ordinary filename character, so if the refusal ever slipped, this would
+    silently succeed and leave an oddly-named file behind."""
+    # source: S_sweep.md §3 -- or at history_import.py:183 col 43 (second `or`)
+    zip_path = os.path.join(folder, "export.zip")
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("top/Streaming_History_x\\y.json", "[]")
+
+    history_import._extract(folder, zip_path)
+
+    assert os.listdir(folder) == ["export.zip"]
 
 
 # -- `latest_upload` --------------------------------------------------------
@@ -329,6 +436,33 @@ def test_a_reimport_is_never_the_latest_upload(conn):
     conn.commit()
 
     assert history_import.latest_upload(conn)["id"] == upload
+
+
+def test_latest_upload_picks_the_highest_id_among_two_qualifying_uploads(conn):
+    """The existing "newest" tests each pair one qualifying upload against a
+    row the WHERE clause filters out entirely (corrupt, in-flight, or a
+    reimport) -- none of them puts two genuinely qualifying uploads side by
+    side, so none of them actually exercises ORDER BY ... DESC."""
+    # source: S_sweep.md §3 -- sqlDESC at history_import.py:347
+    older = upload_row(conn, files_parsed=3, folder="/data/older")
+    newer = upload_row(conn, files_parsed=5, folder="/data/newer")
+    conn.commit()
+
+    assert history_import.latest_upload(conn)["id"] == newer
+
+
+# -- `import_rows` -----------------------------------------------------------
+
+
+def test_import_rows_are_ordered_newest_first(conn):
+    # source: S_sweep.md §3 -- sqlDESC at history_import.py:354
+    first = upload_row(conn, folder="/data/a")
+    second = upload_row(conn, folder="/data/b")
+    conn.commit()
+
+    rows = history_import.import_rows(conn)
+
+    assert [r["id"] for r in rows] == [second, first]
 
 
 # -- Coverage, on the two bases (step D split them apart) -------------------
@@ -400,3 +534,144 @@ def test_never_played_counts_library_tracks_only(conn):
     assert counts["tracks_never_played"] == 1
     assert counts["library_tracks_total"] == 1
     assert counts["tracks_total"] == 2
+
+
+def test_distinct_and_known_and_in_library_uris_count_uris_not_plays(conn):
+    """Three separate COUNT(DISTINCT ...) queries collapse to plain COUNT(*)
+    if the DISTINCT is dropped -- invisible on the existing fixtures because
+    none of them ever play the same uri twice. Two plays of one in-library
+    track is the minimal case that tells "how many uris" apart from "how many
+    plays"."""
+    # source: S_sweep.md §3 -- sqlDISTINCT at history_import.py:373, :376, :384
+    track = builders.make_track(conn)
+    builders.make_membership(conn, track_id=track)
+    builders.make_play(conn, track_id=track)
+    builders.make_play(conn, track_id=track)
+
+    counts = history_import.coverage_counts(conn)
+
+    assert counts["total_plays"] == 2
+    assert counts["distinct_uris"] == 1
+    assert counts["known_uris"] == 1
+    assert counts["in_library_uris"] == 1
+    # These two count plays, not uris, so replaying the one track doubles them.
+    assert counts["known_plays"] == 2
+    assert counts["in_library_plays"] == 2
+
+
+def test_the_play_range_reports_earliest_and_latest_ts(conn):
+    """A separate MIN/MAX query from the one `_parse_folder` computes during
+    an import -- this one reads straight off the `play` table, and nothing
+    exercised it before."""
+    # source: S_sweep.md §3 -- sqlMIN/sqlMAX at history_import.py:393
+    builders.make_play(conn, uri="spotify:track:a", ts="2020-01-01T00:00:00Z")
+    builders.make_play(conn, uri="spotify:track:b", ts="2024-06-01T00:00:00Z")
+
+    counts = history_import.coverage_counts(conn)
+
+    assert counts["play_range_start"] == "2020-01-01T00:00:00Z"
+    assert counts["play_range_end"] == "2024-06-01T00:00:00Z"
+
+
+def test_coverage_percentages_scale_and_round_correctly(conn):
+    """The zero-division guard is already covered; this is the arithmetic
+    itself -- both the *100 scaling and the round-to-one-decimal-place --
+    with numbers chosen so a wrong multiplier or a wrong rounding precision
+    each produce a value that disagrees with the correct one."""
+    # source: S_sweep.md §3 -- num at history_import.py:403, :406
+    in_library = builders.make_track(conn)
+    builders.make_membership(conn, track_id=in_library)
+    known_only = builders.make_track(conn)
+
+    builders.make_play(conn, track_id=in_library)
+    builders.make_play(conn, track_id=known_only)
+    builders.make_play(conn, uri="spotify:track:never-seen")
+
+    counts = history_import.coverage_counts(conn)
+
+    assert counts["known_pct"] == 66.7
+    assert counts["in_library_pct"] == 33.3
+
+
+def test_tracks_never_played_only_counts_a_tracks_own_absence_of_plays(conn):
+    """The subquery correlates on `x.track_id = t.track_id` and joins on
+    `p.spotify_track_uri = x.uri`. Either `=` becoming `<>` turns "this
+    specific track has no matching play" into "some other track has (or
+    hasn't) a play", which the single-played-track fixture above can't tell
+    apart -- it needs at least two played tracks with different uris before
+    a mismatched join can accidentally find a match."""
+    # source: S_sweep.md §3 -- sql= at history_import.py:421 and :422
+    played_a = builders.make_track(conn)
+    builders.make_membership(conn, track_id=played_a)
+    builders.make_play(conn, track_id=played_a)
+
+    played_b = builders.make_track(conn)
+    builders.make_membership(conn, track_id=played_b)
+    builders.make_play(conn, track_id=played_b)
+
+    unplayed = builders.make_track(conn)
+    builders.make_membership(conn, track_id=unplayed)
+
+    counts = history_import.coverage_counts(conn)
+
+    assert counts["tracks_never_played"] == 1
+
+
+# -- app.py: /dev/import and its two POST routes -----------------------------
+
+
+def test_the_import_page_toggles_the_reimport_button_on_has_upload(client, conn):
+    """`has_upload` decides whether the Re-import button is disabled. Without
+    a usable upload it must be disabled; with one, it must not be."""
+    # source: S_sweep.md §3 -- isnot at app.py:322
+    without = client.get("/dev/import")
+    assert b'id="reimport-btn" type="button" disabled' in without.data
+
+    upload_row(conn, files_parsed=3)
+    conn.commit()
+
+    with_upload = client.get("/dev/import")
+    assert b'id="reimport-btn" type="button" disabled' not in with_upload.data
+
+
+def _real_zip_upload():
+    """A genuine (if trivial) export zip -- valid enough for `_extract` to
+    read cleanly end to end, unlike `_zip_upload()`'s fake bytes in
+    test_routes.py, which is fine there because it never gets past the slot
+    check."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("Streaming_History_Audio_2024.json", "[]")
+    buf.seek(0)
+    return {
+        "data": {"file": (buf, "export.zip")},
+        "content_type": "multipart/form-data",
+    }
+
+
+def test_the_import_route_reports_started_once_the_job_claims_the_slot(
+    client, run_jobs_inline
+):
+    """The route's own literal response, not the hook's -- there is no
+    authentication guard shadowing this one the way there is for the
+    roundtrip/backfill/snapshot starters (S_sweep.md §3.4 B)."""
+    # source: S_sweep.md §3 -- true at app.py:830
+    resp = client.post("/api/history/import", **_real_zip_upload())
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
+    assert run_jobs_inline == ["history_import"]
+
+
+def test_the_reimport_route_reports_started_once_the_job_claims_the_slot(
+    client, conn, run_jobs_inline
+):
+    # source: S_sweep.md §3 -- true at app.py:840
+    upload_row(conn, files_parsed=3, folder=os.path.join(conftest.TMP_DIR, "reimport-src"))
+    conn.commit()
+
+    resp = client.post("/api/history/reimport")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
+    assert run_jobs_inline == ["history_import"]

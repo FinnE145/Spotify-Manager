@@ -436,6 +436,84 @@ representative picks (`members[0]`, `sorted(members)[0]`) where `[1]` survives.
 
 ---
 
+### 3.5 Round 1 — 71 survivors closed, by feature domain
+
+2026-08-24/26. Three triage agents plus the master session. **59 gap — fixed,
+9 equivalent, 3 gap — recorded, not fixed.** 40 tests added; the suite went
+983 → 1023 passed, 3 skipped.
+
+| domain | test file | survivors | fixed | equiv | recorded |
+|---|---|---:|---:|---:|---:|
+| org canvas (`app.py` ×17, `grouping.py` ×2) | `test_grouping_canvas.py` | 19 | 18 | 1 | — |
+| play-history import (`history_import.py` ×27, `app.py` ×3) | `test_history_import.py` | 30 | 23 | 4 | 3 |
+| scrobbling (`scrobble.py` ×18) | `test_scrobble.py` | 18 | 15 | 3 | — |
+| auth + app-wide hooks (`app.py` ×4) | `test_routes.py` | 4 | 3 | 1 | — |
+
+**The partition rule needed correcting, and this is the finding.** §7.2 says
+partition by test-file ownership, and the first plan read that as *per module*,
+with `app.py`'s 50 survivors as one or two agents' work. They are not one job:
+they are nine feature clusters, and each cluster's fix belongs in the test file
+that owns the **feature** — `test_roundtrip.py`, `test_artists.py`,
+`test_grouping_canvas.py` — never a file owning `app.py`. Splitting `app.py` by
+line range would have put two agents in files a *third* agent already owned,
+which is the exact collision §7.2 exists to prevent. By operator the 50 look
+homogeneous (21 are `{"ok": True}` → `False`), and that is the trap: the shared
+shape is the *question*, not the answer. Twenty-one endpoints, twenty-one
+different things to know.
+
+**What the survivors turned out to be:**
+
+- **The canvas write endpoints asserted nothing at all.** Card POST/PATCH and
+  label PATCH/DELETE were reached only by `routes_catalog.py`'s non-5xx sweep,
+  so all twelve `WHERE id = ? AND board_id = ?` mutants lived. One test per
+  endpoint kills all four of its mutants: two rows on one board disagree with
+  every variant at once — `id <> ?` hits the other row, `OR` hits both,
+  `board_id <> ?` hits neither. Verified empirically, per §3's trap 3, not
+  reasoned.
+- **`scoring_failed` had zero coverage.** The name appeared nowhere in `tests/`
+  — only in `base.html`. It is the sole visible signal of a failing background
+  recompute (async-recompute-N §7.1), and inverting it (banner on success,
+  silence on failure) broke nothing. Now asserted both ways.
+- **`app.py:80` is not the login guard.** It is `refresh_scores`, which guards
+  on the same `_PUBLIC_ENDPOINTS` set and reads identically; the login guard is
+  `:63` and its mutant was already killed. Inverting `:80` is a staleness bug,
+  not an auth hole — worth recording precisely because the two lines are
+  indistinguishable at a glance in a survivor row.
+- **Three `history_import.py` survivors are commit-*cadence* only**
+  (`_COMMIT_EVERY` and the `pending` comparison). Every checkpoint writes
+  absolute totals and the final one always fires, so the stored `play_import`
+  row is byte-identical either way. `recorded, not fixed`: reaching them needs
+  a monkeypatch on internal commit calls, which tests the harness, not the rule.
+
+**A new equivalent shape, for sweep #3's `generate.py`.** `scrobble.py:235/237`
+are mutations *inside a docstring* that happens to quote SQL — same root cause
+as §3.1's SQL-comment equivalents, but §3.1's fix clips `--` comments and does
+not see triple-quoted strings. Cheap to eliminate at the generator; left alone
+here because changing `generate.py` mid-step would invalidate the measurement.
+
+**Two `LIMIT 1` → `LIMIT 2` survivors are equivalent for the same reason** and
+were found independently by two agents (`scrobble.py:348`,
+`history_import.py:347`): the statement is paired with `.fetchone()`, which
+reads the first row whatever the bound. Worth naming as a class, not a pair.
+
+**The gate held, and was checked.** Every one of the agents' 67 returned
+verdicts was re-run by the master session — 56 kill proofs to `PASS`, 11
+claimed equivalents still `SURVIVED`. Nothing was overstated. Two details made
+that cheap enough to be routine: `verify.py --work` defaults to a **single
+shared path** (`$TMPDIR/symr-mutation`), so parallel agents must each be given
+their own or they corrupt each other; and the master's own re-run driver has to
+bucket jobs **per thread**, not by `idx % N` across a pool — the same race
+`sweep.py` and then `verify.py` were each fixed for, which is now three
+appearances of one bug and an argument for putting the bucketing in one place.
+
+**The briefs also had to forbid shared-fixture edits.** §7.2's partition keeps
+two agents out of one *test* file but says nothing about `conftest.py`,
+`builders.py`, `fakes.py` or `routes_catalog.py`, which any of them might
+reasonably extend. Agents were told to define helpers locally instead. No
+collisions occurred; the rule belongs in §7.3 for the next round.
+
+---
+
 ## 4. What was added
 
 **§3.4 is complete.** **39 new test cases**, taking the suite from 944 to 983.

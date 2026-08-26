@@ -1090,3 +1090,280 @@ def test_the_toggle_returns_the_full_status_payload(client, conn):
 
     assert resp.get_json()["enabled"] is False
     assert set(resp.get_json()) == set(scrobble.index_data(conn))
+
+
+# -- Mutation-sweep S survivors (docs/codebase-health/S_survivors.md) --------
+
+
+def test_start_spawns_a_daemon_thread_targeting_the_poll_loop(monkeypatch):
+    # source: S_sweep.md §3 -- true at scrobble.py:54
+    #
+    # start() is never actually called under test elsewhere -- test_serve.py
+    # monkeypatches it away entirely -- so its own body (which thread, and
+    # daemon=True vs False) had no coverage. A non-daemon thread would block
+    # process shutdown, which is exactly the failure mode daemon=True exists
+    # to prevent (serve.py's SIGTERM handler does not join this thread).
+    # threading.Thread itself is faked rather than actually started, so this
+    # never spawns a real background loop against the test DB.
+    captured = {}
+
+    class _FakeThread:
+        def __init__(self, target=None, daemon=None):
+            captured["target"] = target
+            captured["daemon"] = daemon
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr(scrobble.threading, "Thread", _FakeThread)
+
+    scrobble.start()
+
+    assert captured["daemon"] is True
+    assert captured["target"] is scrobble._loop
+    assert captured["started"] is True
+
+
+def test_backoff_expires_exactly_at_its_own_timestamp(fake_spotify, conn):
+    # source: S_sweep.md §3 -- cmp< at scrobble.py:120
+    #
+    # `jobs.now_iso() < backoff_until` -- at the exact instant backoff_until
+    # names, backoff has just ended and polling should resume. The existing
+    # backoff test only checks a timestamp safely *after* now, which cannot
+    # tell `<` from `<=`: both agree there. Only the boundary itself, where
+    # now equals backoff_until exactly, can distinguish "expired" from "still
+    # backing off by one more interval".
+    db.set_meta(conn, "scrobble_backoff_until", jobs.now_iso())  # == FROZEN_NOW
+    conn.commit()
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    assert fake_spotify.calls != []  # backoff has expired; the request fires
+
+
+def test_the_poll_reads_at_most_fifty_items_per_request(fake_spotify, conn):
+    # source: S_sweep.md §3 -- num at scrobble.py:137
+    #
+    # Pins the literal `limit=50` passed to current_user_recently_played --
+    # §1.4/§4.2's "50 items" is load-bearing (the interval's overflow
+    # arithmetic assumes it), and nothing previously exercised the fake with
+    # more than 50 seeded items, so a fixture with fewer items couldn't tell
+    # limit=50 from limit=51: FakeSpotify.current_user_recently_played slices
+    # `self.recently_played[:limit]`, which only differs from a 50-slice once
+    # more than 50 items exist to slice from.
+    for n in range(55):
+        fake_spotify.add_recently_played(
+            fakes.spotify_track(f"t{n}", duration_ms=200_000),
+            f"2026-06-15T09:{54 - n:02d}:00.000Z",
+        )
+
+    scrobble.poll(conn)
+
+    assert last_poll(conn)["items_read"] == 50
+
+
+def test_the_db_predecessor_query_picks_the_nearest_earlier_play(fake_spotify, conn):
+    # source: S_sweep.md §3 -- sqlMAX at scrobble.py:214
+    #
+    # `SELECT MAX(ts) ... WHERE ts < ?` must pick the *nearest* earlier play,
+    # not the earliest one. The existing DB-predecessor test seeds only one
+    # qualifying row, so MAX and MIN agree there and cannot tell them apart --
+    # this needs two qualifying rows with different ts. duration_ms is set
+    # far above either candidate gap so min(gap, duration) reports the gap
+    # itself in both cases, rather than collapsing them to the same clamp.
+    # source='scrobble' keeps §6.1's export-cutover guard out of this.
+    builders.make_play(conn, uri=uri("far"), source="scrobble", ts="2026-06-15T08:00:00Z")
+    builders.make_play(conn, uri=uri("near"), source="scrobble", ts="2026-06-15T08:50:00Z")
+    item = fakes.spotify_track("t-new", duration_ms=10_000_000)
+    fake_spotify.add_recently_played(item, "2026-06-15T09:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    ms_played = conn.execute(
+        "SELECT ms_played FROM play WHERE spotify_track_uri = ?", (item["uri"],)
+    ).fetchone()[0]
+    assert ms_played == 600_000  # gap to the *nearer* (08:50) row, not the far one
+
+
+def test_the_db_predecessor_query_excludes_a_play_at_the_exact_same_second(fake_spotify, conn):
+    # source: S_sweep.md §3 -- sql< at scrobble.py:214
+    #
+    # The predicate is `ts < ?`, strictly less-than: a stored play at exactly
+    # this item's truncated second is not its predecessor. `<=` would let it
+    # in, deriving a zero gap and silently crediting the full duration instead
+    # of the true (larger) gap to the actual earlier row. source='scrobble'
+    # here keeps §6.1's export-cutover guard (a separate rule, keyed off
+    # source='export') from also suppressing the insert this test needs.
+    builders.make_play(conn, uri=uri("same-second"), source="scrobble", ts="2026-06-15T09:00:00Z")
+    builders.make_play(conn, uri=uri("earlier"), source="scrobble", ts="2026-06-15T08:00:00Z")
+    item = fakes.spotify_track("t-new", duration_ms=10_000_000)
+    fake_spotify.add_recently_played(item, "2026-06-15T09:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    ms_played = conn.execute(
+        "SELECT ms_played FROM play WHERE spotify_track_uri = ?", (item["uri"],)
+    ).fetchone()[0]
+    assert ms_played == 3_600_000  # the same-second row is excluded; falls to 08:00
+
+
+def test_a_gap_of_one_millisecond_is_not_treated_as_non_positive(fake_spotify, conn):
+    # source: S_sweep.md §3 -- num at scrobble.py:223
+    #
+    # `if gap_ms <= 0` is the non-positive-gap guard; a gap of exactly 1ms is
+    # positive and must derive ms_played = min(gap, duration), not fall back
+    # to the full duration. The existing non-positive-gap test only covers
+    # gap_ms == 0, which agrees with both `<= 0` and `<= 1`.
+    newer = fakes.spotify_track("t-new", duration_ms=200_000)
+    older = fakes.spotify_track("t-old", duration_ms=200_000)
+    fake_spotify.add_recently_played(newer, "2026-06-15T10:00:00.001Z")
+    fake_spotify.add_recently_played(older, "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    ms_played = conn.execute(
+        "SELECT ms_played FROM play WHERE spotify_track_uri = ?", (newer["uri"],)
+    ).fetchone()[0]
+    assert ms_played == 1
+
+
+def test_gap_warnings_comparison_point_is_the_newest_scrobble_not_the_oldest(fake_spotify, conn):
+    # source: S_sweep.md §3 -- sqlMAX at scrobble.py:242
+    #
+    # `prev_newest` is `MAX(ts) WHERE source = 'scrobble'`. Every existing
+    # gap_warning test seeds at most one prior scrobble row, so MAX and MIN
+    # agree there. With two scrobble rows and the polled item's timestamp
+    # strictly between them, MAX (correct) says no gap while MIN (the
+    # mutant) would report a spurious one.
+    builders.make_play(conn, uri=uri("old-scrobble"), source="scrobble", ts="2026-06-15T08:00:00Z")
+    builders.make_play(conn, uri=uri("recent-scrobble"), source="scrobble", ts="2026-06-15T09:30:00Z")
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T09:15:00.000Z")  # between the two
+
+    scrobble.poll(conn)
+
+    assert last_poll(conn)["gap_warning"] == 0
+
+
+def test_the_export_cutover_uses_the_newest_export_row_not_the_oldest(fake_spotify, conn):
+    # source: S_sweep.md §3 -- sqlMAX at scrobble.py:260
+    #
+    # `export_through` is `MAX(ts) WHERE source = 'export'`. Every existing
+    # §6.1 test seeds at most one export row, so MAX and MIN agree there. With
+    # two export rows and the polled item's ts strictly between them, MAX
+    # (correct) skips the insert while MIN (the mutant) would not, silently
+    # re-admitting a play the export already covers.
+    builders.make_play(conn, uri=uri("old-export"), source="export", ts="2026-06-15T09:00:00Z")
+    builders.make_play(conn, uri=uri("new-export"), source="export", ts="2026-06-15T11:00:00Z")
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")  # between the two
+
+    scrobble.poll(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM play WHERE source='scrobble'").fetchone()[0] == 0
+
+
+def test_rows_inserted_counts_exactly_one_per_row(fake_spotify, conn):
+    # source: S_sweep.md §3 -- num at scrobble.py:298
+    #
+    # `rows_inserted += 1` per actually-inserted row. The only existing
+    # assertion on this column is the zero case (nothing inserted), where
+    # `+= 1` and `+= 2` are indistinguishable -- the line never executes.
+    # This needs a poll that inserts exactly one row and checks the stored
+    # count is exactly 1, not 2.
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")
+
+    scrobble.poll(conn)
+
+    assert last_poll(conn)["rows_inserted"] == 1
+
+
+def test_total_scrobbles_excludes_more_non_scrobble_rows_than_scrobble_rows(conn):
+    # source: S_sweep.md §3 -- sql= at scrobble.py:331
+    #
+    # `COUNT(*) WHERE source = 'scrobble'`. The existing total_scrobbles test
+    # seeds exactly one row of each source, so `= 'scrobble'` (count 1) and
+    # `<> 'scrobble'` (also count 1) coincidentally agree. Two non-scrobble
+    # rows against one scrobble row breaks that tie.
+    builders.make_play(conn, uri=uri("e1"), source="export", ts="2026-06-14T00:00:00Z")
+    builders.make_play(conn, uri=uri("e2"), source="export", ts="2026-06-14T01:00:00Z")
+    builders.make_play(conn, uri=uri("s1"), source="scrobble", ts="2026-06-15T00:00:00Z")
+
+    assert scrobble.index_data(conn)["total_scrobbles"] == 1
+
+
+def test_gap_warning_count_excludes_more_unflagged_polls_than_flagged(conn):
+    # source: S_sweep.md §3 -- sql= at scrobble.py:334
+    #
+    # `COUNT(*) WHERE gap_warning = 1`. The existing test seeds exactly one
+    # flagged and one unflagged poll, so `= 1` (count 1) and `<> 1` (also
+    # count 1) coincidentally agree. Two flagged rows against one unflagged
+    # row breaks that tie.
+    conn.execute(
+        "INSERT INTO scrobble_poll (started_at, gap_warning) VALUES ('2026-06-15T09:00:00Z', 1)"
+    )
+    conn.execute(
+        "INSERT INTO scrobble_poll (started_at, gap_warning) VALUES ('2026-06-15T10:00:00Z', 1)"
+    )
+    conn.execute(
+        "INSERT INTO scrobble_poll (started_at, gap_warning) VALUES ('2026-06-15T11:00:00Z', 0)"
+    )
+    conn.commit()
+
+    assert scrobble.index_data(conn)["gap_warning_count"] == 2
+
+
+def test_last_poll_row_is_the_most_recent_poll_not_the_first(fake_spotify, conn):
+    # source: S_sweep.md §3 -- sqlDESC at scrobble.py:348
+    #
+    # `_last_poll_row` is `ORDER BY id DESC LIMIT 1` -- the page's "Last poll"
+    # line must show the newest poll, not the first one ever. Nothing
+    # previously drove two polls through scrobble.index_data()["last_poll"]
+    # and checked which one won; `ASC` would pin the page to the very first
+    # poll forever, silently going stale on every later one.
+    fake_spotify.fail("current_user_recently_played", fakes.not_found())
+    scrobble.poll(conn)  # first poll: records an error
+
+    track = fakes.spotify_track("t1", duration_ms=200_000)
+    fake_spotify.add_recently_played(track, "2026-06-15T10:00:00.000Z")
+    scrobble.poll(conn)  # second poll: succeeds
+
+    last = scrobble.index_data(conn)["last_poll"]
+    assert last["error"] is None
+
+
+def test_recent_plays_resolves_track_name_through_played_uri_track(fake_spotify, conn):
+    # source: S_sweep.md §3 -- sql= at scrobble.py:358 and scrobble.py:359
+    #
+    # `_recent_plays` joins play -> played_uri_track -> track to resolve a
+    # play's own track_id/name. With exactly one track in the library whose
+    # own uri equals the play's uri, played_uri_track has exactly one row
+    # that DOES equal the play's uri: breaking either `=` into `<>` (at 358,
+    # the play->view join, or at 359, the view->track join) excludes that one
+    # true match and leaves nothing else to accidentally satisfy `<>`, so the
+    # resolved columns fall to NULL under either mutant alone.
+    track_id = builders.make_track(conn, "t1")
+    track_uri = conn.execute(
+        "SELECT uri FROM track WHERE track_id = ?", (track_id,)
+    ).fetchone()["uri"]
+    builders.make_play(conn, uri=track_uri, source="scrobble", ts="2026-06-15T10:00:00Z")
+
+    rows = scrobble.index_data(conn)["recent_plays"]
+    assert rows[0]["track_id"] == track_id
+
+
+def test_a_tied_timestamp_breaks_by_id_descending(conn):
+    # source: S_sweep.md §3 -- sqlDESC at scrobble.py:360
+    #
+    # `_recent_plays` orders `ts DESC, id DESC`. Two plays at the identical
+    # second must break the tie by the more-recently-inserted (higher) id
+    # first; `id ASC` would silently reverse tied pairs on every page render.
+    tied_ts = "2026-06-15T10:00:00Z"
+    builders.make_play(conn, uri=uri("first"), ts=tied_ts)
+    builders.make_play(conn, uri=uri("second"), ts=tied_ts)
+
+    rows = scrobble.index_data(conn)["recent_plays"]
+    assert [r["spotify_track_uri"] for r in rows] == [uri("second"), uri("first")]

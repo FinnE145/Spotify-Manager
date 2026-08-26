@@ -299,3 +299,135 @@ def test_card_note_never_appears_in_the_export_text(app, client, conn):
 
     assert resp.status_code == 200
     assert "a distinctive secret note xyz123" not in resp.get_json()["text"]
+
+
+def test_export_cutoff_defaults_to_300_not_301(app, client, conn):
+    # source: S_sweep.md §3 -- num at app.py:1069. `export()`'s
+    # `float(request.args.get("cutoff", 300))` default is only observable
+    # through a request that omits `cutoff` entirely -- and only at a
+    # distance where 300 and 301 disagree about whether the link holds
+    # (group_cards breaks a link only when the distance is strictly greater
+    # than cutoff, so 301 sits exactly on the 301-default's boundary and
+    # strictly outside the real 300 one).
+    builders.make_card(conn, x=0.0, y=0.0, display_name="Solo")
+    builders.make_label(conn, x=301.0, y=0.0, text="Far")
+    conn.commit()
+
+    resp = client.get("/api/export")
+
+    text = resp.get_json()["text"]
+    ungrouped_section = text.split("## Ungrouped")[1].split("## Unplaced")[0]
+    assert "Solo" in ungrouped_section
+
+
+# -- The write routes: /api/card and /api/label must scope every write to the
+# named row on the default board, not "the first row" or "every row on the
+# board" -- and their unconditional `{"ok": True}` ack is meaningful only once
+# the write itself is proven, since the same literal is returned whether the
+# UPDATE/DELETE actually matched a row or not.
+
+
+def test_update_card_scopes_the_write_to_the_named_card_and_board(app, client, conn):
+    # source: S_sweep.md §3 -- sql= at app.py:1003 (col 66, `id = ?` ->
+    # `id <> ?`), sqlAND at app.py:1003 (col 70, `AND` -> `OR`), sql= at
+    # app.py:1003 (col 83, `board_id = ?` -> `board_id <> ?`), true at
+    # app.py:1007 (`{"ok": True}` -> `{"ok": False}`). Two cards on the one
+    # (default) board disagree with all three SQL mutants at once: `id <> ?`
+    # updates the *other* card instead of the named one, `OR` updates *both*
+    # (they share a board_id), and `board_id <> ?` updates *neither*.
+    a_id = builders.make_card(conn, x=1.0, y=2.0, display_name="A")
+    b_id = builders.make_card(conn, x=3.0, y=4.0, display_name="B")
+    conn.commit()
+
+    resp = client.post(f"/api/card/{a_id}", json={"placement": "placed", "x": 50.0, "y": 60.0})
+
+    assert resp.get_json() == {"ok": True}
+    a_row = conn.execute("SELECT x, y FROM card WHERE id = ?", (a_id,)).fetchone()
+    b_row = conn.execute("SELECT x, y FROM card WHERE id = ?", (b_id,)).fetchone()
+    assert (a_row["x"], a_row["y"]) == (50.0, 60.0)
+    assert (b_row["x"], b_row["y"]) == (3.0, 4.0)
+
+
+def test_patch_card_scopes_the_write_to_the_named_card_and_board(app, client, conn):
+    # source: S_sweep.md §3 -- sql= at app.py:1021 (col 63, `id = ?` ->
+    # `id <> ?`), sqlAND at app.py:1021 (col 67, `AND` -> `OR`), sql= at
+    # app.py:1021 (col 80, `board_id = ?` -> `board_id <> ?`), true at
+    # app.py:1024 (`{"ok": True}` -> `{"ok": False}`). Same reasoning as the
+    # POST route above, against patch_card's dynamically built `fields`/
+    # `params` UPDATE.
+    a_id = builders.make_card(conn, note="old-a")
+    b_id = builders.make_card(conn, note="old-b")
+    conn.commit()
+
+    resp = client.patch(f"/api/card/{a_id}", json={"note": "new-a"})
+
+    assert resp.get_json() == {"ok": True}
+    a_note = conn.execute("SELECT note FROM card WHERE id = ?", (a_id,)).fetchone()["note"]
+    b_note = conn.execute("SELECT note FROM card WHERE id = ?", (b_id,)).fetchone()["note"]
+    assert a_note == "new-a"
+    assert b_note == "old-b"
+
+
+def test_update_label_scopes_the_write_to_the_named_label_and_board(app, client, conn):
+    # source: S_sweep.md §3 -- sql= at app.py:1051 (col 64, `id = ?` ->
+    # `id <> ?`), sqlAND at app.py:1051 (col 68, `AND` -> `OR`), sql= at
+    # app.py:1051 (col 81, `board_id = ?` -> `board_id <> ?`), true at
+    # app.py:1054 (`{"ok": True}` -> `{"ok": False}`). Same reasoning again,
+    # against update_label's PATCH.
+    a_id = builders.make_label(conn, text="old-a")
+    b_id = builders.make_label(conn, text="old-b")
+    conn.commit()
+
+    resp = client.patch(f"/api/label/{a_id}", json={"text": "new-a"})
+
+    assert resp.get_json() == {"ok": True}
+    a_text = conn.execute("SELECT text FROM label WHERE id = ?", (a_id,)).fetchone()["text"]
+    b_text = conn.execute("SELECT text FROM label WHERE id = ?", (b_id,)).fetchone()["text"]
+    assert a_text == "new-a"
+    assert b_text == "old-b"
+
+
+def test_delete_label_scopes_the_delete_to_the_named_label_and_board(app, client, conn):
+    # source: S_sweep.md §3 -- sql= at app.py:1060 (col 40, `id = ?` ->
+    # `id <> ?`), sqlAND at app.py:1060 (col 44, `AND` -> `OR`), sql= at
+    # app.py:1060 (col 57, `board_id = ?` -> `board_id <> ?`), true at
+    # app.py:1063 (`{"ok": True}` -> `{"ok": False}`). `id <> ?` deletes the
+    # *other* label and leaves the named one; `OR` deletes both (same
+    # board_id); `board_id <> ?` deletes neither -- two labels on the one
+    # board disagree with all three.
+    a_id = builders.make_label(conn)
+    b_id = builders.make_label(conn)
+    conn.commit()
+
+    resp = client.delete(f"/api/label/{a_id}")
+
+    assert resp.get_json() == {"ok": True}
+    remaining_ids = {row["id"] for row in conn.execute("SELECT id FROM label")}
+    assert a_id not in remaining_ids
+    assert b_id in remaining_ids
+
+
+def test_a_weight_tie_between_label_and_card_the_label_still_wins_by_kind_not_id(conn):
+    # source: S_sweep.md §3 -- num at grouping.py:17 (col 51, the
+    # label-before-card sort weight `0 if n["kind"] == "label" else 1` ->
+    # `1 if n["kind"] == "label" else 1`, which erases the kind-based tie
+    # priority entirely and leaves both kinds sharing weight 1). The existing
+    # test_a_tied_label_and_card_the_label_wins does not kill this: its
+    # label id "L" happens to sort before its rival card's id "c2" in plain
+    # string order, so an id-only tie-break reaches the identical answer by
+    # coincidence and the mutation goes unobserved. Here the label's id "z"
+    # sorts *after* the rival card's id "a", so the kind-based and
+    # id-based tie-breaks disagree -- confirmed empirically before writing
+    # this (real code: target groups under "z"; under the mutant, target's
+    # first-tried candidate becomes the rival card "a", which resolves to
+    # its own label "m", and target follows it there instead).
+    cutoff = 15
+    target = card("t", 0, 0)
+    rival = card("a", 0, 10)  # dist 10 from target, tied with the label
+    lbl_z = label("z", 10, 0)  # dist 10 from target; id sorts after rival's "a"
+    lbl_m = label("m", 0, 20)  # dist 10 from rival; dist 20 from target (out of cutoff)
+
+    result = group_cards([target, rival], [lbl_z, lbl_m], cutoff)
+
+    assert target in group_for(result, "z")
+    assert rival in group_for(result, "m")

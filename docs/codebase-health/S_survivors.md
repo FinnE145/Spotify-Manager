@@ -1,6 +1,6 @@
 # S sweep — the untriaged survivors
 
-**212 survivors still owed a verdict**, from the corrected sweep of
+**141 survivors still owed a verdict**, from the corrected sweep of
 2026-08-24 (`S_sweep.md` §2.4). Everything §3.1–§3.4 already ruled on is
 excluded, so this file is exactly the remaining work.
 
@@ -20,15 +20,28 @@ is what relocates a survivor afterwards.
 
 Regenerate with the snippet in `S_handoff.md` if the sweep is ever re-run.
 
+---
 
-## `app.py` — 50 survivors
+**Round 1 closed 71 of the original 212** (2026-08-24/26), and their rows are
+gone from this file. Three sections went entirely — `history_import.py` (27),
+`scrobble.py` (18), `grouping.py` (2) — and 24 of `app.py`'s 50 went with them,
+because `app.py`'s survivors are **not one module's work**: they are nine
+feature clusters whose fixes land in the test file that owns the *feature*, not
+one that owns `app.py`. See `S_sweep.md` §3.5. The partition rule is therefore
+**test-file ownership by feature domain** (spec §7.2's rule, applied to the
+domain rather than the module); what remains here is still listed by module,
+so read it against §3.5's domain table before assigning anyone a batch.
+
+Every verdict from round 1 was re-verified by the master session: 67 of 67
+reproduced — 56 kill proofs re-run to `PASS`, 11 claimed equivalents re-run
+and still `SURVIVED`.
+
+
+## `app.py` — 26 survivors
 
 | line | col | op | before → after |
 |---:|---:|---|---|
 | 31 | 15 | `num` | `_LISTING_CAP = 50`<br>→ `_LISTING_CAP = 51` |
-| 80 | 28 | `in` | `if request.endpoint in _PUBLIC_ENDPOINTS:`<br>→ `if request.endpoint not in _PUBLIC_ENDPOINTS:` |
-| 95 | 48 | `eq` | `"scoring_failed": status["outcome"] == "error",`<br>→ `"scoring_failed": status["outcome"] != "error",` |
-| 322 | 58 | `isnot` | `has_upload=history_import.latest_upload(conn) is not None,`<br>→ `has_upload=history_import.latest_upload(conn) is None,` |
 | 419 | 59 | `num` | `song_id = canonical.groups_for_track(conn, members[0])["song"]`<br>→ `song_id = canonical.groups_for_track(conn, members[1])["song"]` |
 | 426 | 87 | `cmp<` | `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) < 2:`<br>→ `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) <= 2:` |
 | 426 | 89 | `num` | `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) < 2:`<br>→ `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) < 3:` |
@@ -36,15 +49,11 @@ Regenerate with the snippet in `S_handoff.md` if the sweep is ever re-run.
 | 563 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
 | 615 | 73 | `sql=` | `conn.execute("DELETE FROM pending_tier_review WHERE track_id = ?", (track_id,))`<br>→ `conn.execute("DELETE FROM pending_tier_review WHERE track_id <> ?", (track_id,))` |
 | 655 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 741 | 38 | `num` | `state = secrets.token_urlsafe(32)`<br>→ `state = secrets.token_urlsafe(33)` |
-| 761 | 52 | `false` | `auth_manager.get_access_token(code, as_dict=False)`<br>→ `auth_manager.get_access_token(code, as_dict=True)` |
 | 772 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 780 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 788 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 807 | 48 | `or` | `playlist_ids = body.get("playlist_ids") or []`<br>→ `playlist_ids = body.get("playlist_ids") and []` |
 | 812 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 830 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
-| 840 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 861 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 882 | 46 | `or` | `for entry in (body.get("aliases") or [])`<br>→ `for entry in (body.get("aliases") and [])` |
 | 884 | 36 | `and` | `if not pairs or not all(uri and track_id for uri, track_id in pairs):`<br>→ `if not pairs or not all(uri or track_id for uri, track_id in pairs):` |
@@ -58,23 +67,6 @@ Regenerate with the snippet in `S_handoff.md` if the sweep is ever re-run.
 | 952 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 980 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
 | 990 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 1003 | 66 | `sql=` | `"UPDATE card SET placement = ?, x = ?, y = ? WHERE id = ? AND board_id = ?",`<br>→ `"UPDATE card SET placement = ?, x = ?, y = ? WHERE id <> ? AND board_id = ?",` |
-| 1003 | 70 | `sqlAND` | `"UPDATE card SET placement = ?, x = ?, y = ? WHERE id = ? AND board_id = ?",`<br>→ `"UPDATE card SET placement = ?, x = ?, y = ? WHERE id = ? OR board_id = ?",` |
-| 1003 | 83 | `sql=` | `"UPDATE card SET placement = ?, x = ?, y = ? WHERE id = ? AND board_id = ?",`<br>→ `"UPDATE card SET placement = ?, x = ?, y = ? WHERE id = ? AND board_id <> ?",` |
-| 1007 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 1021 | 63 | `sql=` | `f"UPDATE card SET {', '.join(fields)} WHERE id = ? AND board_id = ?", params`<br>→ `f"UPDATE card SET {', '.join(fields)} WHERE id <> ? AND board_id = ?", params` |
-| 1021 | 67 | `sqlAND` | `f"UPDATE card SET {', '.join(fields)} WHERE id = ? AND board_id = ?", params`<br>→ `f"UPDATE card SET {', '.join(fields)} WHERE id = ? OR board_id = ?", params` |
-| 1021 | 80 | `sql=` | `f"UPDATE card SET {', '.join(fields)} WHERE id = ? AND board_id = ?", params`<br>→ `f"UPDATE card SET {', '.join(fields)} WHERE id = ? AND board_id <> ?", params` |
-| 1024 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 1051 | 64 | `sql=` | `f"UPDATE label SET {', '.join(fields)} WHERE id = ? AND board_id = ?", params`<br>→ `f"UPDATE label SET {', '.join(fields)} WHERE id <> ? AND board_id = ?", params` |
-| 1051 | 68 | `sqlAND` | `f"UPDATE label SET {', '.join(fields)} WHERE id = ? AND board_id = ?", params`<br>→ `f"UPDATE label SET {', '.join(fields)} WHERE id = ? OR board_id = ?", params` |
-| 1051 | 81 | `sql=` | `f"UPDATE label SET {', '.join(fields)} WHERE id = ? AND board_id = ?", params`<br>→ `f"UPDATE label SET {', '.join(fields)} WHERE id = ? AND board_id <> ?", params` |
-| 1054 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 1060 | 40 | `sql=` | `"DELETE FROM label WHERE id = ? AND board_id = ?", (label_id, db.DEFAULT_BOARD_ID)`<br>→ `"DELETE FROM label WHERE id <> ? AND board_id = ?", (label_id, db.DEFAULT_BOARD_ID)` |
-| 1060 | 44 | `sqlAND` | `"DELETE FROM label WHERE id = ? AND board_id = ?", (label_id, db.DEFAULT_BOARD_ID)`<br>→ `"DELETE FROM label WHERE id = ? OR board_id = ?", (label_id, db.DEFAULT_BOARD_ID)` |
-| 1060 | 57 | `sql=` | `"DELETE FROM label WHERE id = ? AND board_id = ?", (label_id, db.DEFAULT_BOARD_ID)`<br>→ `"DELETE FROM label WHERE id = ? AND board_id <> ?", (label_id, db.DEFAULT_BOARD_ID)` |
-| 1063 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 1069 | 50 | `num` | `cutoff = float(request.args.get("cutoff", 300))`<br>→ `cutoff = float(request.args.get("cutoff", 301))` |
 
 ## `canonical_detect.py` — 32 survivors
 
@@ -144,61 +136,6 @@ Regenerate with the snippet in `S_handoff.md` if the sweep is ever re-run.
 | 709 | 7 | `num` | `)[:50]`<br>→ `)[:51]` |
 | 719 | 8 | `neg` | `key=lambda p: -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),`<br>→ `key=lambda p: +playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),` |
 | 720 | 7 | `num` | `)[:50]`<br>→ `)[:51]` |
-
-## `history_import.py` — 27 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 33 | 16 | `num` | `_COMMIT_EVERY = 5000`<br>→ `_COMMIT_EVERY = 5001` |
-| 90 | 33 | `true` | `os.makedirs(folder, exist_ok=True)`<br>→ `os.makedirs(folder, exist_ok=False)` |
-| 112 | 37 | `eq` | `phase="extracting" if action == "upload" else "parsing",`<br>→ `phase="extracting" if action != "upload" else "parsing",` |
-| 142 | 18 | `eq` | `if action == "upload":`<br>→ `if action != "upload":` |
-| 161 | 21 | `isnot` | `if import_id is not None:`<br>→ `if import_id is None:` |
-| 183 | 27 | `or` | `if "/" in name or "\\" in name or ".." in name:`<br>→ `if "/" in name and "\\" in name or ".." in name:` |
-| 183 | 43 | `or` | `if "/" in name or "\\" in name or ".." in name:`<br>→ `if "/" in name or "\\" in name and ".." in name:` |
-| 226 | 45 | `cmp<` | `if range_start is None or ts < range_start:`<br>→ `if range_start is None or ts <= range_start:` |
-| 228 | 43 | `cmp>` | `if range_end is None or ts > range_end:`<br>→ `if range_end is None or ts >= range_end:` |
-| 236 | 23 | `num` | `pending += 1`<br>→ `pending += 2` |
-| 237 | 23 | `cmp>=` | `if pending >= _COMMIT_EVERY:`<br>→ `if pending > _COMMIT_EVERY:` |
-| 278 | 61 | `true` | `{key: row.get(key) for key in _HASH_KEYS}, sort_keys=True, separators=(",", ":")`<br>→ `{key: row.get(key) for key in _HASH_KEYS}, sort_keys=False, separators=(",", ":")` |
-| 295 | 36 | `cmp>=` | `seconds = value / 1000 if value >= 1e11 else value`<br>→ `seconds = value / 1000 if value > 1e11 else value` |
-| 347 | 64 | `sqlDESC` | `"WHERE kind = 'upload' AND files_parsed > 0 ORDER BY id DESC LIMIT 1"`<br>→ `"WHERE kind = 'upload' AND files_parsed > 0 ORDER BY id ASC LIMIT 1"` |
-| 347 | 75 | `sqlnum` | `"WHERE kind = 'upload' AND files_parsed > 0 ORDER BY id DESC LIMIT 1"`<br>→ `"WHERE kind = 'upload' AND files_parsed > 0 ORDER BY id DESC LIMIT 2"` |
-| 354 | 83 | `sqlDESC` | `"rows_inserted, range_start, range_end, error FROM play_import ORDER BY id DESC"`<br>→ `"rows_inserted, range_start, range_end, error FROM play_import ORDER BY id ASC"` |
-| 373 | 22 | `sqlDISTINCT` | `"SELECT COUNT(DISTINCT spotify_track_uri) FROM play"`<br>→ `"SELECT COUNT(spotify_track_uri) FROM play"` |
-| 376 | 38 | `sqlDISTINCT` | `"SELECT COUNT(*) FROM (SELECT DISTINCT p.spotify_track_uri FROM play p "`<br>→ `"SELECT COUNT(*) FROM (SELECT p.spotify_track_uri FROM play p "` |
-| 384 | 38 | `sqlDISTINCT` | `"SELECT COUNT(*) FROM (SELECT DISTINCT p.spotify_track_uri FROM play p "`<br>→ `"SELECT COUNT(*) FROM (SELECT p.spotify_track_uri FROM play p "` |
-| 393 | 37 | `sqlMIN` | `range_row = conn.execute("SELECT MIN(ts) AS lo, MAX(ts) AS hi FROM play").fetchone()`<br>→ `range_row = conn.execute("SELECT MAX(ts) AS lo, MAX(ts) AS hi FROM play").fetchone()` |
-| 393 | 52 | `sqlMAX` | `range_row = conn.execute("SELECT MIN(ts) AS lo, MAX(ts) AS hi FROM play").fetchone()`<br>→ `range_row = conn.execute("SELECT MIN(ts) AS lo, MIN(ts) AS hi FROM play").fetchone()` |
-| 403 | 41 | `num` | `"known_pct": round(known_plays * 100 / total_plays, 1) if total_plays else 0,`<br>→ `"known_pct": round(known_plays * 101 / total_plays, 1) if total_plays else 0,` |
-| 403 | 60 | `num` | `"known_pct": round(known_plays * 100 / total_plays, 1) if total_plays else 0,`<br>→ `"known_pct": round(known_plays * 100 / total_plays, 2) if total_plays else 0,` |
-| 406 | 51 | `num` | `"in_library_pct": round(in_library_plays * 100 / total_plays, 1) if total_plays else 0,`<br>→ `"in_library_pct": round(in_library_plays * 101 / total_plays, 1) if total_plays else 0,` |
-| 406 | 70 | `num` | `"in_library_pct": round(in_library_plays * 100 / total_plays, 1) if total_plays else 0,`<br>→ `"in_library_pct": round(in_library_plays * 100 / total_plays, 2) if total_plays else 0,` |
-| 421 | 66 | `sql=` | `"                  JOIN play p ON p.spotify_track_uri = x.uri "`<br>→ `"                  JOIN play p ON p.spotify_track_uri <> x.uri "` |
-| 422 | 48 | `sql=` | `"                  WHERE x.track_id = t.track_id)"`<br>→ `"                  WHERE x.track_id <> t.track_id)"` |
-
-## `scrobble.py` — 18 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 54 | 42 | `true` | `threading.Thread(target=_loop, daemon=True).start()`<br>→ `threading.Thread(target=_loop, daemon=False).start()` |
-| 120 | 40 | `cmp<` | `if backoff_until and jobs.now_iso() < backoff_until:`<br>→ `if backoff_until and jobs.now_iso() <= backoff_until:` |
-| 137 | 57 | `num` | `response = sp.current_user_recently_played(limit=50)`<br>→ `response = sp.current_user_recently_played(limit=51)` |
-| 214 | 20 | `sqlMAX` | `"SELECT MAX(ts) AS ts FROM play WHERE ts < ?",`<br>→ `"SELECT MIN(ts) AS ts FROM play WHERE ts < ?",` |
-| 214 | 53 | `sql<` | `"SELECT MAX(ts) AS ts FROM play WHERE ts < ?",`<br>→ `"SELECT MAX(ts) AS ts FROM play WHERE ts <= ?",` |
-| 223 | 17 | `num` | `if gap_ms <= 0:`<br>→ `if gap_ms <= 1:` |
-| 235 | 15 | `sqlnum` | `play row (§3), and the poll's own summary fields, all in the one`<br>→ `play row (§4), and the poll's own summary fields, all in the one` |
-| 237 | 29 | `sqlOR` | `counted from each INSERT OR IGNORE's own rowcount, not conn.total_changes,`<br>→ `counted from each INSERT AND IGNORE's own rowcount, not conn.total_changes,` |
-| 242 | 16 | `sqlMAX` | `"SELECT MAX(ts) FROM play WHERE source = 'scrobble'"`<br>→ `"SELECT MIN(ts) FROM play WHERE source = 'scrobble'"` |
-| 260 | 16 | `sqlMAX` | `"SELECT MAX(ts) FROM play WHERE source = 'export'"`<br>→ `"SELECT MIN(ts) FROM play WHERE source = 'export'"` |
-| 298 | 29 | `num` | `rows_inserted += 1`<br>→ `rows_inserted += 2` |
-| 331 | 52 | `sql=` | `"SELECT COUNT(*) FROM play WHERE source = 'scrobble'"`<br>→ `"SELECT COUNT(*) FROM play WHERE source <> 'scrobble'"` |
-| 334 | 66 | `sql=` | `"SELECT COUNT(*) FROM scrobble_poll WHERE gap_warning = 1"`<br>→ `"SELECT COUNT(*) FROM scrobble_poll WHERE gap_warning <> 1"` |
-| 348 | 72 | `sqlDESC` | `"gap_warning, retry_after, error FROM scrobble_poll ORDER BY id DESC LIMIT 1"`<br>→ `"gap_warning, retry_after, error FROM scrobble_poll ORDER BY id ASC LIMIT 1"` |
-| 348 | 83 | `sqlnum` | `"gap_warning, retry_after, error FROM scrobble_poll ORDER BY id DESC LIMIT 1"`<br>→ `"gap_warning, retry_after, error FROM scrobble_poll ORDER BY id DESC LIMIT 2"` |
-| 358 | 47 | `sql=` | `"LEFT JOIN played_uri_track x ON x.uri = p.spotify_track_uri "`<br>→ `"LEFT JOIN played_uri_track x ON x.uri <> p.spotify_track_uri "` |
-| 359 | 41 | `sql=` | `"LEFT JOIN track t ON t.track_id = x.track_id "`<br>→ `"LEFT JOIN track t ON t.track_id <> x.track_id "` |
-| 360 | 34 | `sqlDESC` | `"ORDER BY p.ts DESC, p.id DESC LIMIT ?",`<br>→ `"ORDER BY p.ts DESC, p.id ASC LIMIT ?",` |
 
 ## `db.py` — 12 survivors
 
@@ -291,9 +228,3 @@ Regenerate with the snippet in `S_handoff.md` if the sweep is ever re-run.
 | 146 | 41 | `sqlDESC` | `"FROM auto_group_run ORDER BY id DESC LIMIT 1"`<br>→ `"FROM auto_group_run ORDER BY id ASC LIMIT 1"` |
 | 146 | 52 | `sqlnum` | `"FROM auto_group_run ORDER BY id DESC LIMIT 1"`<br>→ `"FROM auto_group_run ORDER BY id DESC LIMIT 2"` |
 
-## `grouping.py` — 2 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 17 | 51 | `num` | `candidates.sort(key=lambda n: (_dist(node, n), 0 if n["kind"] == "label" else 1, n["id"]))`<br>→ `candidates.sort(key=lambda n: (_dist(node, n), 1 if n["kind"] == "label" else 1, n["id"]))` |
-| 17 | 82 | `num` | `candidates.sort(key=lambda n: (_dist(node, n), 0 if n["kind"] == "label" else 1, n["id"]))`<br>→ `candidates.sort(key=lambda n: (_dist(node, n), 0 if n["kind"] == "label" else 2, n["id"]))` |
