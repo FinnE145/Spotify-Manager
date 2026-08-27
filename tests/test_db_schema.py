@@ -18,6 +18,7 @@ import sqlite3
 
 import pytest
 
+import builders
 import conftest
 import db
 
@@ -352,3 +353,107 @@ def test_every_declared_view_exists_after_init(conn):
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'view'")
     }
     assert db._VIEW_NAMES <= have
+
+
+# -- The VIEWS bodies (S sweep round 2) --------------------------------------
+#
+# The migration/ensure_views tests above never exercise what the views
+# actually compute -- every fixture there only needs *a* view to exist, not
+# a particular row out of it. These four are built to disagree with the
+# alias-resolution and dedup rules the view bodies encode, per each rule's
+# own comment in db.VIEWS.
+
+
+def test_resolved_album_artist_joins_on_the_matching_alias_row(conn):
+    """The join condition picks the one alias row for *this* album artist.
+    A wrong comparison there (`=` -> `<>`) would instead match every alias
+    row for every *other* artist, substituting a stranger's canonical id --
+    verified empirically: with one unrelated alias in the table, the mutant
+    resolves the album's artist to that stranger's canonical id instead of
+    leaving it alone."""
+    # source: S_sweep.md §3 -- sql= at db.py:519
+    builders.make_album(conn, "alb1", artists=["artist-real"])
+    builders.make_artist(conn, "artist-x")
+    builders.make_artist(conn, "artist-y")
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, ?)",
+        ("artist-x", "artist-y"),
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT artist_id FROM resolved_album_artist WHERE album_id = ?", ("alb1",)
+    ).fetchone()
+
+    assert row["artist_id"] == "artist-real"
+
+
+def test_track_artist_credit_position_is_the_earliest_of_alias_collapsed_credits(conn):
+    """Two raw credits that alias onto the same canonical artist collapse
+    into one `track_artist_credit` row (GROUP BY track_id, artist_id). Its
+    `position` must be the *earliest* of the two collapsed positions, since
+    that is what `track_artists`' `group_concat(... ORDER BY position)` sorts
+    display names by."""
+    # source: S_sweep.md §3 -- sqlMIN at db.py:525
+    builders.make_track(conn, "trk1", artists=["artist-a", "artist-b"])
+    builders.make_artist(conn, "canon")
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, 'canon')",
+        ("artist-a",),
+    )
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, 'canon')",
+        ("artist-b",),
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT position FROM track_artist_credit WHERE track_id = ? AND artist_id = 'canon'",
+        ("trk1",),
+    ).fetchone()
+
+    assert row["position"] == 0
+
+
+def test_track_artists_splits_primary_from_featured_when_credits_are_mixed(conn):
+    """A track with one album-artist credit and one non-album-artist credit
+    must sort the album artist into `primary_names` and the other into
+    `featured_names`. The `MAX(is_album_artist) = 1` guard is what picks this
+    branch over the Various-Artists fallback (every credit lumped into
+    `primary_names`, `featured_names` NULL) -- verified empirically that
+    flipping it to MIN, `<>`, or `= 2` all select the fallback branch on this
+    exact fixture, collapsing both artists into `primary_names`."""
+    # source: S_sweep.md §3 -- sqlMAX at db.py:573, sql= at db.py:573,
+    # sqlnum at db.py:573, sqlMAX at db.py:577, sql= at db.py:577,
+    # sqlnum at db.py:577
+    builders.make_album(conn, "alb1", artists=["main-artist"])
+    builders.make_track(conn, "trk1", album_id="alb1", artists=["main-artist", "feature-artist"])
+
+    row = conn.execute(
+        "SELECT primary_names, featured_names FROM track_artists WHERE track_id = ?",
+        ("trk1",),
+    ).fetchone()
+
+    assert row["primary_names"] == "Artist main-artist"
+    assert row["featured_names"] == "Artist feature-artist"
+
+
+def test_generation_presence_deduplicates_repeated_live_membership_rows(conn):
+    """`membership` is an append-only log, so nothing stops two live rows
+    (`removed_at IS NULL`) existing for the same (playlist, track) -- a
+    duplicate re-add nobody ever reconciled. This view must still report one
+    presence row per (ordinal, track), not one per raw membership row."""
+    # source: S_sweep.md §3 -- sqlDISTINCT at db.py:592
+    builders.make_group(conn, ["trk1"])
+    ordinal = builders.make_generation(conn)
+    playlist_id = conn.execute(
+        "SELECT playlist_id FROM generation WHERE ordinal = ?", (ordinal,)
+    ).fetchone()[0]
+    builders.make_membership(conn, playlist_id=playlist_id, track_id="trk1", position=0)
+    builders.make_membership(conn, playlist_id=playlist_id, track_id="trk1", position=1)
+
+    rows = conn.execute(
+        "SELECT * FROM generation_presence WHERE track_id = 'trk1'"
+    ).fetchall()
+
+    assert len(rows) == 1

@@ -683,3 +683,179 @@ def test_detection_writes_nothing(conn):
     for statement in statements:
         collapsed = " ".join(statement.lower().split())
         assert not any(collapsed.startswith(verb) for verb in WRITE_VERBS), statement
+
+
+# -- S-sweep round 2: _fetch_tracks's SQL, _split_suffix, _Counter,
+# same_recording_group/same_release_group, _clean_explicit_pair's tolerance,
+# _pair_key (mutation-sweep-S.md, docs/codebase-health/S_survivors.md) -------
+
+
+def test_live_count_only_counts_live_unremoved_memberships(conn):
+    """_fetch_tracks's live_count SUM has three literals sharing one line:
+    AND (not OR -- a LEFT JOIN miss must not look live), 1 per live row (not
+    2), and 0 (not 1) on the CASE's other branch.
+
+    The comment above the SQL names the exact bug an OR reintroduces: "on a
+    LEFT JOIN miss m.removed_at is NULL, so the CASE yielded 1 and COUNT
+    counted it -- every track with no membership at all reported one phantom
+    membership."
+    """
+    # source: S_sweep.md §3 -- sqlAND and sqlnum x2 at canonical_detect.py:166
+    active = builders.make_track(conn, "active", name="Active Track")
+    builders.make_membership(conn, track_id=active)
+
+    removed = builders.make_track(conn, "removed", name="Removed Track")
+    builders.make_membership(conn, track_id=removed, removed_at=builders.days_ago(1))
+
+    never_added = builders.make_track(conn, "never-added", name="Never Added Track")
+
+    tracks = detect._fetch_tracks(conn)
+    assert tracks["active"]["live_count"] == 1
+    assert tracks["removed"]["live_count"] == 0
+    assert tracks["never-added"]["live_count"] == 0
+
+
+def test_fetch_tracks_left_joins_album_so_a_track_missing_one_still_appears(conn):
+    """_fetch_tracks's FROM clause LEFT JOINs album on purpose: a track whose
+    album row is genuinely missing must still surface (with the album fields
+    NULL) rather than silently vanishing from every candidate listing.
+
+    Only a track missing that row can tell a LEFT JOIN from a plain JOIN --
+    every track this file's `make()` builds has one, so this needs its own
+    fixture: a track whose `album_id` is NULL is the only way to make the ON
+    clause fail, since `make_track` always creates the album it's pointed at.
+    """
+    # source: S_sweep.md §3 -- sqlLEFTJOIN at canonical_detect.py:168 (album)
+    tid = builders.make_track(conn, "no-album", name="No Album Track")
+    conn.execute("UPDATE track SET album_id = NULL WHERE track_id = ?", (tid,))
+    conn.commit()
+
+    tracks = detect._fetch_tracks(conn)
+    assert tid in tracks
+    assert tracks[tid]["album_name"] is None
+
+
+def test_fetch_tracks_left_joins_track_artists_so_a_creditless_track_still_appears(conn):
+    """Same rule, the artist half. `track_artists` is built on
+    `track_artist_credit`, which joins `track_artist` -- so a track with zero
+    `track_artist` rows has no row in `track_artists` at all, not a row with
+    NULL fields. An inner join would drop the track from `_fetch_tracks`'s
+    result entirely rather than leave its `artists` field blank.
+    """
+    # source: S_sweep.md §3 -- sqlLEFTJOIN at canonical_detect.py:169 (track_artists)
+    tid = builders.make_track(conn, "no-artist", name="No Artist Track", artists=[])
+
+    tracks = detect._fetch_tracks(conn)
+    assert tid in tracks
+    assert tracks[tid]["artists"] == ""
+
+
+def test_pinned_flag_reads_only_the_song_tier_representative(conn):
+    """_fetch_tracks's `pinned` flag comes from the *song*-tier
+    canonical_group's representative_track_id and nothing else.
+    `representative_track_id` isn't a tier-scoped column in the schema -- a
+    version/recording/release-tier group can carry one too -- but nothing
+    displays or consumes a pin anywhere but song (canonical.pin_representative
+    only ever writes there), so a stray non-song pin must not read as "pinned"
+    and a real song pin must not go unnoticed.
+    """
+    # source: S_sweep.md §3 -- sql=, sqlAND, sqlISNOTNULL at
+    # canonical_detect.py:194; `in` at canonical_detect.py:225
+    song_pinned = make(conn, "song-pinned", "Song Pinned")
+    not_pinned = make(conn, "not-pinned", "Not Pinned", album="Album Two")
+    version_pinned = make(conn, "version-pinned", "Version Pinned", album="Album Three")
+
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    canonical.pin_representative(conn, song_pinned)
+    conn.commit()
+
+    # Pin *only* the version tier, bypassing pin_representative (which never
+    # touches anything but song) -- the fixture needs a real non-song pin to
+    # tell "reads the song tier" apart from "reads any tier".
+    version_group_id = conn.execute(
+        "SELECT version_id FROM track_group WHERE track_id = ?", (version_pinned,)
+    ).fetchone()["version_id"]
+    conn.execute(
+        "UPDATE canonical_group SET representative_track_id = ? WHERE id = ?",
+        (version_pinned, version_group_id),
+    )
+    conn.commit()
+
+    tracks = detect._fetch_tracks(conn)
+    assert tracks[song_pinned]["pinned"] is True
+    assert tracks[not_pinned]["pinned"] is False
+    assert tracks[version_pinned]["pinned"] is False
+
+
+@pytest.mark.parametrize("duration_ms, matches", [(202_000, True), (202_001, False)])
+def test_the_clean_explicit_rules_duration_tolerance_is_two_seconds(conn, duration_ms, matches):
+    # source: S_sweep.md §3 -- cmp<= at canonical_detect.py:353. Mirrors the
+    # existing duration-tolerance boundary test for _auto_group_pair, at the
+    # rule that actually owns this line: same base, shared artist, differing
+    # explicit -- so only the duration comparison can decide it.
+    make(conn, "ta", "Willow", explicit=1, duration_ms=200_000)
+    make(conn, "tb", "Willow", explicit=0, duration_ms=duration_ms, album="Album Two")
+
+    assert pair_rule(conn, detect._clean_explicit_pair, "ta", "tb") is matches
+
+
+def test_a_saved_recording_and_release_grouping_survive_disagreeing_isrcs(conn):
+    """same_recording_group's and same_release_group's own `if _same_real(...):
+    return True` short-circuits -- an existing decision outranks the
+    heuristic at these two tiers exactly as it already does at song/version,
+    even when the heuristic (same ISRC + duration + explicit) would refuse
+    the pair outright. This is `stale_recording_groups`'s own scenario: a
+    decision made under an older rule set that the current heuristic would no
+    longer make.
+
+    Differing ISRCs are what isolate the branch: with a *shared* ISRC (as in
+    `test_two_uploads_of_one_album_share_a_release_group`) the heuristic
+    agrees anyway and the short-circuit is never the reason the assertion
+    passes.
+    """
+    # source: S_sweep.md §3 -- true at canonical_detect.py:441
+    # (same_recording_group) and :446 (same_release_group)
+    make(conn, "ta", "Willow", isrc="ISRC-A")
+    make(conn, "tb", "Willow", isrc="ISRC-B", album="Album Two")
+    builders.make_group(conn, ["ta", "tb"])
+
+    labels = prefill(conn, "ta", "tb")
+    assert shares(labels, "ta", "tb", "recording")
+    assert shares(labels, "ta", "tb", "release")
+
+
+def test_without_the_saved_grouping_disagreeing_isrcs_split_at_every_tier_past_song(conn):
+    """The control for the test above: same rows, no track_group decision, so
+    the heuristic alone decides and a differing ISRC splits both recording
+    and release (they still share a song, and this file's `make()` puts them
+    in one version too, since both classify `base`)."""
+    # characterization -- the negative control for the test above: the saved
+    # grouping is what merges the pair at recording/release, not the titles
+    # or artist alone.
+    make(conn, "ta", "Willow", isrc="ISRC-A")
+    make(conn, "tb", "Willow", isrc="ISRC-B", album="Album Two")
+
+    labels = prefill(conn, "ta", "tb")
+    assert shares(labels, "ta", "tb", "version")
+    assert not shares(labels, "ta", "tb", "recording")
+    assert not shares(labels, "ta", "tb", "release")
+
+
+# -- Equivalent mutants, recorded so the next sweep doesn't re-derive them --
+#
+# _split_suffix's `idx < best_idx` (canonical_detect.py:80): every delimiter
+# in _SUFFIX_DELIMITERS starts with the same " " but has a distinct second
+# character, so two different delimiters can never `.find()` to the same
+# starting index in one string -- a tie is not just rare, it is impossible.
+# `<` and `<=` therefore pick the same best_idx on every input (verified by
+# fuzzing 200k generated strings). Not pinned here: there is no boundary
+# answer to pin, since no input reaches the boundary at all.
+#
+# _pair_key's `a < b` (canonical_detect.py:484): for a != b the two operators
+# agree, and for a == b both branches of the `if/else` return the identical
+# tuple (a, a) -- so `<` vs `<=` produces the same output for literally every
+# possible pair, not just the ones this module happens to call it with.
+# Provable rather than merely untested; not pinned for the same reason as
+# _split_suffix above.
