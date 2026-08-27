@@ -514,6 +514,91 @@ collisions occurred; the rule belongs in §7.3 for the next round.
 
 ---
 
+### 3.6 Round 2 — 79 survivors closed, and a lesson about interruption
+
+2026-08-26/27. Four triage agents. **68 gap — fixed, 8 equivalent, 3 cosmetic,
+1 gap — recorded, not fixed.** 49 tests added; the suite went 1023 → 1072
+passed, 3 skipped. All 79 verdicts were re-run by the master session and **all
+79 reproduced** — 68 kill proofs to `PASS`, 11 non-fix verdicts still
+`SURVIVED`.
+
+| domain | test file(s) | survivors | fixed | equiv | cosm | rec |
+|---|---|---:|---:|---:|---:|---:|
+| `canonical_detect.py` rules half | `test_canonical_detect_rules.py` | 16 | 12 | 2 | 2 | — |
+| `canonical_detect.py` queues half + `app.py` ×8 | `test_canonical_detect_queues.py`, `_page.py`, `_routes.py` | 24 | 22 | 1 | 1 | — |
+| `entities.py` | `test_entities.py` | 27 | 25 | 2 | — | — |
+| `db.py` | `test_db_schema.py` | 12 | 9 | 2 | — | 1 |
+
+**`canonical_detect.py` split 16/16 along function boundaries**, not by line
+range, and the halves already had separate test files — which is what made a
+fourth agent safe rather than merely possible. §3.5's rule generalises: the
+unit of assignment is the test file, and a module large enough to need two
+agents must already *have* two test files, or it does not divide.
+
+#### The interruption, which is the operationally important part
+
+All four agents died at once: the machine slept and none recovered. The outcome
+split cleanly in two, and the difference is worth building on.
+
+- Two agents had been **reading source and writing nothing**. Roughly three
+  hours of work, zero artifacts. Nothing to salvage.
+- Two had been **writing tests as they went**. Their files were intact, parsed,
+  and their copies were green — 21 of their 28 survivors already had killing
+  tests.
+
+**So the instruction changed: finish each survivor completely — verdict, test,
+proof — before starting the next.** Both resumed agents then worked that way,
+and both were observed running `verify.py` continuously rather than batching
+proofs at the end. This costs nothing when nothing goes wrong and is the whole
+difference when something does.
+
+**Progress is reconstructible from disk with no agent involvement.** Running
+`verify.py one` for each of a dead agent's assigned survivors, *inside its own
+copy*, reports exactly which are already caught. That is how the 21/28 figure
+above was established before any agent was resumed. **But `one` is not the §6
+gate** — it proves the suite fails, not that a *named* test fails, which is
+precisely the distinction that stops a test failing for an incidental reason
+from counting as a kill. Every one of those 21 still had a real `kill` proof
+run afterwards. Reconstruction tells you where you are; it does not discharge
+the gate.
+
+**Resuming works and is cheaper than respawning.** All four agents resumed with
+context intact and completed. Handing each one the externally-measured state —
+these are killed, these are open — meant none of them re-derived it.
+
+#### Findings
+
+- **The swap trap** (`entities.py:296`, `453` col68). A symmetric two-item
+  fixture makes a JOIN-condition inversion produce a *coincidental one-for-one
+  swap*: same row count, same sort order, different truth. `296` needed a third
+  unrelated playlist to break the symmetry; `453` was killable on value instead,
+  because a swapped artist *name* is observable where a swapped count is not.
+  This is `post_P_sweep.md` §3.1's arithmetic degeneracy in a new costume, and
+  it is now the most common way a fixture here agrees with the mutant.
+- **A third equivalent class: provably unreachable from this call site**
+  (`entities.py:676`). `canonical.representative()`'s `or` fallback cannot fire
+  because `vid` always comes from a `track_group` row read moments earlier on
+  the same connection. Distinct from §3.1's `EXISTS (SELECT 1 …)` and from
+  §3.5's docstring-quoted SQL. `db.py:531` is the same shape reached
+  differently — a `LEFT JOIN` guarding a dangling FK that `PRAGMA foreign_keys
+  = ON` makes unreachable.
+- **`_BUSY_TIMEOUT_SECONDS = 30` is `recorded, not fixed`, deliberately not
+  `equivalent`.** 30 vs 31 genuinely changes when SQLite's C-level busy-wait
+  raises, so "equivalent" would be false. Pinning it needs a held file lock for
+  ~30 real seconds. The distinction matters: `equivalent` is a claim that no
+  test *could* kill it, and the flattering error here is to use it for
+  "no test I want to write".
+- **The `{"ok": True}` question, settled the same way twice.** Round 1 ruled
+  four of them `gap — fixed` by asserting the flag *alongside* a real
+  behavioural fix. Round 2 reached the same call independently on `app.py:563`
+  and `655` after grepping the JS and finding both handlers branch on
+  `.error`, never `.ok` — and ruled `447` **cosmetic**, because there the field
+  is hardcoded and its only consumer reads `items[0]` and nothing else. The
+  rule that emerges: assert the flag where a real assertion is already being
+  made, and record it as cosmetic where there is nothing to attach it to.
+
+---
+
 ## 4. What was added
 
 **§3.4 is complete.** **39 new test cases**, taking the suite from 944 to 983.

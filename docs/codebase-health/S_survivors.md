@@ -1,6 +1,6 @@
 # S sweep — the untriaged survivors
 
-**141 survivors still owed a verdict**, from the corrected sweep of
+**62 survivors still owed a verdict**, from the corrected sweep of
 2026-08-24 (`S_sweep.md` §2.4). Everything §3.1–§3.4 already ruled on is
 excluded, so this file is exactly the remaining work.
 
@@ -22,7 +22,7 @@ Regenerate with the snippet in `S_handoff.md` if the sweep is ever re-run.
 
 ---
 
-**Round 1 closed 71 of the original 212** (2026-08-24/26), and their rows are
+**Rounds 1 and 2 closed 150 of the original 212** (2026-08-24/26), and their rows are
 gone from this file. Three sections went entirely — `history_import.py` (27),
 `scrobble.py` (18), `grouping.py` (2) — and 24 of `app.py`'s 50 went with them,
 because `app.py`'s survivors are **not one module's work**: they are nine
@@ -37,18 +37,10 @@ reproduced — 56 kill proofs re-run to `PASS`, 11 claimed equivalents re-run
 and still `SURVIVED`.
 
 
-## `app.py` — 26 survivors
+## `app.py` — 18 survivors
 
 | line | col | op | before → after |
 |---:|---:|---|---|
-| 31 | 15 | `num` | `_LISTING_CAP = 50`<br>→ `_LISTING_CAP = 51` |
-| 419 | 59 | `num` | `song_id = canonical.groups_for_track(conn, members[0])["song"]`<br>→ `song_id = canonical.groups_for_track(conn, members[1])["song"]` |
-| 426 | 87 | `cmp<` | `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) < 2:`<br>→ `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) <= 2:` |
-| 426 | 89 | `num` | `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) < 2:`<br>→ `if tracks_param is not None and len([t for t in tracks_param.split(",") if t]) < 3:` |
-| 447 | 62 | `num` | `return jsonify({"items": [item], "pending_count": 0})`<br>→ `return jsonify({"items": [item], "pending_count": 1})` |
-| 563 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 615 | 73 | `sql=` | `conn.execute("DELETE FROM pending_tier_review WHERE track_id = ?", (track_id,))`<br>→ `conn.execute("DELETE FROM pending_tier_review WHERE track_id <> ?", (track_id,))` |
-| 655 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
 | 772 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 780 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 788 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
@@ -67,92 +59,6 @@ and still `SURVIVED`.
 | 952 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 980 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
 | 990 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-
-## `canonical_detect.py` — 32 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 80 | 50 | `cmp<` | `if idx != -1 and (best_idx is None or idx < best_idx):`<br>→ `if idx != -1 and (best_idx is None or idx <= best_idx):` |
-| 166 | 52 | `sqlAND` | `SUM(CASE WHEN m.track_id IS NOT NULL AND m.removed_at IS NULL THEN 1 ELSE 0 END) AS live_c`<br>→ `SUM(CASE WHEN m.track_id IS NOT NULL OR m.removed_at IS NULL THEN 1 ELSE 0 END) AS live_co` |
-| 166 | 82 | `sqlnum` | `SUM(CASE WHEN m.track_id IS NOT NULL AND m.removed_at IS NULL THEN 1 ELSE 0 END) AS live_c`<br>→ `SUM(CASE WHEN m.track_id IS NOT NULL AND m.removed_at IS NULL THEN 2 ELSE 0 END) AS live_c` |
-| 166 | 89 | `sqlnum` | `SUM(CASE WHEN m.track_id IS NOT NULL AND m.removed_at IS NULL THEN 1 ELSE 0 END) AS live_c`<br>→ `SUM(CASE WHEN m.track_id IS NOT NULL AND m.removed_at IS NULL THEN 1 ELSE 1 END) AS live_c` |
-| 168 | 8 | `sqlLEFTJOIN` | `LEFT JOIN album a ON a.album_id = t.album_id`<br>→ `JOIN album a ON a.album_id = t.album_id` |
-| 169 | 8 | `sqlLEFTJOIN` | `LEFT JOIN track_artists ta ON ta.track_id = t.track_id`<br>→ `JOIN track_artists ta ON ta.track_id = t.track_id` |
-| 194 | 24 | `sql=` | `"WHERE tier = 'song' AND representative_track_id IS NOT NULL"`<br>→ `"WHERE tier <> 'song' AND representative_track_id IS NOT NULL"` |
-| 194 | 33 | `sqlAND` | `"WHERE tier = 'song' AND representative_track_id IS NOT NULL"`<br>→ `"WHERE tier = 'song' OR representative_track_id IS NOT NULL"` |
-| 194 | 61 | `sqlISNOTNULL` | `"WHERE tier = 'song' AND representative_track_id IS NOT NULL"`<br>→ `"WHERE tier = 'song' AND representative_track_id IS NULL"` |
-| 225 | 38 | `in` | `"pinned": row["track_id"] in pinned_ids,`<br>→ `"pinned": row["track_id"] not in pinned_ids,` |
-| 353 | 55 | `cmp<=` | `and abs(ra["duration_ms"] - rb["duration_ms"]) <= _DURATION_TOLERANCE_MS`<br>→ `and abs(ra["duration_ms"] - rb["duration_ms"]) < _DURATION_TOLERANCE_MS` |
-| 370 | 17 | `num` | `self.n = 0`<br>→ `self.n = 1` |
-| 373 | 18 | `num` | `self.n += 1`<br>→ `self.n += 2` |
-| 441 | 19 | `true` | `return True`<br>→ `return False` |
-| 446 | 19 | `true` | `return True`<br>→ `return False` |
-| 484 | 23 | `cmp<` | `return (a, b) if a < b else (b, a)`<br>→ `return (a, b) if a <= b else (b, a)` |
-| 673 | 22 | `and` | `if expand_song_id and not any(g["song_id"] == expand_song_id for g in shown):`<br>→ `if expand_song_id or not any(g["song_id"] == expand_song_id for g in shown):` |
-| 687 | 44 | `sql=` | `"              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "`<br>→ `"              WHERE x.track_id <> t.track_id AND ar.name LIKE ?) "` |
-| 687 | 57 | `sqlAND` | `"              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "`<br>→ `"              WHERE x.track_id = t.track_id OR ar.name LIKE ?) "` |
-| 694 | 11 | `num` | `)[:100]`<br>→ `)[:101]` |
-| 765 | 61 | `and` | `here = [tid for tid in members if tid in established and tid in bucket_set]`<br>→ `here = [tid for tid in members if tid in established or tid in bucket_set]` |
-| 778 | 48 | `in` | `decided = all(_pair_key(tid, other) in reviewed_pairs for other in here)`<br>→ `decided = all(_pair_key(tid, other) not in reviewed_pairs for other in here)` |
-| 788 | 65 | `in` | `"representative": _row(tracks, rep_id) if rep_id in tracks else None,`<br>→ `"representative": _row(tracks, rep_id) if rep_id not in tracks else None,` |
-| 819 | 16 | `cmp<` | `if len(ids) < 2:`<br>→ `if len(ids) <= 2:` |
-| 819 | 18 | `num` | `if len(ids) < 2:`<br>→ `if len(ids) < 3:` |
-| 826 | 25 | `num` | `conn, tracks[ids[0]]["base"], ids, tracks, _load_reviewed_pairs(conn), song_members`<br>→ `conn, tracks[ids[1]]["base"], ids, tracks, _load_reviewed_pairs(conn), song_members` |
-| 844 | 27 | `cmp<` | `if len(components) < 2 or _cross_component_reviewed(reviewed_pairs, components):`<br>→ `if len(components) <= 2 or _cross_component_reviewed(reviewed_pairs, components):` |
-| 844 | 29 | `num` | `if len(components) < 2 or _cross_component_reviewed(reviewed_pairs, components):`<br>→ `if len(components) < 3 or _cross_component_reviewed(reviewed_pairs, components):` |
-| 906 | 38 | `num` | `base = tracks[sorted(members)[0]]["base"]`<br>→ `base = tracks[sorted(members)[1]]["base"]` |
-| 913 | 29 | `false` | `cross_artist=False,`<br>→ `cross_artist=True,` |
-| 1039 | 29 | `num` | `base = tracks[ids_sorted[0]]["base"] if ids_sorted else ""`<br>→ `base = tracks[ids_sorted[1]]["base"] if ids_sorted else ""` |
-| 1049 | 24 | `false` | `"cross_artist": False,`<br>→ `"cross_artist": True,` |
-
-## `entities.py` — 27 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 56 | 34 | `sql>=` | `SUM(CASE WHEN p.ts >= ? THEN 1 ELSE 0 END) AS month,`<br>→ `SUM(CASE WHEN p.ts > ? THEN 1 ELSE 0 END) AS month,` |
-| 67 | 37 | `cmp<` | `if data_through and data_through < month_start:`<br>→ `if data_through and data_through <= month_start:` |
-| 132 | 19 | `sqlOR` | `(§0.5). INSERT OR IGNORE, so a uri already queued (by either source)`<br>→ `(§0.5). INSERT AND IGNORE, so a uri already queued (by either source)` |
-| 235 | 94 | `sql=` | `"SELECT song_id, version_id, recording_id, release_id FROM track_group WHERE track_id = ?"`<br>→ `"SELECT song_id, version_id, recording_id, release_id FROM track_group WHERE track_id <> ?` |
-| 244 | 23 | `or` | `(t["name"] or "").casefold(),`<br>→ `(t["name"] and "").casefold(),` |
-| 274 | 72 | `num` | `"tenure": max((end - start + 1 for start, end in runs), default=0),`<br>→ `"tenure": max((end - start + 1 for start, end in runs), default=1),` |
-| 296 | 41 | `sql=` | `JOIN snapshot s ON s.playlist_id = m.playlist_id`<br>→ `JOIN snapshot s ON s.playlist_id <> m.playlist_id` |
-| 348 | 8 | `sqlLEFTJOIN` | `LEFT JOIN album a ON a.album_id = t.album_id`<br>→ `JOIN album a ON a.album_id = t.album_id` |
-| 363 | 47 | `sqlMIN` | `"SELECT SUM(t.duration_ms) AS runtime, MIN(m.added_at) AS first_added, "`<br>→ `"SELECT SUM(t.duration_ms) AS runtime, MAX(m.added_at) AS first_added, "` |
-| 364 | 9 | `sqlMAX` | `"MAX(m.added_at) AS last_added FROM membership m JOIN track t ON t.track_id = m.track_id "`<br>→ `"MIN(m.added_at) AS last_added FROM membership m JOIN track t ON t.track_id = m.track_id "` |
-| 424 | 51 | `sql=` | `"LEFT JOIN artist_alias aa ON aa.artist_id = ab.artist_id "`<br>→ `"LEFT JOIN artist_alias aa ON aa.artist_id <> ab.artist_id "` |
-| 428 | 18 | `sqlMIN` | `"ORDER BY MIN(ab.position)",`<br>→ `"ORDER BY MAX(ab.position)",` |
-| 453 | 26 | `sqlLEFTJOIN` | `"FROM track t LEFT JOIN track_artists ta ON ta.track_id = t.track_id "`<br>→ `"FROM track t JOIN track_artists ta ON ta.track_id = t.track_id "` |
-| 453 | 68 | `sql=` | `"FROM track t LEFT JOIN track_artists ta ON ta.track_id = t.track_id "`<br>→ `"FROM track t LEFT JOIN track_artists ta ON ta.track_id <> t.track_id "` |
-| 480 | 32 | `and` | `is_owned = bool(tid and tid in owned_set)`<br>→ `is_owned = bool(tid or tid in owned_set)` |
-| 480 | 40 | `in` | `is_owned = bool(tid and tid in owned_set)`<br>→ `is_owned = bool(tid and tid not in owned_set)` |
-| 491 | 88 | `or` | `"artists": ", ".join(a.get("name", "") for a in item.get("artists") or []),`<br>→ `"artists": ", ".join(a.get("name", "") for a in item.get("artists") and []),` |
-| 578 | 39 | `eq` | `(primary_versions if r["role"] == "primary" else featured_versions).add(r["version_id"])`<br>→ `(primary_versions if r["role"] != "primary" else featured_versions).add(r["version_id"])` |
-| 595 | 27 | `or` | `(t["name"] or "").casefold(),`<br>→ `(t["name"] and "").casefold(),` |
-| 611 | 23 | `or` | `(a["name"] or "").casefold(),`<br>→ `(a["name"] and "").casefold(),` |
-| 667 | 22 | `or` | `if not groups or groups["version"] in seen_versions:`<br>→ `if not groups and groups["version"] in seen_versions:` |
-| 676 | 53 | `or` | `rep_id = canonical.representative(conn, vid) or seen_versions[vid]`<br>→ `rep_id = canonical.representative(conn, vid) and seen_versions[vid]` |
-| 691 | 24 | `sqlLEFTJOIN` | `"FROM artist ar LEFT JOIN artist_alias aa ON aa.artist_id = ar.artist_id "`<br>→ `"FROM artist ar JOIN artist_alias aa ON aa.artist_id = ar.artist_id "` |
-| 707 | 23 | `or` | `(a["name"] or "").casefold(),`<br>→ `(a["name"] and "").casefold(),` |
-| 709 | 7 | `num` | `)[:50]`<br>→ `)[:51]` |
-| 719 | 8 | `neg` | `key=lambda p: -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),`<br>→ `key=lambda p: +playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),` |
-| 720 | 7 | `num` | `)[:50]`<br>→ `)[:51]` |
-
-## `db.py` — 12 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 519 | 42 | `sql=` | `LEFT JOIN artist_alias aa ON aa.artist_id = ab.artist_id;`<br>→ `LEFT JOIN artist_alias aa ON aa.artist_id <> ab.artist_id;` |
-| 525 | 7 | `sqlMIN` | `MIN(rta.position) AS position,`<br>→ `MAX(rta.position) AS position,` |
-| 528 | 7 | `sqlMAX` | `MAX(CASE WHEN raa.artist_id IS NOT NULL THEN 1 ELSE 0 END) AS is_album_artist`<br>→ `MIN(CASE WHEN raa.artist_id IS NOT NULL THEN 1 ELSE 0 END) AS is_album_artist` |
-| 531 | 0 | `sqlLEFTJOIN` | `LEFT JOIN artist ar ON ar.artist_id = rta.artist_id`<br>→ `JOIN artist ar ON ar.artist_id = rta.artist_id` |
-| 573 | 21 | `sqlMAX` | `CASE WHEN MAX(is_album_artist) = 1`<br>→ `CASE WHEN MIN(is_album_artist) = 1` |
-| 573 | 42 | `sql=` | `CASE WHEN MAX(is_album_artist) = 1`<br>→ `CASE WHEN MAX(is_album_artist) <> 1` |
-| 573 | 44 | `sqlnum` | `CASE WHEN MAX(is_album_artist) = 1`<br>→ `CASE WHEN MAX(is_album_artist) = 2` |
-| 577 | 21 | `sqlMAX` | `CASE WHEN MAX(is_album_artist) = 1`<br>→ `CASE WHEN MIN(is_album_artist) = 1` |
-| 577 | 42 | `sql=` | `CASE WHEN MAX(is_album_artist) = 1`<br>→ `CASE WHEN MAX(is_album_artist) <> 1` |
-| 577 | 44 | `sqlnum` | `CASE WHEN MAX(is_album_artist) = 1`<br>→ `CASE WHEN MAX(is_album_artist) = 2` |
-| 592 | 7 | `sqlDISTINCT` | `SELECT DISTINCT g.ordinal, m.track_id, tg.version_id, tg.song_id`<br>→ `SELECT g.ordinal, m.track_id, tg.version_id, tg.song_id` |
-| 642 | 24 | `num` | `_BUSY_TIMEOUT_SECONDS = 30`<br>→ `_BUSY_TIMEOUT_SECONDS = 31` |
 
 ## `jobs.py` — 10 survivors
 

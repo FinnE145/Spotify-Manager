@@ -1512,3 +1512,400 @@ def test_artist_detail_lists_the_ids_merged_into_this_artist(conn):
         "ar-alias-a",
         "ar-alias-b",
     ]
+
+
+# -- S sweep survivors (docs/codebase-health/S_survivors.md, entities.py) ---
+
+
+def test_play_stats_month_boundary_is_inclusive(conn):
+    # source: S_sweep.md §3 -- sql>= at entities.py:56. The month clause's
+    # `p.ts >= ?` must count a play landing exactly on the boundary, mirroring
+    # the existing week-boundary-inclusive test on the sibling clause. A play
+    # at exactly days_ago(30) also makes data_through equal month_start
+    # exactly, so the separate staleness check at line 67 (not `<=`) leaves
+    # month alone rather than nulling it -- isolating this one comparison.
+    t1 = builders.make_track(conn, "t1")
+    builders.make_play(conn, track_id=t1, ts=builders.days_ago(30))
+
+    stats = entities.play_stats(conn, [t1])
+
+    assert stats["month"] == 1
+
+
+def test_play_stats_month_not_stale_at_exactly_data_through(conn):
+    # source: S_sweep.md §3 -- cmp< at entities.py:67. `data_through < month_start`
+    # decides staleness; a play at exactly days_ago(30) makes data_through equal
+    # month_start, so `<` (not stale) must leave month as the real int the SQL
+    # computed. Asserting the exact value (1), not mere truthiness, is what tells
+    # a wrongly-nulled month apart from a genuine zero (entity-pages-K.md §8) --
+    # `<=` would treat "equal to the boundary" as stale and null it.
+    t1 = builders.make_track(conn, "t1")
+    builders.make_play(conn, track_id=t1, ts=builders.days_ago(30))
+
+    stats = entities.play_stats(conn, [t1])
+
+    assert stats["month"] == 1
+
+
+def test_group_detail_breadcrumb_is_scoped_to_this_groups_own_track(conn):
+    # source: S_sweep.md §3 -- sql= at entities.py:235. The breadcrumb query
+    # is keyed on `track_ids[0]`; a mutated `<>` would instead match some
+    # *other* track's track_group row. Two distinct groups whose tier ids all
+    # differ makes the wrong row observably wrong rather than merely absent.
+    groups_a = builders.make_group(conn, ["t-bc-a"])
+    groups_b = builders.make_group(conn, ["t-bc-b"])
+
+    data = entities.group_detail(conn, "song", groups_a["song"])
+
+    assert data["breadcrumb"]["version_id"] == groups_a["version"]
+    assert data["breadcrumb"]["version_id"] != groups_b["version"]
+
+
+def test_group_detail_member_tracks_sort_handles_a_null_track_name(conn):
+    # source: S_sweep.md §3 -- or at entities.py:244. `(t["name"] or "").casefold()`
+    # is the sort's tiebreak after score; `None and ""` keeps the falsy None
+    # instead of substituting "" the way `or` does, and `None.casefold()` raises.
+    # sorted() computes the key for every element up front, so even this lone
+    # member is enough to crash under the mutant.
+    groups = builders.make_group(conn, ["t-noname"])
+    conn.execute("UPDATE track SET name = NULL WHERE track_id = ?", ("t-noname",))
+    conn.commit()
+
+    data = entities.group_detail(conn, "version", groups["version"])
+
+    assert data["member_tracks"][0]["track_id"] == "t-noname"
+
+
+def test_group_detail_tenure_is_zero_when_never_in_any_generation(conn):
+    # source: S_sweep.md §3 -- num at entities.py:274. `max(..., default=0)`
+    # only bites when `runs` is empty -- a group present in no generation at
+    # all. Real tenure must read 0, not the mutant's silently-substituted 1.
+    groups = builders.make_group(conn, ["t-no-tenure"])
+
+    data = entities.group_detail(conn, "version", groups["version"])
+
+    assert data["tenure"] == 0
+    assert data["total_generations"] == 0
+    assert data["run_count"] == 0
+
+
+def test_track_detail_memberships_join_matches_the_own_playlist_only(conn):
+    # source: S_sweep.md §3 -- sql= at entities.py:296. The JOIN picks each
+    # membership's own playlist; a lone playlist for the target track plus
+    # two unrelated ones sitting in `snapshot` means a mutated `<>` would
+    # join the membership row against both unrelated playlists instead,
+    # inflating the row count -- a two-playlist fixture can't show this
+    # (swapping is a coincidental 1-for-1 match), so this uses three.
+    builders.make_track(conn, "t-solo")
+    builders.make_playlist(conn, "p-real", name="Only List")
+    builders.make_playlist(conn, "p-other-1", name="Unrelated One")
+    builders.make_playlist(conn, "p-other-2", name="Unrelated Two")
+    builders.make_membership(conn, playlist_id="p-real", track_id="t-solo")
+
+    data = entities.track_detail(conn, "t-solo")
+
+    assert len(data["memberships"]) == 1
+    assert data["memberships"][0]["playlist_name"] == "Only List"
+
+
+def test_playlist_detail_keeps_a_track_row_with_no_album(conn):
+    # source: S_sweep.md §3 -- sqlLEFTJOIN at entities.py:348. `LEFT JOIN album`
+    # must not drop a membership row just because its track's album_id is NULL
+    # -- an INNER JOIN would silently remove the row rather than render
+    # album_name as None.
+    builders.make_playlist(conn, "p-noalbum")
+    builders.make_track(conn, "t-noalbum")
+    conn.execute("UPDATE track SET album_id = NULL WHERE track_id = ?", ("t-noalbum",))
+    conn.commit()
+    builders.make_membership(conn, playlist_id="p-noalbum", track_id="t-noalbum")
+
+    data = entities.playlist_detail(conn, "p-noalbum")
+
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["album_name"] is None
+
+
+def test_playlist_detail_totals_first_and_last_added_are_not_swapped(conn):
+    # source: S_sweep.md §3 -- sqlMIN/sqlMAX at entities.py:363-364. Two live
+    # memberships with distinct, non-degenerate added_at values -- a MIN/MAX
+    # swap on either column is only observable if the two dates actually
+    # disagree, which a same-day fixture would not show.
+    builders.make_playlist(conn, "p-dates")
+    builders.make_track(conn, "t-first")
+    builders.make_track(conn, "t-second")
+    builders.make_membership(
+        conn, playlist_id="p-dates", track_id="t-first", added_at=builders.days_ago(20)
+    )
+    builders.make_membership(
+        conn, playlist_id="p-dates", track_id="t-second", added_at=builders.days_ago(5)
+    )
+
+    data = entities.playlist_detail(conn, "p-dates")
+
+    assert data["totals"]["first_added"] == builders.days_ago(20)
+    assert data["totals"]["last_added"] == builders.days_ago(5)
+
+
+def test_album_detail_artist_alias_join_only_resolves_its_own_artist(conn):
+    # source: S_sweep.md §3 -- sql= at entities.py:424. The album-artist alias
+    # LEFT JOIN condition keys on the credited artist's own id; an unrelated
+    # artist_alias row elsewhere in the table must not affect this album's
+    # credit. A mutated `<>` would instead match that unrelated row, since it
+    # trivially satisfies "not equal to this album's artist".
+    builders.make_artist(conn, "ar-canon")
+    builders.make_artist(conn, "ar-other")
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, ?)",
+        ("ar-other", "ar-canon"),
+    )
+    album = builders.make_album(conn, "al-x", artists=["ar-main"])
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+
+    assert [a["artist_id"] for a in data["artists"]] == ["ar-main"]
+
+
+def test_album_detail_artist_order_uses_the_earliest_credited_position(conn):
+    # source: S_sweep.md §3 -- sqlMIN at entities.py:428. A singleton credit's
+    # MIN(position) equals its MAX, so telling `MIN` from `MAX` needs a
+    # canonical artist whose *own* credits span more than one position --
+    # here, two raw ids that both alias onto one canonical id, at positions
+    # 0 and 2, against an unaliased artist sitting at position 1 in between.
+    # Real: the folded group's MIN is 0, sorting it first; the mutant's MAX
+    # is 2, sorting it last.
+    album = builders.make_album(
+        conn, "al-order", artists=["ar-raw1", "ar-mid", "ar-raw2"]
+    )
+    builders.make_artist(conn, "ar-folded")
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, ?)",
+        ("ar-raw1", "ar-folded"),
+    )
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, ?)",
+        ("ar-raw2", "ar-folded"),
+    )
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+
+    assert [a["artist_id"] for a in data["artists"]] == ["ar-folded", "ar-mid"]
+
+
+def test_album_detail_owned_rows_keeps_a_track_with_no_artist_credit(conn):
+    # source: S_sweep.md §3 -- sqlLEFTJOIN at entities.py:453 (col 26).
+    # `_owned_rows` LEFT JOINs `track_artists`, a view built by aggregating
+    # `track_artist_credit` -- a track with zero credited artists has no row
+    # in that view at all. An INNER JOIN would drop the track entirely rather
+    # than render its artists as "".
+    album = builders.make_album(conn, "al-noartist", tracklist_pulled_at="2026-01-01T00:00:00Z")
+    builders.make_track(conn, "t-noartist", album_id=album)
+    conn.execute("DELETE FROM track_artist WHERE track_id = ?", ("t-noartist",))
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+
+    assert [r["track_id"] for r in data["rows"]] == ["t-noartist"]
+    assert data["rows"][0]["artists"] == ""
+
+
+def test_album_detail_owned_rows_artists_is_not_swapped_between_tracks(conn):
+    # source: S_sweep.md §3 -- sql= at entities.py:453 (col 68). The join
+    # condition ties each track to its *own* track_artists row; with exactly
+    # two owned tracks, a mutated `<>` would instead attach each track's
+    # artists to the *other* track -- observable as a swap even though the
+    # row count stays the same (a two-item fixture can hide a count-based
+    # check, but not a value-based one).
+    album = builders.make_album(conn, "al-own-swap", tracklist_pulled_at="2026-01-01T00:00:00Z")
+    builders.make_track(conn, "t-x", album_id=album, artists=["ar-artist-x"], name="X")
+    builders.make_track(conn, "t-y", album_id=album, artists=["ar-artist-y"], name="Y")
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+    rows_by_id = {r["track_id"]: r for r in data["rows"]}
+
+    assert rows_by_id["t-x"]["artists"] == "Artist ar-artist-x"
+    assert rows_by_id["t-y"]["artists"] == "Artist ar-artist-y"
+
+
+def test_album_detail_tracklist_marks_ownership_by_set_membership_not_by_id_presence(conn):
+    # source: S_sweep.md §3 -- and/in at entities.py:480 (cols 32, 40).
+    # Whether a fetched tracklist item is "owned" must come from actual
+    # membership in Symr's own track table, not merely from the item
+    # carrying *some* id -- an `and`->`or` flip would mark anything with an
+    # id owned regardless of owned_set, and an `in`->`not in` flip would
+    # invert the answer either way.
+    album = builders.make_album(
+        conn, "al-own-mix", name="Mix",
+        tracklist_json=(
+            '[{"id":"t-owned","name":"Owned","artists":[],"track_number":1,"disc_number":1},'
+            '{"id":"t-unowned","name":"Unowned","artists":[],"track_number":2,"disc_number":1}]'
+        ),
+        tracklist_pulled_at="2026-01-01T00:00:00Z",
+    )
+    builders.make_track(conn, "t-owned", album_id=album)
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+    rows = {r["track_id"]: r for r in data["rows"]}
+
+    assert rows["t-owned"]["owned"] is True
+    assert rows["t-unowned"]["owned"] is False
+
+
+def test_album_detail_tracklist_item_with_no_artists_key_renders_empty_string(conn):
+    # source: S_sweep.md §3 -- or at entities.py:491. `item.get("artists") or []`
+    # guards a missing/null "artists" key; `and []` would keep the falsy None
+    # instead, and `for a in None` raises rather than rendering "".
+    album = builders.make_album(
+        conn, "al-noartists-field", name="NoArtists",
+        tracklist_json='[{"id":"t-x","name":"X","track_number":1,"disc_number":1}]',
+        tracklist_pulled_at="2026-01-01T00:00:00Z",
+    )
+    conn.commit()
+
+    data = entities.album_detail(conn, album)
+
+    assert data["rows"][0]["artists"] == ""
+
+
+def test_artist_detail_role_check_files_primary_and_featured_under_their_own_group(conn):
+    # source: S_sweep.md §3 -- eq at entities.py:578. Two distinct version
+    # groups, one pure-primary and one pure-featured for the same artist --
+    # unlike the sibling test above (one shared group, where a role swap and
+    # the featured-minus-primary subtraction land on the same end state by
+    # coincidence), a `==`->`!=` flip here observably files each group under
+    # the wrong heading.
+    builders.make_album(conn, "al-own2", name="Own2", artists=["ar-main"])
+    builders.make_track(conn, "t-own2", name="Own Track 2", album_id="al-own2", artists=["ar-main"])
+    builders.make_group(conn, ["t-own2"])
+
+    builders.make_album(conn, "al-guest2", name="Guest2", artists=["ar-host2"])
+    builders.make_track(
+        conn, "t-guest2", name="Guest Track 2", album_id="al-guest2",
+        artists=["ar-host2", "ar-main"],
+    )
+    builders.make_group(conn, ["t-guest2"])
+    conn.commit()
+
+    own_version = conn.execute(
+        "SELECT version_id FROM track_group WHERE track_id = ?", ("t-own2",)
+    ).fetchone()["version_id"]
+    guest_version = conn.execute(
+        "SELECT version_id FROM track_group WHERE track_id = ?", ("t-guest2",)
+    ).fetchone()["version_id"]
+
+    data = entities.artist_detail(conn, "ar-main")
+
+    primary_ids = {t["version_id"] for t in data["primary_tracks"]}
+    featured_ids = {t["version_id"] for t in data["featured_tracks"]}
+    assert primary_ids == {own_version}
+    assert featured_ids == {guest_version}
+
+
+def test_artist_detail_version_rows_sort_handles_a_null_track_name(conn):
+    # source: S_sweep.md §3 -- or at entities.py:595. Same shape as the
+    # group_detail casefold gap, in `_version_rows`'s own sort -- a distinct
+    # function, distinct query, distinct crash site.
+    builders.make_track(conn, "t-artist-noname", artists=["ar-noname"])
+    builders.make_group(conn, ["t-artist-noname"])
+    conn.execute("UPDATE track SET name = NULL WHERE track_id = ?", ("t-artist-noname",))
+    conn.commit()
+
+    data = entities.artist_detail(conn, "ar-noname")
+
+    assert data["primary_tracks"][0]["track_id"] == "t-artist-noname"
+
+
+def test_artist_detail_album_rows_sort_handles_a_null_album_name(conn):
+    # source: S_sweep.md §3 -- or at entities.py:611. Same shape again, in
+    # the album-listing sort this time -- a null album.name must sort, not
+    # crash on `None.casefold()`.
+    builders.make_artist(conn, "ar-albumnoname")
+    album = builders.make_album(conn, "al-noname", artists=["ar-albumnoname"])
+    conn.execute("UPDATE album SET name = NULL WHERE album_id = ?", (album,))
+    conn.commit()
+
+    data = entities.artist_detail(conn, "ar-albumnoname")
+
+    assert data["albums"][0]["album_id"] == album
+
+
+def test_search_skips_a_track_with_no_canonical_group_without_crashing(conn):
+    # source: S_sweep.md §3 -- or at entities.py:667. `ensure_track_groups()`
+    # is the route's job, not search()'s, so a matching track with no
+    # track_group row at all -- `groups_for_track` returns None -- must be
+    # skipped, not crash on `groups["version"]`.
+    builders.make_track(conn, "t-ungrouped", name="Ungrouped Match")
+
+    result = entities.search(conn, "Ungrouped")
+
+    assert result["songs"] == []
+
+
+def test_search_finds_an_ordinary_artist_with_no_alias_at_all(conn):
+    # source: S_sweep.md §3 -- sqlLEFTJOIN at entities.py:691. An artist never
+    # aliased in either direction has no matching artist_alias row at all --
+    # LEFT JOIN must still surface it. An INNER JOIN drops it, which the
+    # existing alias test can't show: its "canonical" artist stays reachable
+    # through the *other* artist's own alias row.
+    builders.make_artist(conn, "ar-plain", name="Plain Artist Solo")
+
+    results = entities.search(conn, "Plain Artist")
+
+    assert [a["artist_id"] for a in results["artists"]] == ["ar-plain"]
+
+
+def test_search_artist_sort_handles_a_null_canonical_name(conn):
+    # source: S_sweep.md §3 -- or at entities.py:707. The sort reads the
+    # *canonical* artist's name, re-fetched by resolved_id rather than the
+    # matching alias row's own name -- so a canonical artist with no name
+    # must still sort, not crash on `None.casefold()`.
+    builders.make_artist(conn, "ar-alias-src", name="Findable Name")
+    builders.make_artist(conn, "ar-canon-noname")
+    conn.execute(
+        "INSERT INTO artist_alias (artist_id, canonical_artist_id) VALUES (?, ?)",
+        ("ar-alias-src", "ar-canon-noname"),
+    )
+    conn.execute("UPDATE artist SET name = NULL WHERE artist_id = ?", ("ar-canon-noname",))
+    conn.commit()
+
+    results = entities.search(conn, "Findable")
+
+    assert [a["artist_id"] for a in results["artists"]] == ["ar-canon-noname"]
+
+
+def test_search_caps_artist_results_at_fifty(conn):
+    # source: S_sweep.md §3 -- num at entities.py:709. The fourth of the four
+    # `[:50]` caps -- songs and albums already have their own tests; this is
+    # the artists list's.
+    for i in range(1, 52):
+        builders.make_artist(conn, f"ar-cap-{i:02d}", name=f"Cap Artist {i:02d}")
+    conn.commit()
+
+    results = entities.search(conn, "Cap Artist")
+
+    assert len(results["artists"]) == 50
+
+
+def test_search_ranks_playlists_by_score_before_capping_at_fifty(conn):
+    # source: S_sweep.md §3 -- neg/num at entities.py:719-720. Same clause as
+    # the song/album cap-then-rank tests above, for the fourth and last
+    # result group. 51 matches with the only scoring one last alphabetically:
+    # a `neg`->`+` flip sorts it to the bottom and the cap then drops it
+    # entirely (rather than merely reordering it), and a `num` flip on its
+    # own would otherwise let all 51 through.
+    for i in range(1, 52):
+        playlist = builders.make_playlist(conn, f"p-cap-{i:02d}", name=f"Cap Playlist {i:02d}")
+        track = builders.make_track(conn, f"t-plcap-{i:02d}")
+        builders.make_membership(conn, playlist_id=playlist, track_id=track)
+        groups = builders.make_group(conn, [track])
+        if i == 51:
+            builders.make_score(conn, "version", groups["version"], all_time=95.0)
+    conn.commit()
+
+    results = entities.search(conn, "Cap Playlist")
+
+    assert len(results["playlists"]) == 50
+    assert results["playlists"][0]["name"] == "Cap Playlist 51"

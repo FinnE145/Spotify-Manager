@@ -20,6 +20,7 @@ worker thread.
 
 import pytest
 
+import builders
 import canonical
 import canonical_detect as detect
 import scoring
@@ -141,7 +142,15 @@ def test_the_route_marks_cross_component_pairs_only(conn, client):
     # track_ids))`", and §1.4's two consequences.
     ids = bucket(conn)
 
-    assert apply_cross(client, ids, []).status_code == 200
+    response = apply_cross(client, ids, [])
+
+    assert response.status_code == 200
+    # source: S_survivors.md app.py:563 -- {"ok": True}; grepped
+    # static/js/canonical_cross.js's commit() and found no consumer of this
+    # field (it branches on `result.error` only), so the fix pairs the flag
+    # with the real write already asserted below rather than asserting a
+    # dead field alone.
+    assert response.get_json()["ok"] is True
 
     assert reviewed_pairs(conn) == {("ta", "tc"), ("tb", "tc")}
     assert detect.cross_buckets(conn) == []
@@ -274,6 +283,30 @@ def test_the_main_apply_clears_a_pending_tier_row(conn, client, route_recompute_
     assert pending_rows(conn) == set()
 
 
+def test_the_main_apply_leaves_an_unapplied_pending_row_alone(conn, client, route_recompute_calls):
+    """A single pending row is not enough here: with only `ta` pending and
+    two applied track_ids (`ta`, `tb`), both `DELETE ... WHERE track_id = ?`
+    and its `<>` inversion end up clearing the table in two loop iterations,
+    so the test above cannot distinguish them. A pending row belonging to a
+    *third*, unapplied track is what the inverted query wrongly wipes out.
+    """
+    # source: S_survivors.md app.py:615 -- `DELETE FROM pending_tier_review
+    # WHERE track_id = ?`; needs two rows, one applied and one not, to
+    # distinguish `=` from `<>` (mutation-sweep-S.md's domain note, same
+    # shape as round 1's canvas WHERE mutants).
+    bucket(conn)
+    conn.execute("INSERT INTO pending_tier_review (track_id) VALUES ('ta')")
+    conn.execute("INSERT INTO pending_tier_review (track_id) VALUES ('tc')")
+    conn.commit()
+    labels = {
+        track_id: {tier: "one" for tier in canonical.TIER_ORDER} for track_id in ("ta", "tb")
+    }
+
+    client.post("/api/canonical/apply", json={"track_ids": ["ta", "tb"], "labels": labels})
+
+    assert pending_rows(conn) == {"tc"}
+
+
 def test_pinning_requests_an_async_recompute(conn, client, route_recompute_calls):
     """Pinning changes no scoring input, and still recomputes.
 
@@ -289,6 +322,17 @@ def test_pinning_requests_an_async_recompute(conn, client, route_recompute_calls
     response = client.post("/api/canonical/pin", json={"track_id": "ta"})
 
     assert response.status_code == 200
+    # source: S_survivors.md app.py:655 -- {"ok": True}; grepped
+    # static/js/canonical_viewer.js's pin-star handler and found no consumer
+    # of this field (it branches on `data.error` only), so the fix pairs the
+    # flag with the real write it accompanies rather than asserting a dead
+    # field alone.
+    assert response.get_json()["ok"] is True
+    song_id = canonical.groups_for_track(conn, "ta")["song"]
+    row = conn.execute(
+        "SELECT representative_track_id FROM canonical_group WHERE id = ?", (song_id,)
+    ).fetchone()
+    assert row["representative_track_id"] == "ta"
     assert len(route_recompute_calls) == 1
 
 
@@ -320,3 +364,50 @@ def test_undoing_with_no_run_is_a_400_not_a_500(conn, client):
     # ValueError is translated, so a stale page's Undo click is a clean
     # rejection rather than an error page.
     assert client.post("/api/canonical/autogroup/undo").status_code == 400
+
+
+# -- The unfiltered listing cap (app.py:31) ---------------------------------
+
+
+def test_the_unfiltered_page_caps_at_fifty_groups(conn, client):
+    # source: S_survivors.md app.py:31 -- `_LISTING_CAP = 50`; the unfiltered
+    # /dev/canonical load must render no more than that many groups, however
+    # many candidate groups actually exist.
+    for i in range(51):
+        builders.make_group(conn, [f"ta{i}", f"tb{i}"])
+
+    html = client.get("/dev/canonical").get_data(as_text=True)
+
+    assert html.count('class="song-group"') == 50
+
+
+# -- The group deep link (app.py:419) ---------------------------------------
+
+
+def test_the_deep_link_redirects_to_the_shared_song_regardless_of_member_order(conn, client):
+    """`members[0]` picks *a* member of the group to resolve up to its song --
+    equivalent, not arbitrary. `canonical._validate_labels` rejects any apply
+    that would let two members of one group disagree about their song
+    (grouping-engine.md's "nested-consistent" rule -- confirmed empirically:
+    it raises ValueError on a recording/song mismatch), so every member of a
+    canonical_group necessarily resolves to the same song and members[0] vs
+    members[1] can never differ under real data.
+    """
+    # source: S_survivors.md app.py:419 -- ruled equivalent; recorded here so
+    # the next sweep does not re-derive it.
+    group = builders.make_group(conn, ["tb", "ta"])
+    recording_id = group["recording"]
+
+    resp = client.get(f"/dev/canonical/group/{recording_id}", follow_redirects=False)
+
+    assert f"expand={group['song']}" in resp.headers["Location"]
+
+
+# -- The review page's track-count guard (app.py:426) -----------------------
+
+
+def test_the_review_page_accepts_exactly_two_tracks(client):
+    # source: S_survivors.md app.py:426 -- `len(...) < 2` is the guard
+    # ("tracks= needs at least 2 track ids"); exactly two must not be
+    # rejected, which the < 2/<= 2/< 3 mutants all do.
+    assert client.get("/dev/canonical/review?tracks=ta,tb").status_code == 200

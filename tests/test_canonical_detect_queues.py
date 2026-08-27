@@ -230,6 +230,16 @@ def test_a_newcomer_reopens_a_settled_bucket(conn):
     assert keys(detect.cross_buckets(conn)) == {("ta", "tb", "tc")}
 
 
+def test_cross_buckets_needs_two_components_not_three(conn):
+    # source: S_survivors.md canonical_detect.py:844 -- `len(components) < 2`
+    # is the guard; exactly two unreviewed components is the boundary the
+    # < 2/<= 2/< 3 mutants collapse to "skip", when it must still be offered.
+    make(conn, "ta", "Willow")
+    make(conn, "tb", "Willow", artists=[OTHER_ARTIST], album="Album Two")
+
+    assert keys(detect.cross_buckets(conn)) == {("ta", "tb")}
+
+
 # -- The cross-artist item's shape (E §4.1) ---------------------------------
 
 
@@ -282,6 +292,76 @@ def test_an_established_track_stays_established_after_a_newcomer_arrives(conn):
     assert [row["track_id"] for row in item["new_tracks"]] == ["td"]
 
 
+def test_here_excludes_a_song_member_not_established_in_this_bucket(conn):
+    """A track can already carry a `track_group` assignment into a song
+    without ever having been reviewed against this bucket -- a residual
+    assignment, not a genuine decision. `here` (established members of the
+    song, present in the bucket) must not treat bucket membership alone as
+    established, or a merely-assigned newcomer leaks its own primary artist
+    into `here_primary` and nests itself.
+
+    `td` is exactly that: assigned into `tb`'s song group directly (bypassing
+    review), sharing nobody's primary artist. Under the real rule it is a
+    plain new track; if bucket membership alone counted as established, `td`
+    would end up "sharing a primary artist" with itself and be nested instead.
+    """
+    # source: S_survivors.md canonical_detect.py:765 -- `tid in established
+    # and tid in bucket_set`; `established` is already a subset of `bucket`,
+    # so the AND only matters when a `members` entry sits in the bucket
+    # without being established.
+    make(conn, "tb", "Willow")
+    make(conn, "tc", "Willow", artists=[OTHER_ARTIST], album="Album Two")
+    group = builders.make_group(conn, ["tb"])
+    canonical.mark_reviewed_pairs(conn, [("tb", "tc")])
+    conn.commit()
+    make(conn, "td", "Willow", artists=["ar-third"], album="Album Three")
+    builders.make_group(conn, ["td"], song=group["song"])
+
+    item = detect.cross_bucket_for(conn, ["tb", "tc", "td"])
+
+    assert [row["track_id"] for row in item["new_tracks"]] == ["td"]
+    assert item["groups"][0]["nested"] == []
+
+
+def test_a_nested_newcomer_is_always_queued_never_decided(conn):
+    """A newcomer nested under a group is, by definition, unreviewed against
+    every bucket member -- including every member of `here` -- since any
+    reviewed pair with a bucket member would have made it established
+    instead of a newcomer. `decided` can therefore never be true; a nested
+    chip's `state` is always "queued"."""
+    # source: S_survivors.md canonical_detect.py:778 -- `_pair_key(tid,
+    # other) in reviewed_pairs`; empirically confirmed the nested state is
+    # "queued" here, never "decided" (probed before writing this test).
+    make(conn, "tb", "Willow")
+    make(conn, "tc", "Willow", artists=[OTHER_ARTIST], album="Album Two")
+    builders.make_group(conn, ["tb"])
+    canonical.mark_reviewed_pairs(conn, [("tb", "tc")])
+    conn.commit()
+    make(conn, "ta", "Willow", album="Album Three")
+
+    item = detect.cross_bucket_for(conn, ["ta", "tb", "tc"])
+
+    nested = [row for group in item["groups"] for row in group["nested"]]
+    assert [row["track_id"] for row in nested] == ["ta"]
+    assert nested[0]["state"] == "queued"
+
+
+def test_a_bucket_items_representative_is_a_populated_row(conn):
+    # source: S_survivors.md canonical_detect.py:788 -- `_row(tracks, rep_id)
+    # if rep_id in tracks else None`; the representative track of an
+    # established song exists in `tracks` and must render, not disappear.
+    make(conn, "tb", "Willow")
+    make(conn, "tc", "Willow", artists=[OTHER_ARTIST], album="Album Two")
+    builders.make_group(conn, ["tb"])
+    canonical.mark_reviewed_pairs(conn, [("tb", "tc")])
+    conn.commit()
+
+    item = detect.cross_bucket_for(conn, ["tb", "tc"])
+
+    assert item["groups"][0]["representative"] is not None
+    assert item["groups"][0]["representative"]["track_id"] == "tb"
+
+
 def test_cross_bucket_for_needs_two_tracks(conn):
     # characterization -- Backspace re-renders a bucket by track id, and a
     # one-track bucket is not a bucket; the caller branches on None.
@@ -289,6 +369,28 @@ def test_cross_bucket_for_needs_two_tracks(conn):
 
     assert detect.cross_bucket_for(conn, ["ta"]) is None
     assert detect.cross_bucket_for(conn, ["ta", "unknown-track"]) is None
+
+
+def test_cross_bucket_for_returns_an_item_for_exactly_two_tracks(conn):
+    # source: S_survivors.md canonical_detect.py:819 -- `len(ids) < 2` is the
+    # guard; exactly two known tracks is the boundary the < 2/<= 2/< 3
+    # mutants collapse onto None, when it must still produce an item.
+    make(conn, "tb", "Willow")
+    make(conn, "tc", "Willow", artists=[OTHER_ARTIST], album="Album Two")
+
+    assert detect.cross_bucket_for(conn, ["tb", "tc"]) is not None
+
+
+def test_cross_bucket_for_bases_on_the_first_given_track(conn):
+    # source: S_survivors.md canonical_detect.py:826 -- `tracks[ids[0]]
+    # ["base"]`; ids keeps the caller's order (not sorted), so the base must
+    # come from the first track passed in, not the second.
+    make(conn, "ta", "Willow", artists=[OTHER_ARTIST])
+    make(conn, "tb", "Cardigan")
+
+    item = detect.cross_bucket_for(conn, ["ta", "tb"])
+
+    assert item["base"] == "willow"
 
 
 # -- Ordering (scoring-H.md §11.1) ------------------------------------------
@@ -566,6 +668,23 @@ def test_a_pending_item_carries_a_prefill_below_the_song_tier(conn):
     assert item["labels"]["ta"]["version"] != item["labels"]["tb"]["version"]
 
 
+def test_a_pending_item_bases_on_the_first_sorted_member_and_is_not_cross_artist(conn):
+    # source: S_survivors.md canonical_detect.py:906/913 -- `base =
+    # tracks[sorted(members)[0]]["base"]` and `cross_artist=False`; the
+    # display base must come from the alphabetically-first member, and the
+    # pending queue is never rendered as a cross-artist item.
+    make(conn, "ta", "Alpha")
+    make(conn, "tb", "Zulu")
+    builders.make_group(conn, ["ta", "tb"])
+    conn.execute("INSERT INTO pending_tier_review (track_id) VALUES ('tb')")
+    conn.commit()
+
+    item = detect.pending_tier_items(conn)[0]
+
+    assert item["base"] == "alpha"
+    assert item["cross_artist"] is False
+
+
 # -- The ad-hoc item --------------------------------------------------------
 
 
@@ -596,6 +715,20 @@ def test_an_ungrouped_track_gets_labels_unique_to_itself(conn):
     item = detect.ad_hoc_group(conn, ["ta", "tb"])
 
     assert item["labels"]["ta"]["song"] != item["labels"]["tb"]["song"]
+
+
+def test_ad_hoc_group_bases_on_the_first_sorted_track_and_is_not_cross_artist(conn):
+    # source: S_survivors.md canonical_detect.py:1039/1049 -- `base =
+    # tracks[ids_sorted[0]]["base"]` and `"cross_artist": False`; ad_hoc_group
+    # sorts its own ids, so the base must come from the alphabetically-first
+    # id, and the ad-hoc item is never rendered as cross-artist.
+    make(conn, "ta", "Alpha")
+    make(conn, "tb", "Zulu")
+
+    item = detect.ad_hoc_group(conn, ["ta", "tb"])
+
+    assert item["base"] == "alpha"
+    assert item["cross_artist"] is False
 
 
 # -- Stale decisions --------------------------------------------------------

@@ -5,9 +5,7 @@ without re-deriving anything. Read `docs/specs/mutation-sweep-S.md` (the spec)
 and `S_sweep.md` (the ledger) first; this file is the operational layer on top.
 
 Branch: `feat/mutation-sweep-S`, **not pushed, not merged**. Suite green at
-**1023 passed / 3 skipped**. Round 1's four test files are **modified but
-uncommitted** — `test_grouping_canvas.py`, `test_history_import.py`,
-`test_routes.py`, `test_scrobble.py`.
+**1072 passed / 3 skipped**. Rounds 1 and 2 are committed.
 
 ---
 
@@ -17,47 +15,63 @@ uncommitted** — `test_grouping_canvas.py`, `test_history_import.py`,
 |---|---|
 | sweep has run over §1's scope | ✅ twice — §2 (997) and §2.4's corrected re-run (1018) |
 | `broken`/`crashed` classified, **crash pass clean** | ✅ 719/719, zero anomalies (`S_sweep.md` §2.5) |
-| every survivor has a verdict and a reason | ❌ **141 of 252 outstanding** (`S_survivors.md`) |
-| every "gap — fixed" has a proven test | ✅ for the 111 done; every proof re-run by the master |
+| every survivor has a verdict and a reason | ❌ **62 of 252 outstanding** (`S_survivors.md`) |
+| every "gap — fixed" has a proven test | ✅ for the 190 done; every proof re-run by the master |
 | survivor set re-runs with fixed mutants caught | ❌ end-of-step, not yet run |
 | `scripts/mutation/` committed, map names it, map test recurses | ✅ |
-| `S_sweep.md` written | ⚠️ §1–§4 + §3.5 written; **§5 is a stub** |
-| `pytest` green | ✅ 1023 / 3 skipped |
+| `S_sweep.md` written | ⚠️ §1–§4 + §3.5 + §3.6 written; **§5 is a stub** |
+| `pytest` green | ✅ 1072 / 3 skipped |
 
-**111 closed** = §3.1–§3.4's 40 + round 1's 71. **141 remain.**
+**190 closed** = §3.1–§3.4's 40 + round 1's 71 + round 2's 79. **62 remain.**
 
 ---
 
-## 2. The work: 141 survivors, by feature domain
+## 2. The work: 62 survivors, by feature domain
 
 `S_survivors.md` is the committed work list, keyed on `before` text so it
 survives a rebase. It is still *listed* by module — but it must be *assigned*
-by **feature domain**, which is the correction round 1 produced (`S_sweep.md`
-§3.5). `app.py` is not one agent's job: its survivors belong to the test file
-that owns the feature, and assigning them by module puts two agents in a file a
-third already owns.
+by **feature domain** (`S_sweep.md` §3.5). `app.py` is not one agent's job: its
+survivors belong to the test file that owns the feature.
 
-`app.py`'s remaining 26 break down as: round-trip 10, canonical 8, snapshot 5,
-artists 2, backfill 1.
+`app.py`'s remaining 18 break down as: round-trip 10, snapshot 5, artists 2,
+backfill 1.
 
-Proposed rounds — **3 agents at a time, and Finn approves each round before it
+Two rounds left — **3 agents each, and Finn approves each round before it
 starts** (his instruction, so he can check usage):
 
 | round | domains (test file) | survivors |
 |---|---|---:|
-| 2 | canonical (`canonical_detect.py` 32 + `app.py` 8) · entities (27) · db (12) | 79 |
-| 3 | round-trip (`app.py` 10) · jobs (10) · artists (`artists.py` 8 + `app.py` 2) | 30 |
-| 4 | `api_log` 7 + `backfill` 8 · `generations` 6 + `canonical_autogroup` 6 · snapshot (`app.py` 5) | 32 |
+| 3 | round-trip (`app.py` 10 → `test_roundtrip.py`) · jobs (10) · artists (`artists.py` 8 + `app.py` 2) | 30 |
+| 4 | `api_log` 7 + `backfill.py` 7 + `app.py` 1 (8) · `generations` 6 + `canonical_autogroup` 6 · snapshot (`app.py` 5) | 32 |
 
-Round 2's canonical block is 40 on its own and is the one worth splitting —
-`test_canonical_detect_rules.py` and `test_canonical_detect_queues.py` are
-separate files, so it divides cleanly if a fourth agent is acceptable.
+Round 4's three lots are 15 / 12 / 5 and touch five separate test files, so
+they partition cleanly however they are grouped.
 
 Give each agent its **own plain directory copy** of the repo — not a git
 worktree (standing rule) — and merge their work yourself. Build the copies by
 excluding `.git`, `venv`, `data`, `*.db`, `__pycache__`, `.pytest_cache`, then
 **symlink `venv` back in**: `verify.py` computes its interpreter as
 `<copy>/venv/bin/python`, so a copy without one cannot run the gate.
+
+### 2.1 Interruption, which will happen again
+
+Round 2's four agents all died mid-run when the machine slept. Two had written
+nothing in three hours and lost everything; two had been writing per survivor
+and lost almost nothing. So:
+
+- **Tell every agent to finish each survivor completely — verdict, test, proof
+  — before starting the next.** Not to read everything and write at the end.
+- **Progress is reconstructible from disk without the agent.** Run `verify.py
+  one` for each of its assigned survivors *inside its own copy*: `caught` means
+  a killing test already exists, `SURVIVED` means it is still open. That
+  establishes the true state before deciding whether to resume.
+- **`one` is not the §6 gate.** It proves the suite fails, not that a *named*
+  test fails. Anything reconstructed this way still needs a real `kill` proof.
+- **Resume rather than respawn.** All four resumed with context intact and
+  finished. Hand each the measured state — these are killed, these are open —
+  so it does not re-derive it.
+- **Bank finished work out of `/private/tmp` promptly.** A sleep leaves the
+  scratchpad alone; a reboot may not.
 
 ---
 
@@ -113,9 +127,15 @@ Finn's call and a separate branch.
 `equivalent` / `cosmetic` / `harness-masked`. Every survivor gets exactly one,
 with a reason. There is deliberately **no kill-rate floor**.
 
-**Two equivalent classes are now known** and should be named in briefs so
+**Three equivalent classes are now known** and should be named in briefs so
 nobody re-derives them: a digit or keyword mutated **inside a docstring** that
-happens to quote SQL, and **`LIMIT 1` → `LIMIT 2` paired with `.fetchone()`**.
+happens to quote SQL; **`LIMIT 1` → `LIMIT 2` paired with `.fetchone()`**; and
+**provably unreachable from this call site** (`entities.py:676`, `db.py:531`).
+
+**Name the swap trap too** (`S_sweep.md` §3.6): a symmetric two-item fixture
+lets a JOIN-condition inversion produce a coincidental one-for-one swap — same
+count, same order, different truth. Break the symmetry with a third row, or
+assert on a *value* rather than a count.
 
 ---
 
@@ -161,9 +181,9 @@ instrument.
 
 If the sweep is re-run, rebuild `S_survivors.md` by filtering
 `sweep_results.jsonl` for `status == "SURVIVED"` and excluding everything
-§3.1–§3.5 already ruled on: the three 0% modules; any `abort(...)`/`api_error`
+§3.1–§3.6 already ruled on: the three 0% modules; any `abort(...)`/`api_error`
 status code; the group-D lines (`app.py:706`, `entities.py:65/66/191/502/510`,
 `backfill.py:77/133`); the group-E lines (`history_import.py:63-66/128-130/
 199/239/243`, `backfill.py:28`); the `EXISTS (SELECT 1 …)` / SQL-comment
-equivalents; and **everything in §3.5's four domains**. Keep `before` and
+equivalents; and **everything in §3.5's and §3.6's domains**. Keep `before` and
 `col` — both are load-bearing.

@@ -179,3 +179,42 @@ def test_the_track_search_ranks_by_score_before_its_hundred_row_cap(conn):
     results = _index(conn, search_q="Ranked Track")["search_results"]
 
     assert [r["name"] for r in results] == ["B Ranked Track", "A Ranked Track"]
+
+
+def test_the_track_search_caps_at_a_hundred_results(conn):
+    # source: S_survivors.md canonical_detect.py:694 -- `ranked_rows[:100]`
+    # is the cap; a 101st match must not come back.
+    for i in range(101):
+        builders.make_track(conn, f"t-{i:03d}", name=f"Zebra {i:03d}")
+
+    results = _index(conn, search_q="Zebra")["search_results"]
+
+    assert len(results) == 100
+
+
+def test_the_track_search_matches_by_the_tracks_own_artist_only(conn):
+    # source: S_survivors.md canonical_detect.py:687 -- the EXISTS subquery
+    # must join back through *this* track's own artist credit
+    # (`x.track_id = t.track_id AND ar.name LIKE ?`), not any unrelated
+    # track that merely exists elsewhere or shares the album's artist row.
+    builders.make_artist(conn, "ar-1", name="Special Artist")
+    builders.make_track(conn, "ta", name="Some Song", artists=["ar-1"])
+    builders.make_track(conn, "tb", name="Other Song", artists=["ar-2"])
+
+    results = _index(conn, search_q="Special Artist")["search_results"]
+
+    assert [r["track_id"] for r in results] == ["ta"]
+
+
+def test_the_deep_link_does_not_duplicate_a_group_already_shown(conn):
+    # source: S_survivors.md canonical_detect.py:673 -- `expand_song_id and
+    # not any(...)` guards the deep-link prepend; a group already inside the
+    # cap must not be inserted a second time.
+    high = builders.make_group(conn, ["ta", "tb"])
+    low = builders.make_group(conn, ["tc", "td"])
+    builders.make_score(conn, "version", high["version"], all_time=90.0)
+    builders.make_score(conn, "version", low["version"], all_time=20.0)
+
+    data = _index(conn, cap=2, expand_song_id=high["song"])
+
+    assert [g["song_id"] for g in data["groups"]] == [high["song"], low["song"]]
