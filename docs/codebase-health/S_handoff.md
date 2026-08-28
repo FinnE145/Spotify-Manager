@@ -33,8 +33,13 @@ survives a rebase. It is still *listed* by module — but it must be *assigned*
 by **feature domain** (`S_sweep.md` §3.5). `app.py` is not one agent's job: its
 survivors belong to the test file that owns the feature.
 
-`app.py`'s remaining 18 break down as: round-trip 10, snapshot 5, artists 2,
-backfill 1.
+`app.py`'s remaining 18 break down by route, so nobody re-maps them:
+
+- **round-trip (10)** → `test_roundtrip.py`: 861, 882, 884, 891, 897, 914,
+  916, 927, 936, 940
+- **snapshot (5)** → `test_snapshot_page.py`: 772, 780, 788, 807, 812
+- **artists (2)** → `test_artists.py`: 980, 990
+- **backfill (1)** → `test_backfill.py`: 952
 
 Two rounds left — **3 agents each, and Finn approves each round before it
 starts** (his instruction, so he can check usage):
@@ -91,9 +96,20 @@ path**: the default is `$TMPDIR/symr-mutation`, one shared directory, and three
 agents in it is the same race that has already broken this tool twice. Pass
 `--col` wherever a line carries several mutants — the tool refuses rather than
 guessing. **Re-run every returned proof yourself**; that is the whole point of
-§6 and what makes a cold agent's output checkable rather than trusted. Bucket
-those re-runs **one directory per thread** — not `idx % N` across a pool, which
-is that same race a third time.
+§6 and what makes a cold agent's output checkable rather than trusted.
+
+Use **`scripts/mutation/recheck.py`** for that — it takes a TSV of
+`module<TAB>line<TAB>col<TAB>op<TAB>test` (drop the last field for a
+survive-check) and runs the batch in parallel, exiting non-zero on any
+mismatch. It exists so the per-worker-directory bucketing has one home: that
+race had been got wrong three times before it was written — `sweep.py`,
+`verify.py`'s crash pass, and a round-2 master driver — so do **not** hand-roll
+another runner with `idx % N` across a pool.
+
+**Check the non-fix verdicts too.** `equivalent`, `cosmetic` and `recorded, not
+fixed` all claim no test kills the mutant, which is exactly as checkable as a
+kill — 11 such claims were re-run in round 2 and all held. A four-field row in
+the TSV does this.
 
 **Forbid edits to the shared test infrastructure** — `conftest.py`,
 `builders.py`, `fakes.py`, `routes_catalog.py`, `golden.py`. §7.2's partition
