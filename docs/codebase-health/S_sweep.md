@@ -687,6 +687,98 @@ sighting.
 
 ---
 
+### 3.8 Round 4 — the last 33, and an interruption that cost almost nothing
+
+2026-08-28. Three triage agents. **24 gap — fixed, 9 equivalent.** 23 tests
+added; the suite went 1093 → 1116 passed, 3 skipped. All 33 verdicts were
+re-run by the master session and **all 33 reproduced**.
+
+| domain | test file(s) | survivors | fixed | equiv |
+|---|---|---:|---:|---:|
+| backfill (`backfill.py` ×7 + `app.py` ×2) | `test_backfill.py` | 9 | 5 | 4 |
+| generations + autogroup | `test_generations.py`, `test_canonical_autogroup.py` | 12 | 7 | 5 |
+| snapshot page + `api_log` | `test_snapshot_page.py`, `test_api_log.py` | 12 | 12 | — |
+
+**Two of the three agents died mid-run**, together, on an account spend limit —
+the third interruption in three rounds, and the first from a cause that has
+nothing to do with the machine. **§3.6's rule paid for itself completely.**
+Both had been finishing each survivor before starting the next, so:
+
+- the `api_log`/snapshot agent had **finished all twelve** and lost only its
+  report, which the master reconstructed from its tests;
+- the generations agent had **five of twelve** done, all intact.
+
+**Reconstruction took one batch and no agent.** Feeding all 24 of their
+survivors to `recheck.py` as *survive-checks* inverts the tool into a progress
+probe: a row that comes back `MISMATCH` — did not survive — is one a test
+already kills. That established 17 of 24 closed in a single parallel run,
+against §3.6's serial `verify.py one` loop. Neither discharges §6: every one of
+those 17 still needed a named kill proof afterwards, and getting the
+test-to-mutant attribution right turned out to be the actual work.
+
+**A fifth equivalent class, and it is a common one: `SELECT DISTINCT` whose
+rows are consumed by a Python set.** Five of this round's nine equivalents are
+this — `backfill.py:90/111` into a `defaultdict(set)`, `generations.py:70/151`
+the same, `generations.py:202` into a set comprehension. The DISTINCT is a
+database-side optimisation; the Python side dedupes again, so no fixture can
+distinguish the two queries however many duplicate rows the join produces.
+Since `sqlDISTINCT` will keep generating these, the rule for sweep #3 is:
+**check the collection type at the call site before spending any time on a
+`sqlDISTINCT` survivor.**
+
+**A sub-variant of the unreachable class: unreachable because of an enforced
+FOREIGN KEY.** `backfill.py:100/150` are `dict.get(k, False)` defaults that can
+only fire on a referential-integrity violation the schema forbids —
+`track.album_id REFERENCES album(album_id)` with `PRAGMA foreign_keys = ON` on
+every connection. Second sighting after §3.6's `db.py:531`. The boundary was
+drawn deliberately and is worth stating: a test *could* reach these by opening
+a connection with foreign keys off, and that was rejected as asserting
+behaviour on a database state no code path can produce.
+
+**One line pair, two opposite verdicts** — and reading the survivor rows would
+have got it wrong. `canonical_autogroup.py`'s chunked tag-back carries the
+stride at :122 and the slice at :123, and the mutants look interchangeable:
+`step 501` versus `slice + 501`. They are not. The stride mutant opens a
+one-element **gap** at index 500 and that group never gets its `auto_run_id`,
+so undo cannot find it — a real defect, killed by a fixture of 130 qualifying
+pairs (650 decided groups, which crosses the 500 boundary in 0.2s; the "this
+needs a huge fixture" instinct was wrong because each pair decides four tier
+groups). The slice mutant makes the chunks **overlap**, and the duplicated
+`UPDATE` writes the same `run_id` — identical final state at every length, so
+it is equivalent. This is §3's trap 3 again: never judge from the row.
+
+**Both of the master's own steers this round were wrong, and the gate caught
+both.** Round 3's was `drain`'s timeouts (§3.7). Round 4's was `api_log`'s two
+`duration_ms` mutants, briefed as probably `harness-masked` on the reasoning
+that freezegun freezes `time.monotonic` and `0 * 1000 == 0 * 1001`. The clock
+is frozen but it can be **ticked**, so the agent advanced it two seconds and
+asserted 2000 against the mutant's 2002. The lesson is not about freezegun: a
+brief's confident aside is an untested hypothesis with authority attached, and
+the only thing standing between it and a wrong verdict is that §6 makes the
+claim re-runnable.
+
+#### The fourth tool failure — and the first that did not flatter
+
+§5 said to assume a fourth. It arrived, in `recheck.py`: a 17-job batch
+returned **six false `MISMATCH`es with empty output**, every one of which
+passed when re-run alone. The cause was not a latent bug but an operating
+constraint the tool never stated: **`recheck.py` copies the live repo once per
+job, so the working tree must be frozen for the whole batch.** The master had
+been creating and deleting a probe file and rewriting a test file while the
+batch ran, and the six failures are exactly the contiguous block of jobs
+scheduled during that window — a time signature, not the per-worker signature
+of §1.1's race, which is what identified it.
+
+Two things make it worth recording. First, it is the **first of the four that
+erred pessimistically**: it reported failure where there was success, so it
+could only cost time, never manufacture a false pass. Second, the fix is free
+and generalises — **run a long batch from a frozen snapshot copy**, whose
+`scripts/mutation/recheck.py` computes `REPO` as that copy, leaving the live
+tree editable throughout. The end-of-step survivor re-run (§4.1) was run that
+way.
+
+---
+
 ## 4. What was added
 
 **§3.4 is complete.** **39 new test cases**, taking the suite from 944 to 983.
@@ -746,19 +838,169 @@ Deriving each case's expected status by running the suite is characterization,
 not specification, and `codebase-health-P.md` §2 is explicit that the
 distinction is the point. The error paths are supplemented instead.
 
-**§3.4 leaves nothing outstanding.** What remains of the sweep as a whole is
-the untriaged majority of the 307 original survivors — the ~65 numeric ones
-outside §3.4's five named groups, and the ~178 non-numeric ones nothing in
-this document has looked at yet — plus the writeup's §5 (what this run says
-about the next sweep), which is written after triage finishes.
+**§3.4 left nothing outstanding, and neither does the step.** The remaining
+212 survivors were closed by the four delegated rounds in §3.5–§3.8. Across the
+whole step the suite went **944 → 1116 passed, 3 skipped — 172 new tests** —
+and every one of the 252 survivors carries a verdict and a reason.
+
+The per-round figures below are the *verified* ones: the fixed column is kill
+proofs re-run to `PASS` by the master session, the non-fix column is verdicts
+re-run and still `SURVIVED`. Each round's own section breaks the non-fix half
+into equivalent / cosmetic / recorded / harness-masked.
+
+| round | survivors | fixed | non-fix |
+|---|---:|---:|---:|
+| §3.5 round 1 | 71 | 59 | 12 |
+| §3.6 round 2 | 79 | 68 | 11 |
+| §3.7 round 3 | 29 | 25 | 4 |
+| §3.8 round 4 | 33 | 24 | 9 |
+| **four rounds** | **212** | **176** | **36** |
+
+§3.1–§3.4's 40 are not re-tabulated here — that work predates the delegated
+rounds and its accounting is by *mutant set* (63 mutants, some of which were
+never in the survivor list) rather than by survivor, so the two cannot be added
+without double-counting. Its own table stands above.
+
+**One known inconsistency, left visible rather than silently corrected.**
+§3.6's prose lists its non-fix verdicts as 8 equivalent + 3 cosmetic + 1
+recorded = 12, but its verified count is 11 (68 kill proofs + 11 survive-checks
+= 79). One of those three figures is off by one and the round-2 data needed to
+say which is gone. The verified totals are the ones used here.
 
 ---
 
+### 4.1 The end-of-step survivor re-run — every fix holds
+
+Spec §10's last mechanical criterion: re-run the **whole survivor set** against
+the finished tree and confirm that everything ruled `gap — fixed` is now caught
+and everything ruled otherwise still survives. Run 2026-08-28 over all 252
+survivors of the §2.4 measurement, against a suite of 1116 passed / 3 skipped.
+
+**182 caught, 70 still surviving — and both halves reconcile exactly.**
+
+| | caught | still surviving |
+|---|---:|---:|
+| the four delegated rounds (§3.5–§3.8) | 176 | 36 |
+| §3.1–§3.4 | 6 | 34 |
+| **total** | **182** | **70** |
+
+The 70 are the non-fix verdicts, and they decompose with nothing left over:
+36 from the four rounds, plus §3.1's 15 equivalents by construction, §3.2's 11
+`recorded, not fixed` on the 0% modules, §3.3 B's 5 `not_authenticated`
+equivalents and §3.4 E's 3 commit-cadence records. Two independent checks that
+this is the right 70 rather than a coincidence of totals: the still-surviving
+`config.py` (4) and `spotify_client.py` (7) sum to exactly §3.2's 11, and
+`history_import.py`'s 19 are round 1's 7 non-fix plus 12 from the earlier
+tranche — the group-E lines `:199/:239/:243` are all present, as named there.
+
+**Every mutant was confirmed to still point at the source it was measured
+against.** The results file carries `before` for each, so the check is
+mechanical: all 70 surviving rows match their recorded line text. That matters
+because line numbers are relative to the measured tree, and a re-run that had
+silently drifted onto different code would have produced a clean-looking
+result meaning nothing — the same shape as §1.1's failure. Nothing drifted.
+
+**No `gap — fixed` mutant survives.** That is the criterion, and it is met.
+
+
 ## 5. What this says about the next sweep
 
-*Written after triage. The one thing this run can already settle is §8.5's
-question — whether the sessions after P kept the standard P set — and the
-answer is no. `scrobble.py` at 76% is the cleanest case: a brand-new module,
-a dedicated 1092-line test file, every convention documented and in force, and
-roughly one mutant in four still survives. Whatever P installed did not
-propagate on its own.*
+### 5.1 The question the step was set to answer
+
+`codebase-health-P.md` §8.5 asked whether the sessions after P kept the
+standard P set. **The answer is no.** `scrobble.py` is the cleanest case: a
+brand-new module from step R, a dedicated 1092-line test file, every convention
+documented and in force — and 76%, roughly one mutant in four surviving.
+`generations.py` at 88% and `backfill.py` at 85% say the same thing more
+quietly. Whatever P installed did not propagate on its own, and nothing in the
+ordinary workflow would have revealed that: every one of those modules was
+green, reviewed, and shipped.
+
+### 5.2 What mutation found that nothing else could
+
+`CLAUDE.md` poses two questions — *of each test, what would a wrong
+implementation have produced?* and *of each module, what does it produce that
+no test reads at all?* This run is the evidence that the second is not a
+refinement of the first.
+
+The sharpest single finding is a test that **was already green and could never
+fail**: `test_the_event_log_is_capped_so_a_long_run_stays_small` both filled
+and asserted through `jobs._LOG_LIMIT`, so raising the constant raised the
+expectation with it (§3.7). Coverage rated that line fully covered, because it
+was — executed, and unobserved. Review had passed it repeatedly. It is the
+defect P found in every session, surviving in the suite P built.
+
+The general rule it yields is the most portable thing this run produced: **a
+test that derives its expected value from the thing it is testing moves with
+the mutant.** Write the expectation as a literal.
+
+### 5.3 The equivalent-class catalogue, and what it is worth
+
+Five classes are now named, and roughly 16 of the ~29 equivalent verdicts fall
+into one of them:
+
+1. a digit or SQL keyword mutated **inside a docstring** quoting SQL;
+2. **`LIMIT 1` → `LIMIT 2` paired with `.fetchone()`**;
+3. **provably unreachable from this call site** — including the sub-variant
+   *unreachable because an enforced FOREIGN KEY forbids the state* (§3.8);
+4. **`SELECT DISTINCT` whose rows are consumed by a Python set** (§3.8);
+5. **a comparison-boundary flip whose branches coincide at the boundary**
+   (§3.7).
+
+Be honest about what naming them buys. **Only the first is cheaply eliminable
+at the generator** — the rest depend on what the *call site* does with the
+result, which `generate.py` cannot see. What the catalogue actually saves is
+triage time: these become recognition rather than derivation, which is the
+difference between a minute and an hour on each. Sweep #3 should fix the
+docstring case in `generate.py` and treat the other four as a checklist to run
+before opening the function.
+
+### 5.4 The delegation design worked, and one rule carried it
+
+Spec §7's shape — a master that measures and decides, agents that do the
+bounded checkable part — held across four rounds and 212 survivors, with
+**every one of 212 returned verdicts re-run and reproduced**. Nothing was ever
+overstated by an agent. That is a claim about the *gate*, not about the agents:
+§6 is what makes a cold agent's output checkable rather than trusted, and it
+twice caught the **master's** own confident briefing being wrong (§3.7's
+`drain` timeouts, §3.8's `duration_ms`).
+
+The operational rule that mattered most was learned the hard way in round 2 and
+paid for itself twice after: **finish each survivor completely — verdict, test,
+proof — before starting the next.** Three of the four rounds were interrupted,
+twice by the machine sleeping and once by an account limit. Agents that had
+batched their writing lost everything; agents that had not lost almost nothing.
+In round 4 an agent died having finished all twelve of its survivors, and the
+only thing lost was its report.
+
+Add to that: give every agent its own directory copy and its own `--work` path,
+forbid edits to the shared fixtures, and remember that progress is
+**reconstructible from disk with no agent involvement** — feeding a dead
+agent's survivors to `recheck.py` as survive-checks inverts it into a parallel
+progress probe (§3.8).
+
+### 5.5 The instrument lied four times
+
+Three of them flattered — a worker race reporting 89% and 100% on a red
+baseline, the same race reproduced in the crash-verification pass whose entire
+job is catching false results, and f-strings invisible to both passes. The
+fourth (§3.8) erred pessimistically for the first time.
+
+**The standing lesson stands: when this tooling is wrong, the symptom is
+usually a *better* number.** A pleasing result is a prompt to check the
+instrument. The green-baseline pre-flight is twelve seconds and turns the worst
+of those failures into a refusal; the per-worker bucketing now has exactly one
+home in `recheck.py`, after being got wrong in three separate places; and a
+long batch should be run from a **frozen snapshot copy**, so editing the live
+tree cannot corrupt it.
+
+### 5.6 Where not to spend the next pass
+
+Per-module kill rates are published in §2.4 for exactly this. `normalize.py`
+(100%), `serve.py` and `config.py` (now closed) and `generations.py` (88%) are
+not where the next hour goes. The SQL pass is: it survived at 40% against the
+Python pass's 29%, and `db.py` — 18 survivors, 17 of them SQL — remains the
+clearest statement that this codebase's Python is well covered and its queries
+were not. A sweep #3 that ran the SQL pass alone would find most of what a full
+one would, at a quarter of the runtime.
+

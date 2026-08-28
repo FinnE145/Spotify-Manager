@@ -165,7 +165,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
                            DONE            DONE       DONE
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
-      DONE                                           DONE
+      DONE                                           DONE               DONE
   ──► F/G ──► L (search)
 
   ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
@@ -946,11 +946,25 @@ missed window is unrecoverable.
   the next export corrects it. That is the design working, not failing — worth writing down so
   nobody later treats it as a defect.
 
-## S — Whole-codebase mutation sweep
+## S — Whole-codebase mutation sweep ✅ DONE
 
-**Specced 2026-08-23 → `docs/specs/mutation-sweep-S.md`.** Read that spec, not this section —
-planning measured three of the numbers below and they came back different. **Gated on nothing**;
-placed after R by decision (see the Order notes).
+**Specced 2026-08-23 → `docs/specs/mutation-sweep-S.md`. Landed 2026-08-28.** Read that spec for
+what was contracted, and **`docs/codebase-health/S_sweep.md` for what actually happened** — not
+this section, which planning wrote before measuring and which came back different in three
+places. **Gated on nothing**; placed after R by decision (see the Order notes).
+
+**The result, so it is not re-derived:** 1018 mutants over seventeen modules, **74.1% killed**
+pre-fix (§2.4 — the first run's 89% was the tool measuring a red baseline, §1.1). All **252
+survivors triaged**, each with a verdict and a reason: 200 `gap — fixed`, the rest equivalent,
+cosmetic, recorded or harness-masked. The suite went **944 → 1116 passed, 3 skipped — 172 new
+tests**. The end-of-step re-run (§4.1) confirms no `gap — fixed` mutant survives.
+
+Triage ran as four delegated rounds over thirteen subagents, and **every one of the 212 returned
+verdicts was re-run by the master session and reproduced**. The reusable pieces are committed:
+`scripts/mutation/` (the tooling), `docs/codebase-health/S_agent_brief.md` (the agent brief) and
+`S_handoff.md` (the operating recipe for a sweep #3). §5 is the answer to
+`codebase-health-P.md` §8.5 — **the sessions after P did not keep the standard P set**, and
+`scrobble.py` at 76% is the cleanest evidence.
 
 **The precedent, with numbers: `docs/codebase-health/post_P_sweep.md`.** That is the bounded
 version, run 2026-08-23 over the four highest-risk modules: **372 mutants, 364 killed**, with
