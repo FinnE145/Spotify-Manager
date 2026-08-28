@@ -185,6 +185,46 @@ def test_generations_new_in_is_group_count_minus_carried_in(conn):
     assert rows[1]["new_in"] == 1
 
 
+def test_generations_first_generation_carries_nothing_in_even_from_the_newest(conn):
+    """The first generation has no generation before it, so everything in it
+    is new -- and *nothing* is carried in, however much it shares with any
+    later one.
+
+    The fixture puts one version group in generation 1 and again in
+    generation 3 (the newest), so any implementation that reaches for a
+    "previous" generation by index without guarding i == 0 wraps round to the
+    end of the list and reports that shared group as carried.
+    """
+    # source: generations-B.md §Runs, and the three numbers -- carried_in is
+    # presence in generation N-1; S_sweep.md §3 -- cmp> at generations.py:88.
+    # The mutant makes the `i > 0` guard `i >= 0`, so at i == 0 `spans[i - 1]`
+    # is Python's negative index onto the LAST span: generation 1 would be
+    # compared against generation 3 and report carried_in 1 / new_in 0.
+    ta = builders.make_track(conn, "ta")
+    tb = builders.make_track(conn, "tb")
+    shared = builders.make_group(conn, [ta])
+    builders.make_group(conn, [tb])  # a third, unrelated group, only in gen 2
+    p1 = _gen(conn, 1)
+    p2 = _gen(conn, 2)
+    p3 = _gen(conn, 3)
+    _present(conn, p1, ta, added_at="2026-01-01T00:00:00Z")
+    _present(conn, p2, tb, added_at="2026-02-01T00:00:00Z")
+    _present(conn, p3, ta, added_at="2026-03-01T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    rows = generations.generations(conn, tier="version")
+
+    # The shared group really is in both the first and the last generation --
+    # otherwise the wrap-around would have nothing to find.
+    assert rows[0]["group_count"] == 1
+    assert rows[-1]["group_count"] == 1
+    assert shared["version"] in generations._presence_by_ordinal(conn, "version_id")[3]
+
+    assert rows[0]["carried_in"] == 0
+    assert rows[0]["new_in"] == 1
+
+
 def test_generations_survived_out_is_none_for_the_last_generation(conn):
     # source: generations.py's generations() docstring -- "survived_out (how
     # many of its groups appear in the next generation)". The last row has
@@ -201,6 +241,45 @@ def test_generations_survived_out_is_none_for_the_last_generation(conn):
     rows = generations.generations(conn, tier="version")
 
     assert rows[-1]["survived_out"] is None
+
+
+def test_generations_survived_out_is_counted_for_every_generation_but_the_last(conn):
+    """`survived_out` is a real count on *every* generation that has a next
+    one -- including the second-to-last, which is the one an off-by-one in
+    the "is there a next span?" test silently turns into None.
+
+    Three generations, so the middle row has a next span that is not the end
+    of the list, and its count is 2 rather than 1 -- a bare truthiness or
+    "any survived" check would pass on 1 either way.
+    """
+    # source: generations.py's generations() docstring -- survived_out is
+    # "how many of its groups appear in the next generation", None only when
+    # there is no next; S_sweep.md §3 -- num at generations.py:89. The mutant
+    # makes the bound `i + 2 < len(spans)`, so the second-to-last generation
+    # finds no next span and reports None instead of its count.
+    ta = builders.make_track(conn, "ta")
+    tb = builders.make_track(conn, "tb")
+    tc = builders.make_track(conn, "tc")
+    for track_id in (ta, tb, tc):
+        builders.make_group(conn, [track_id])
+    p1 = _gen(conn, 1)
+    p2 = _gen(conn, 2)
+    p3 = _gen(conn, 3)
+    _present(conn, p1, ta, added_at="2026-01-01T00:00:00Z")
+    _present(conn, p2, ta, added_at="2026-02-01T00:00:00Z")
+    _present(conn, p2, tb, added_at="2026-02-01T00:00:00Z")
+    _present(conn, p2, tc, added_at="2026-02-01T00:00:00Z")
+    _present(conn, p3, ta, added_at="2026-03-01T00:00:00Z")
+    _present(conn, p3, tc, added_at="2026-03-01T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    rows = generations.generations(conn, tier="version")
+
+    assert [row["group_count"] for row in rows] == [1, 3, 2]
+    assert rows[0]["survived_out"] == 1
+    assert rows[1]["survived_out"] == 2
+    assert rows[2]["survived_out"] is None
 
 
 def test_generations_tier_song_aggregates_versions(conn):
@@ -442,6 +521,35 @@ def test_presence_for_tracks_returns_sorted_distinct_ordinals(conn):
     conn.commit()
 
     assert generations.presence_for_tracks(conn, [ta]) == [1, 3]
+
+
+def test_presence_for_tracks_reports_a_shared_ordinal_once_not_once_per_track(conn):
+    """The return value is a **list**, not a set, so the query's own DISTINCT
+    is the only thing collapsing the duplicate rows: two of the requested
+    track ids live in the same generation, which is one row each in
+    `generation_presence`.
+
+    This is the case the neighbouring "sorted distinct" test does not reach
+    -- it asks about a single track, and one track cannot duplicate an
+    ordinal. Every real caller passes a whole group's track ids, so the
+    duplicate is the normal case, and the entity pages' generation strip
+    would render generation 1 twice.
+    """
+    # source: generations-B.md §What counts as present -- presence is a set
+    # of ordinals; S_sweep.md §3 -- sqlDISTINCT at generations.py:133. The
+    # mutant drops DISTINCT, and the raw query then returns (1,), (1,), (2,),
+    # which `sorted(...)` preserves as [1, 1, 2].
+    ta = builders.make_track(conn, "ta")
+    tb = builders.make_track(conn, "tb")
+    p1 = _gen(conn, 1)
+    p2 = _gen(conn, 2)
+    _present(conn, p1, ta, added_at="2026-01-01T00:00:00Z")
+    _present(conn, p1, tb, added_at="2026-01-01T00:00:00Z")
+    _present(conn, p2, ta, added_at="2026-02-01T00:00:00Z")
+    canonical.ensure_track_groups(conn)
+    conn.commit()
+
+    assert generations.presence_for_tracks(conn, [ta, tb]) == [1, 2]
 
 
 def test_presence_for_tracks_a_track_with_no_membership_is_absent(conn):

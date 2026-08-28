@@ -275,6 +275,28 @@ def test_the_work_list_caps_at_the_requested_generation_count(conn):
     assert backfill.work_list(conn, 7)["ordinals"] == [1, 2, 3]
 
 
+def test_the_cap_excludes_the_albums_of_the_generations_it_left_out(conn):
+    """The cap is the budget control, so it has to bind on the *albums*, not
+    just on the ordinals the status line displays."""
+    # source: S_sweep.md §3 -- `sqlAND` at backfill.py:113. The test above
+    # asserts the chosen ordinals; nothing asserted that _albums_for_ordinals
+    # actually filters by them. The mutant turns "gp.ordinal IN (...) AND
+    # t.album_id IS NOT NULL" into OR, so the ordinal list stops binding
+    # altogether: every album-bearing track in any generation flows in and the
+    # 2-generation button quietly does the 7-generation button's work. al-1 is
+    # deliberately left unsettled, or _derive's later unsettled filter would
+    # hide the difference.
+    for ordinal in (1, 2, 3):
+        album_with_tracklist(conn, f"al-{ordinal}", [f"t{ordinal}", f"x{ordinal}"])
+        generation_with_album(conn, ordinal, f"al-{ordinal}", [f"t{ordinal}"])
+
+    wl = backfill.work_list(conn, 2)
+
+    assert wl["ordinals"] == [2, 3]
+    assert wl["albums"] == ["al-2", "al-3"]  # al-1's generation was not chosen
+    assert backfill._albums_for_ordinals(conn, [2, 3]) == {"al-2", "al-3"}
+
+
 def test_the_work_list_holds_only_the_unsettled_albums(conn):
     # source: backfill.work_list's docstring -- "the unsettled albums with a
     # track present in any of them". A settled album in a chosen generation
@@ -418,6 +440,28 @@ def test_a_freshly_reset_status_reports_zero_albums(conn):
     backfill._status.reset(phase="working", started_at=jobs.now_iso(), generations=2)
 
     assert backfill.get_status()["albums_total"] == 0
+
+
+def test_stopping_is_reported_only_while_the_backfill_is_the_running_job(monkeypatch):
+    """`stopping` is a conjunction, and the left half is what makes it mean
+    anything: the stop flag is module-global and shared by all four jobs."""
+    # source: S_sweep.md §3 -- `and` at backfill.py:43. get_status() sets
+    # stopping = running AND jobs.stop_requested(). The `or` mutant reports
+    # "stopping" for a backfill that is not running at all -- e.g. while a
+    # stop asked of some other job is still set, which try_start only clears
+    # when the *next* job claims the slot.
+    import jobs
+
+    monkeypatch.setattr(jobs, "stop_requested", lambda: True)
+    assert jobs.active() is None  # nothing holds the slot
+
+    assert backfill.get_status()["stopping"] is False
+
+    # And the other half: with the backfill actually running, the same flag
+    # does mean stopping, so the assertion above is about `running` and not
+    # about stop_requested() being ignored.
+    monkeypatch.setattr(jobs, "active", lambda: "backfill")
+    assert backfill.get_status()["stopping"] is True
 
 
 # -- The job (§4.5) ---------------------------------------------------------
@@ -595,6 +639,36 @@ def test_the_job_stops_cleanly_when_asked(conn, fake_spotify, monkeypatch):
     assert wanted(conn) == {}
 
 
+def test_the_opening_log_line_names_the_generations_the_run_covers(conn, fake_spotify):
+    """The event feed's first line is the run's own statement of its scope."""
+    # source: S_sweep.md §3 -- `or` at backfill.py:235. The `or 'none'`
+    # fallback only fires when _format_ordinal_range returns "", i.e. when
+    # there are no unhandled generations at all; the `and 'none'` mutant
+    # inverts that, so a real run announces "across generations none" while
+    # working twelve albums, and an empty run announces a blank. Both halves
+    # are asserted as literals -- reading the range back off
+    # _format_ordinal_range would move with the mutant (S brief trap 5).
+    for ordinal in (1, 2):
+        album_with_tracklist(conn, f"al-{ordinal}", [f"t{ordinal}", f"x{ordinal}"])
+        generation_with_album(conn, ordinal, f"al-{ordinal}", [f"t{ordinal}"])
+
+    status = run_job(conn, fake_spotify)
+
+    assert status["outcome"] == "completed"
+    opening = status["log"][0]["message"]
+    assert "across generations 1–2," in opening
+
+    # And the empty run, which is what the fallback exists for: a word, not a
+    # gap where the range should be.
+    conn.execute("DELETE FROM wanted_uri")
+    conn.execute("DELETE FROM generation")
+    conn.commit()
+
+    status = run_job(conn, fake_spotify)
+
+    assert "across generations none," in status["log"][0]["message"]
+
+
 def test_the_job_reports_not_authenticated_rather_than_running(conn, monkeypatch):
     # characterization -- the guard at the top of _run. With no client there
     # is nothing to fetch, and the status has to say so rather than looking
@@ -605,6 +679,50 @@ def test_the_job_reports_not_authenticated_rather_than_running(conn, monkeypatch
 
     assert status["outcome"] == "error"
     assert status["error"] == "not_authenticated"
+
+
+# -- The start route (§4.5) -------------------------------------------------
+
+
+def test_the_start_route_accepts_exactly_the_two_button_counts(client, run_jobs_inline):
+    """The two buttons *are* the budget control, so the route's whitelist is
+    what stops an arbitrary N being posted at it."""
+    # source: S_sweep.md §3 -- `num` at app.py:940. M §4 -- "no budget
+    # parameter, no scope beyond the two fixed buttons (N = 7 or 2), which
+    # *are* the budget control". The (2, 7) -> (2, 8) mutant flips both
+    # directions at once, so both are asserted: 7 must be accepted and 8 must
+    # not. Asserting only that 7 is accepted would still pass for (2, 7, 8).
+    for n in (2, 7):
+        assert client.post("/api/backfill/start", json={"generations": n}).status_code == 200, n
+
+    for n in (1, 3, 8, 37, 0, -2, None, "7"):
+        resp = client.post("/api/backfill/start", json={"generations": n})
+        assert resp.status_code == 400, n
+        assert resp.get_json()["error"] == "bad_request", n
+
+    # The refusal names the real pair, so the message can't drift off the
+    # whitelist it is describing. Written out rather than formatted from the
+    # constant, which would move with the mutant (S brief trap 5).
+    detail = client.post("/api/backfill/start", json={"generations": 8}).get_json()["detail"]
+    assert "(2, 7)" in detail
+
+    # Only the two accepted posts ever reached the job slot.
+    assert run_jobs_inline == ["backfill", "backfill"]
+
+
+def test_a_started_backfill_says_so_in_its_response(client, run_jobs_inline):
+    """The JS reads this flag to decide whether to start polling for status."""
+    # source: S_sweep.md §3 -- `true` at app.py:952. The `{"started": False}`
+    # mutant reports a refusal for a run that really did claim the slot: the
+    # two assertions are paired deliberately, since the flag is only worth
+    # anything if it agrees with whether a job started. The route's other two
+    # exits already say False by other means -- 401 not_authenticated and 409
+    # already_running -- so True here is the one thing left to state.
+    resp = client.post("/api/backfill/start", json={"generations": 2})
+
+    assert run_jobs_inline == ["backfill"]  # a job really did start
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
 
 
 # -- Scope: an ingest route and nothing else (§4) ---------------------------
@@ -622,3 +740,5 @@ def test_the_backfill_does_not_chain_into_anything(conn):
     assert "canonical_autogroup" not in module_globals
     assert "scoring" not in module_globals
     assert sys.modules["backfill"].__name__ == "backfill"
+
+

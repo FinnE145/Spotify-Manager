@@ -13,6 +13,8 @@ silent. That silence is why no job may hold an open write transaction across a
 Spotify request (`snapshot._pull_liked_songs`).
 """
 
+from datetime import timedelta
+
 import pytest
 import requests
 
@@ -174,6 +176,43 @@ def test_a_failed_request_is_logged_and_re_raised(conn, transport):
     assert "name resolution failed" in row["error"]
 
 
+def test_a_failed_request_records_the_host_it_was_aimed_at(conn, transport):
+    """The failure arm parses the *incoming* url -- there is no prepared
+    request to read back off -- and the host it pulls out of it is what keeps
+    the row inside the quota picture."""
+    # source: S_sweep.md §3 -- `or` at api_log.py:53. `parts.hostname and ""`
+    # stores an empty host, which drops the row straight out of
+    # request_counts' `host = 'api.spotify.com'` filter: every failed request
+    # would silently stop counting against the quota.
+    transport.response = requests.ConnectionError("name resolution failed")
+
+    with pytest.raises(requests.ConnectionError):
+        api_log.LoggingSession().request("GET", "https://api.spotify.com/v1/me")
+
+    assert rows(conn)[0]["host"] == "api.spotify.com"
+    assert api_log.request_counts(conn) == {"last_24h": 1, "last_7d": 1}
+
+
+def test_a_failed_request_stores_its_query_or_null_when_it_has_none(conn, transport):
+    """Both directions, because the mutant inverts both: a real query string
+    becomes NULL and an absent one becomes '' rather than NULL."""
+    # source: S_sweep.md §3 -- `or` at api_log.py:56. urlsplit gives '' (not
+    # None) for a url with no query, so `parts.query or None` is what turns
+    # that into a SQL NULL; `and None` maps '' -> '' and 'offset=100' -> NULL.
+    transport.response = requests.ConnectionError("connection reset")
+
+    with pytest.raises(requests.ConnectionError):
+        api_log.LoggingSession().request(
+            "GET", "https://api.spotify.com/v1/playlists/p1/tracks?offset=100&limit=50"
+        )
+    with pytest.raises(requests.ConnectionError):
+        api_log.LoggingSession().request("GET", "https://api.spotify.com/v1/me")
+
+    with_query, without_query = rows(conn)
+    assert with_query["query"] == "offset=100&limit=50"
+    assert without_query["query"] is None
+
+
 def test_a_retry_after_header_is_stored_by_name(conn, transport):
     """The one header that is stored, and it goes into its own integer column
     -- not a headers blob."""
@@ -205,6 +244,64 @@ def test_only_the_length_of_the_body_is_stored_never_the_body(conn, transport):
     )
 
 
+
+def _ticking_transport(monkeypatch, freezer, response, seconds):
+    """Like the `transport` fixture, but advances the frozen clock *inside*
+    the call -- between `start = time.monotonic()` and the record.
+
+    freezegun freezes `time.monotonic` as well as `time.time`, so without
+    this every logged request takes exactly 0 ms and the seconds-to-
+    milliseconds conversion is unobservable. `freezer.tick` moves monotonic
+    too (verified: a 2s tick reads back as a 2.0 delta), which makes the
+    elapsed time an exact input rather than a measurement.
+    """
+    def fake_request(self, method, url, *args, **kwargs):
+        freezer.tick(timedelta(seconds=seconds))
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+
+def test_a_requests_duration_is_stored_in_whole_milliseconds(
+    conn, monkeypatch, freezer
+):
+    """`api_request.duration_ms` has no reader in the app yet -- the log is
+    kept forever for exactly this kind of later question -- so the unit it is
+    written in is asserted here or nowhere."""
+    # source: S_sweep.md §3 -- `num` at api_log.py:75. time.monotonic() is in
+    # seconds, so the column is that elapsed value times 1000; the mutant's
+    # 1001 is a 0.1% drift, which needs an exact multi-second elapsed time to
+    # separate the two integers at all (2000 vs 2002).
+    _ticking_transport(
+        monkeypatch, freezer, FakeResponse("https://api.spotify.com/v1/me"), seconds=2
+    )
+
+    api_log.LoggingSession().request("GET", "https://api.spotify.com/v1/me")
+
+    assert rows(conn)[0]["duration_ms"] == 2000
+
+
+def test_a_failed_requests_duration_is_stored_in_whole_milliseconds_too(
+    conn, monkeypatch, freezer
+):
+    """The failure arm has its own copy of the conversion, and it is the arm
+    that matters most: a request that hung for 30s and then died is the case
+    the log exists to make visible."""
+    # source: S_sweep.md §3 -- `num` at api_log.py:58, the same *1000 as the
+    # success arm's. A separate test because it is a separate line: killing
+    # one says nothing about the other.
+    _ticking_transport(
+        monkeypatch, freezer, requests.ConnectionError("timed out"), seconds=3
+    )
+
+    with pytest.raises(requests.ConnectionError):
+        api_log.LoggingSession().request("GET", "https://api.spotify.com/v1/me")
+
+    assert rows(conn)[0]["duration_ms"] == 3000
+
+
 @pytest.mark.parametrize(
     "headers, expected",
     [
@@ -223,10 +320,10 @@ def test_retry_after_parsing(headers, expected):
 # -- `request_counts` -------------------------------------------------------
 
 
-def log_row(conn, host, days):
+def log_row(conn, host, days, hours=0):
     conn.execute(
         "INSERT INTO api_request (ts, host, method, path, status) VALUES (?, ?, 'GET', '/v1/me', 200)",
-        (builders.days_ago(days), host),
+        (builders.days_ago(days, hours=hours), host),
     )
     conn.commit()
 
@@ -253,3 +350,36 @@ def test_token_refreshes_do_not_inflate_the_quota_picture(conn):
     log_row(conn, "accounts.spotify.com", days=0)
 
     assert api_log.request_counts(conn) == {"last_24h": 1, "last_7d": 1}
+
+
+def test_the_rolling_windows_are_exactly_24_hours_and_7_days(conn):
+    """Each edge gets a row just *outside* it -- 24.5 hours and 7.25 days --
+    because a window an hour or a day too wide reads identically on any
+    fixture whose rows all sit comfortably inside or outside it."""
+    # source: S_sweep.md §3 -- `num` at api_log.py:112 (hours=24 -> 25) and
+    # :113 (days=7 -> 8), each of which swallows one of those two rows. The
+    # accounts.spotify.com row is inside both windows and must still never be
+    # counted: request_counts filters to api.spotify.com so token refreshes
+    # do not inflate the quota picture.
+    log_row(conn, "api.spotify.com", days=0, hours=1)
+    log_row(conn, "api.spotify.com", days=0, hours=24.5)
+    log_row(conn, "api.spotify.com", days=7, hours=6)
+    log_row(conn, "api.spotify.com", days=14)
+    log_row(conn, "accounts.spotify.com", days=0, hours=1)
+
+    assert api_log.request_counts(conn) == {"last_24h": 1, "last_7d": 2}
+
+
+def test_a_request_landing_exactly_on_a_window_edge_is_counted(conn):
+    """`ts >= cutoff`, not `>`. The log stores whole seconds, so landing
+    exactly on an edge is ordinary rather than exotic -- and a poller on a
+    fixed cadence lands there far more often than chance."""
+    # source: S_sweep.md §3 -- `sql>=` at api_log.py:119. Both edges carry a
+    # row precisely on them, so `ts > ?` drops one from each count, giving
+    # 1 and 2. The clearly-inside row is what stops that reading as an empty
+    # table rather than as a lost boundary.
+    log_row(conn, "api.spotify.com", days=0, hours=1)
+    log_row(conn, "api.spotify.com", days=1)
+    log_row(conn, "api.spotify.com", days=7)
+
+    assert api_log.request_counts(conn) == {"last_24h": 2, "last_7d": 3}

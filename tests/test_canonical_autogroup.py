@@ -154,6 +154,29 @@ def test_a_run_tags_the_groups_it_decided(conn):
     assert canonical.groups_for_track(conn, "ta")["song"] in canonical.auto_grouped_ids(conn)
 
 
+def test_a_run_tags_every_group_it_decided_not_all_but_the_first(conn):
+    """The tagging UPDATE is chunked, and the neighbouring test only asks
+    about the *song* group -- which is the highest of the five ids a pair
+    decides, so it survives a chunk loop that starts one id late. This one
+    asserts the whole set.
+    """
+    # source: E §3.5 -- canonical_group.auto_run_id marks every group the run
+    # decided; S_sweep.md §3 -- num at canonical_autogroup.py:122 (col 23).
+    # The mutant makes the loop `range(1, len(ids), 500)`, so `ids[0]` -- the
+    # lowest decided group id, here one of the two release groups -- is left
+    # out of every chunk and never tagged.
+    qualifying_pair(conn)  # ta / tb, different albums
+
+    autogroup.run(conn)
+
+    a = canonical.groups_for_track(conn, "ta")
+    b = canonical.groups_for_track(conn, "tb")
+    decided = set(a.values()) | set(b.values())
+    # song + version + recording shared, one release each: five groups.
+    assert len(decided) == 5
+    assert canonical.auto_grouped_ids(conn) == decided
+
+
 def test_a_run_records_its_totals_in_the_log(conn):
     # source: E §3.4 -- "auto_group_run(id, started_at, finished_at,
     # groups_closed, tracks_affected)", plus the `undone_at` column P1-013
@@ -181,6 +204,56 @@ def test_a_run_with_nothing_to_do_writes_no_log_row(conn):
     assert result["run_id"] is None
     assert conn.execute("SELECT COUNT(*) FROM auto_group_run").fetchone()[0] == 0
     assert snapshot_counts(conn) == dict.fromkeys(snapshot_counts(conn), 0)
+
+
+def test_a_run_pays_the_tier_cleanup_once_for_the_whole_batch(conn, monkeypatch):
+    """`_cleanup_tier` is a full `canonical_group` x `track_group` LEFT JOIN
+    per tier, and it is what made the 568-group run take 11.75s instead of
+    1.15s. So `run()` passes `cleanup=False` to every `apply_partition` and
+    settles the debt with one `cleanup_all_tiers` afterwards.
+
+    Nothing about the *rows* records that: the final table state is
+    byte-identical either way (checked by dumping `canonical_group`,
+    `track_group` and `reviewed_pair` under both), because a stale pin is
+    only ever stale on a group `apply_partition` has just emptied, which both
+    orderings delete. The number of passes is the property, so the number of
+    passes is what this counts -- three closable groups and four passes, not
+    sixteen.
+    """
+    # source: canonical.apply_partition's docstring -- "Only a caller that
+    # runs cleanup_all_tiers() itself once its batch is done may pass it";
+    # S_sweep.md §3 -- false at canonical_autogroup.py:105. The mutant makes
+    # the per-group call `cleanup=True`, which cleans inside every one of the
+    # three applies as well as once at the end: 16 passes rather than 4.
+    tiers = []
+    real_cleanup_tier = canonical._cleanup_tier
+
+    def counting(c, tier, column):
+        tiers.append(tier)
+        return real_cleanup_tier(c, tier, column)
+
+    monkeypatch.setattr(canonical, "_cleanup_tier", counting)
+
+    qualifying_pair(conn)
+    qualifying_pair(conn, base="Cardigan", ids=("tc", "td"), albums=("Same LP", "Same LP"))
+    qualifying_pair(conn, base="Betty", ids=("te", "tf"), albums=("LP3", "LP4"))
+
+    result = autogroup.run(conn)
+
+    assert result["groups_closed"] == 3, "three groups, so a per-group cleanup would show"
+    assert tiers == ["release", "recording", "version", "song"]
+    # And the batch really was cleaned: the run still leaves no orphaned
+    # group behind, which is the obligation cleanup=False takes on.
+    assert (
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM canonical_group cg
+            LEFT JOIN track_group tg ON tg.song_id = cg.id
+            WHERE cg.tier = 'song' AND tg.track_id IS NULL
+            """
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_a_run_commits(conn):
@@ -331,3 +404,56 @@ def test_undo_stamps_the_run_as_undone(conn):
         "SELECT undone_at FROM auto_group_run WHERE id = ?", (result["run_id"],)
     ).fetchone()
     assert row["undone_at"] is not None
+
+
+# -- The chunked tag-back, and the last-run lookup ---------------------------
+
+
+def test_a_run_tags_every_group_it_decided_past_the_chunk_boundary(conn):
+    """The `auto_run_id` tag-back is chunked under SQLITE_MAX_VARIABLE_NUMBER,
+    and a group that misses its chunk is silently never tagged -- which means
+    undo cannot find it.
+
+    130 qualifying pairs decide 650 groups (four tiers apiece, less the
+    reuse), so the loop runs twice and the boundary at index 500 is really
+    crossed. Every fixture before this one decided far fewer than 500 groups,
+    so the loop only ever ran once and the stride was never read.
+    """
+    # source: S_sweep.md §3 -- num at canonical_autogroup.py:122 col36
+    # (`range(0, len(ids), 500)` -> `501`). The stride moves but the slice
+    # still takes 500, so ids[500] falls in the gap between the first chunk's
+    # end and the second chunk's start and never gets its auto_run_id.
+    # Asserted as "nothing is left untagged" rather than an exact count: the
+    # property is that the tag-back covers the whole decided set, and a count
+    # would also have to be rederived whenever the fixture size changed.
+    for n in range(130):
+        qualifying_pair(conn, base=f"Song{n}", ids=(f"t{n}a", f"t{n}b"),
+                        albums=(f"Alb{n}A", f"Alb{n}B"))
+
+    autogroup.run(conn)
+
+    total, untagged = conn.execute(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE auto_run_id IS NULL) "
+        "FROM canonical_group"
+    ).fetchone()
+    # The boundary is only exercised if more than one chunk's worth was decided.
+    assert total > 500
+    assert untagged == 0
+
+
+def test_last_run_is_the_newest_run_not_the_oldest(conn):
+    """`last_run` drives the page's undo control, and undo is one level deep --
+    so pointing it at the *first* run ever would offer to restore a snapshot
+    that no longer exists."""
+    # source: S_sweep.md §3 -- sqlDESC at canonical_autogroup.py:146
+    # (`ORDER BY id DESC` -> `ASC`). Every existing test here creates exactly
+    # one run, and with a single row DESC and ASC return the same one, so the
+    # ordering was never read. Two runs are the whole fixture.
+    qualifying_pair(conn, base="First", ids=("f1", "f2"))
+    first = autogroup.run(conn)["run_id"]
+
+    qualifying_pair(conn, base="Second", ids=("s1", "s2"))
+    second = autogroup.run(conn)["run_id"]
+
+    assert first is not None and second > first
+    assert autogroup.last_run(conn)["id"] == second

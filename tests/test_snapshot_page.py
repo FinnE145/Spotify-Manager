@@ -14,6 +14,7 @@ The page's pending-generation prompt is deliberately not part of this payload
 """
 
 import builders
+import jobs
 import snapshot
 
 
@@ -98,3 +99,133 @@ def test_changes_are_the_newest_membership_events_first_and_carry_their_kind(con
         ("tc", "added"),
         ("ta", "added"),
     ]
+
+
+# -- The snapshot control routes -------------------------------------------
+#
+# `/api/snapshot/{pull,refresh,backfill}` are three entry points into one
+# module, and what separates them is *which* target and argument they hand to
+# the job slot -- pull and refresh are the same `_run_pull` with `force_all`
+# flipped. Nothing asserted that mapping, nor the `{"started": true}` body the
+# routes answer with, so a route wired to the wrong sibling was invisible.
+
+
+def _slot_recorder(monkeypatch):
+    """Captures what a route hands to `jobs.try_start` without running it.
+
+    Not `run_jobs_inline`: that runs the pull for real against the fake
+    Spotify client, which exercises the job rather than the dispatch, and
+    discards the target/args this is here to look at.
+    """
+    calls = []
+
+    def fake_try_start(name, target, *args):
+        calls.append((name, target, args))
+        return True
+
+    monkeypatch.setattr(jobs, "try_start", fake_try_start)
+    return calls
+
+
+def test_the_pull_route_starts_a_forced_full_pull_and_says_it_started(
+    client, monkeypatch
+):
+    # source: S_sweep.md §3 -- `true` at app.py:772. The mutant answers
+    # {"started": false} from a route that did start the job, so the page
+    # reports a failure that did not happen. The dispatch half is the level
+    # below: snapshot.start_full_pull is _run_pull with force_all=True, and
+    # only the argument tells it apart from /refresh.
+    calls = _slot_recorder(monkeypatch)
+
+    resp = client.post("/api/snapshot/pull")
+
+    assert calls == [("snapshot", snapshot._run_pull, (True,))]
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
+
+
+def test_the_refresh_route_starts_an_unforced_pull_and_says_it_started(
+    client, monkeypatch
+):
+    # source: S_sweep.md §3 -- `true` at app.py:780, same mutant as /pull's.
+    # The discriminating half is force_all=False: /refresh and /pull share a
+    # target and differ only here, so a copy-pasted route would silently
+    # re-read all 154 playlists.
+    calls = _slot_recorder(monkeypatch)
+
+    resp = client.post("/api/snapshot/refresh")
+
+    assert calls == [("snapshot", snapshot._run_pull, (False,))]
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
+
+
+def test_the_backfill_route_starts_the_backfill_and_says_it_started(
+    client, monkeypatch
+):
+    # source: S_sweep.md §3 -- `true` at app.py:788, same mutant again. The
+    # third entry point is the one with a different target entirely
+    # (_run_backfill, no argument), so it is asserted by name rather than
+    # assumed to follow from its two siblings.
+    calls = _slot_recorder(monkeypatch)
+
+    resp = client.post("/api/snapshot/backfill")
+
+    assert calls == [("snapshot", snapshot._run_backfill, ())]
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
+
+
+def _excluded_flags(conn):
+    return dict(
+        conn.execute("SELECT playlist_id, excluded FROM snapshot ORDER BY playlist_id")
+    )
+
+
+def test_the_exclude_route_toggles_exactly_the_playlists_it_was_given(client, conn):
+    """Both directions, and a bystander playlist that must not move.
+
+    The route is the only way the exclude checkbox reaches `set_excluded`, and
+    it is the only place the posted `excluded` flag is coerced -- so what is
+    asserted is the *stored* flag, not the response alone.
+    """
+    # source: S_sweep.md §3 -- `or` at app.py:807. `body.get("playlist_ids")
+    # and []` collapses a supplied list to [], so a real exclusion 400s
+    # instead of happening; the empty-body arm still 400s and hides it.
+    builders.make_playlist(conn, "p-target", name="Target")
+    builders.make_playlist(conn, "p-bystander", name="Bystander")
+
+    resp = client.post(
+        "/api/snapshot/exclude",
+        json={"playlist_ids": ["p-target"], "excluded": True},
+    )
+
+    assert resp.status_code == 200
+    assert _excluded_flags(conn) == {"p-bystander": 0, "p-target": 1}
+
+    resp = client.post(
+        "/api/snapshot/exclude",
+        json={"playlist_ids": ["p-target"], "excluded": False},
+    )
+
+    assert resp.status_code == 200
+    assert _excluded_flags(conn) == {"p-bystander": 0, "p-target": 0}
+
+
+def test_the_exclude_route_confirms_the_write_with_ok_true(client, conn):
+    """The body the checkbox handler gets back on success.
+
+    `snapshot.js` reverts the checkbox from `.catch()` only, so a mutated
+    `{"ok": false}` leaves the box ticked over a write that may not have
+    happened -- nothing on the page would contradict it.
+    """
+    # source: S_sweep.md §3 -- `true` at app.py:812, which answers
+    # {"ok": false} from a route that did perform the exclusion.
+    builders.make_playlist(conn, "p-ok", name="Ok")
+
+    resp = client.post(
+        "/api/snapshot/exclude", json={"playlist_ids": ["p-ok"], "excluded": True}
+    )
+
+    assert resp.get_json() == {"ok": True}
+    assert _excluded_flags(conn) == {"p-ok": 1}
