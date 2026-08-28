@@ -51,6 +51,31 @@ def test_a_job_claims_the_slot_and_releases_it():
     assert ran.wait(2) is True
 
 
+def test_a_job_runs_on_a_daemon_thread_so_the_interpreter_can_exit():
+    """A non-daemon job thread would hold the process open at shutdown.
+
+    `drain()` is cooperative and never kills anything, so a job that ignores
+    the stop flag is *meant* to time out and leave Docker's SIGKILL as the
+    backstop -- which only works if the thread cannot itself block interpreter
+    exit."""
+    # source: S_sweep.md §3 -- true at jobs.py:73 (`daemon=True` -> `False`).
+    # Read off the live thread rather than off a monkeypatched
+    # threading.Thread: the flag is checked on the object try_start actually
+    # spawned, so a constructor that dropped the kwarg is caught too. A test
+    # inside the interpreter cannot watch the interpreter exit, so the flag on
+    # the real thread is the closest observable to the property itself.
+    seen = {}
+    done = threading.Event()
+
+    def probe():
+        seen["daemon"] = threading.current_thread().daemon
+        done.set()
+
+    assert jobs.try_start("snapshot", probe) is True
+    assert done.wait(2) is True
+    assert seen["daemon"] is True
+
+
 def test_a_second_job_cannot_claim_a_held_slot():
     """Exactly one job may run at a time: they all write the same SQLite file
     and two of them spend the same Spotify request budget."""
@@ -194,6 +219,67 @@ def test_drain_times_out_on_a_job_that_ignores_the_stop_flag():
     release.set()
 
 
+def test_drain_polls_for_its_whole_default_timeout(no_sleep):
+    """40 seconds of grace at a 0.05s poll is 800 looks, and `serve.py`'s
+    SIGTERM handler takes that default -- so the default is the number that
+    actually decides how long a shutdown waits for a job to wind up."""
+    # source: S_sweep.md §3 -- num at jobs.py:104 (`timeout=40` -> 41) and max
+    # at jobs.py:124 (`max` -> `min`). Both change how many times drain looks
+    # before giving up, and the two existing drain tests passed explicit
+    # timeouts at jobs that either stopped immediately or never stopped, so
+    # neither the default nor the poll *count* was read by anything.
+    #
+    # The count is asserted rather than the elapsed time: `no_sleep` records
+    # the waits instead of serving them, so 800 polls cost nothing and the
+    # frozen clock (which freezes monotonic, perf_counter and time) never
+    # comes into it. 800 = 40s / 0.05s, both written out as literals -- read
+    # back off `jobs.drain`'s own default it would move with the mutant.
+    started, release = threading.Event(), threading.Event()
+
+    def stubborn():
+        started.set()
+        release.wait(1)  # never checks stop_requested()
+
+    jobs.try_start("backfill", stubborn)
+    started.wait(2)
+    try:
+        assert jobs.drain() is False
+        assert len(no_sleep) == 800
+        assert no_sleep[0] == 0.05
+        assert no_sleep[-1] == 0.05
+    finally:
+        release.set()
+
+
+def test_drain_always_takes_at_least_one_look_however_short_the_timeout(no_sleep):
+    """`max(1, ...)` is a floor, not arithmetic: a timeout shorter than one
+    poll interval still gets a look, and above the floor the count follows the
+    timeout."""
+    # source: S_sweep.md §3 -- num at jobs.py:124 (`max(1, ...)` ->
+    # `max(2, ...)`). That mutant is invisible at any ordinary timeout, since
+    # max(2, 800) is still 800; it only shows below the floor, which is
+    # exactly where the `max` earns its place. 0.04s divides to 0 attempts, so
+    # the floor is the only thing standing between drain and never looking at
+    # all -- and `min(1, 0)` is 0, which is the same line's other mutant.
+    started, release = threading.Event(), threading.Event()
+
+    def stubborn():
+        started.set()
+        release.wait(1)
+
+    jobs.try_start("backfill", stubborn)
+    started.wait(2)
+    try:
+        # 0.04s / 0.05s floors to zero attempts -- the max is what rescues it.
+        # 0.05s is exactly one. 0.1s is the first timeout that buys a second.
+        for timeout, expected_polls in ((0.04, 1), (0.05, 1), (0.1, 2)):
+            del no_sleep[:]
+            assert jobs.drain(timeout=timeout) is False
+            assert len(no_sleep) == expected_polls
+    finally:
+        release.set()
+
+
 def test_now_iso_carries_an_explicit_z():
     """The database holds two timestamp formats -- SQL-side `datetime('now')`
     writes naive UTC, this writes the Z form that `format.js` parses."""
@@ -250,6 +336,54 @@ def test_a_long_rate_limit_wait_fails_fast_without_sleeping(no_sleep):
     assert caught.value.retry_after_seconds == 3600
     assert caught.value.retry_at.endswith("Z")
     assert no_sleep == []
+
+
+def test_the_short_wait_boundary_sits_at_exactly_thirty_seconds(no_sleep):
+    """Thirty seconds is Spotify's rolling window and is slept through;
+    thirty-one is an app-level quota and fails fast. Both sides of that one
+    second are pinned here, because the constant and the comparison that
+    place the boundary are two separate ways to move it by one."""
+    # source: S_sweep.md §3 -- num at jobs.py:32 and cmp> at jobs.py:159.
+    # `_SHORT_WAIT_LIMIT_SECONDS = 31` and `retry_after >= LIMIT` each shift
+    # the boundary a second in opposite directions, and the existing tests
+    # probed only 5s (well inside) and 3600s (well outside), so neither
+    # noticed. The two halves below are not redundant: 30 catches the `>=`
+    # and 31 catches the constant, and neither catches the other.
+    #
+    # The retry in the 31s half is what makes that direction observable at
+    # all -- a fn that always raises would still end in RateLimited under the
+    # mutant (via `or attempt == 1`), just a sleep later, so the fn succeeds
+    # on retry and the `no_sleep` assertion backs it up.
+    short = jobs.JobStatus("test", requests=0)
+    short_attempts = []
+
+    def flaky_at_thirty():
+        short_attempts.append(1)
+        if len(short_attempts) == 1:
+            raise fakes.rate_limited(retry_after=30)
+        return "ok"
+
+    assert jobs.call(short, flaky_at_thirty) == "ok"
+    assert no_sleep == [30]
+
+    no_sleep.clear()
+    long_ = jobs.JobStatus("test", requests=0)
+    long_attempts = []
+
+    def flaky_at_thirty_one():
+        long_attempts.append(1)
+        if len(long_attempts) == 1:
+            raise fakes.rate_limited(retry_after=31)
+        return "ok"
+
+    with pytest.raises(jobs.RateLimited) as caught:
+        jobs.call(long_, flaky_at_thirty_one)
+
+    assert caught.value.retry_after_seconds == 31
+    assert no_sleep == []
+    # Raised on the first attempt, so the retry never happened.
+    assert long_attempts == [1]
+    assert long_.get()["requests"] == 1
 
 
 def test_a_second_consecutive_rate_limit_fails_rather_than_sleeping_again(no_sleep):
@@ -328,6 +462,26 @@ def test_terminal_fields_survive_so_a_reload_still_shows_the_outcome():
     assert got["phase"] == "done"
 
 
+def test_a_counter_bumped_before_it_exists_starts_from_zero():
+    """`add()` is the one way a job moves a running total, and its fallback is
+    where a counter with no declared default begins."""
+    # source: S_sweep.md §3 -- num at jobs.py:222
+    # (`self._fields.get(key, 0)` -> `get(key, 1)`). The fallback fires only on
+    # the very first bump of a key, and all four real JobStatus instances --
+    # and every one built in this file -- declare the keys they later bump, so
+    # nothing had ever taken that branch and a first bump silently becoming
+    # `delta + 1` went unnoticed. Pinned as an exact value rather than a
+    # non-zero one: 5 against 6 is the entire difference.
+    status = jobs.JobStatus("test", phase=None)
+
+    status.add(undeclared=5)
+    assert status.get()["undeclared"] == 5
+
+    # And the fallback applies once, not on every bump.
+    status.add(undeclared=5)
+    assert status.get()["undeclared"] == 10
+
+
 def test_reset_returns_every_field_to_its_declared_default():
     # source: jobs.JobStatus -- progress fields "are declared as the defaults
     # a reset() returns to".
@@ -356,13 +510,20 @@ def test_reset_hands_back_a_fresh_list_not_the_one_the_last_run_appended_to():
 def test_the_event_log_is_capped_so_a_long_run_stays_small():
     # source: jobs.py -- "_LOG_LIMIT = 200 ... Old entries drop off the front,
     # so the status payload stays small however long a run goes."
+    #
+    # source: S_sweep.md §3 -- num at jobs.py:27. The cap is written out as a
+    # literal 200 on both sides, not read back off `jobs._LOG_LIMIT`: a test
+    # that both fills and asserts through the constant moves with it, so
+    # `_LOG_LIMIT = 201` retained 201 entries and passed. The retained count
+    # and the *identity* of the surviving front entry are both pinned, because
+    # the cap's whole job is which entries are dropped.
     status = jobs.JobStatus("test")
-    for index in range(jobs._LOG_LIMIT + 50):
+    for index in range(250):
         status.log(f"line {index}")
 
     log = status.get()["log"]
-    assert len(log) == jobs._LOG_LIMIT
-    assert log[-1]["message"] == f"line {jobs._LOG_LIMIT + 49}"
+    assert len(log) == 200
+    assert log[-1]["message"] == "line 249"
     # The front is what drops.
     assert log[0]["message"] == "line 50"
 

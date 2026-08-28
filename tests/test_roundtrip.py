@@ -1007,3 +1007,280 @@ def test_a_run_with_no_client_is_an_error_not_a_crash(conn, monkeypatch):
     # is still an "error" run -- so asserting the outcome alone is a test that
     # cannot fail. What the page shows has to say which of the two happened.
     assert "not_authenticated" in roundtrip._status.get()["error"]
+
+
+# -- The routes (app.py) ----------------------------------------------------
+#
+# Everything below tests `app.py`'s round-trip and round-trip-queue endpoints
+# rather than `roundtrip.py`. They live here because the partition that put
+# them somewhere is by feature domain, not by module: the wiring from a button
+# to the module function beneath it is only visible to a route test, and the
+# module tests above cannot see it at all.
+
+
+def test_the_start_route_runs_the_main_pass_over_the_work_list(
+    client, conn, loader, run_jobs_inline
+):
+    """`/api/roundtrip/start` -- the `reconcile_only=False` decorator.
+
+    The discriminating assertion is that the queued uri reached the loader
+    playlist, not that the POST returned 200: a route that claimed the slot
+    and did nothing, or one that passed `reconcile_only=True`, answers 200
+    just the same.
+    """
+    # source: S_sweep.md §3 -- `true` at app.py:861. The mutant flips the
+    # body to {"started": False} while the run still happens, so the flag is
+    # asserted beside the behaviour rather than on its own.
+    builders.make_play(conn, uri=uri("queued"))
+    conn.commit()
+
+    resp = client.post("/api/roundtrip/start")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
+    assert run_jobs_inline == ["roundtrip"]
+    assert (roundtrip.LOADER_ID, [uri("queued")]) in loader.replacements
+    assert conn.execute(
+        "SELECT 1 FROM track WHERE track_id = 'queued'"
+    ).fetchone() is not None
+
+
+def test_the_reconcile_route_skips_the_main_pass(client, conn, loader, run_jobs_inline):
+    """`/api/roundtrip/reconcile` -- the second decorator on the same view,
+    and the only thing that separates the two is the `reconcile_only` default.
+
+    Both routes answer an identical 200 body, so the status code proves
+    nothing: what says the default reached `roundtrip.start` is that the
+    queued uri was never loaded and never resolved.
+    """
+    # source: entity/route convention P2-010 -- an alternate render path needs
+    # a semantic assertion beside its catalog case; and S_sweep.md §3, `true`
+    # at app.py:861.
+    builders.make_play(conn, uri=uri("queued"))
+    conn.commit()
+
+    resp = client.post("/api/roundtrip/reconcile")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"started": True}
+    assert run_jobs_inline == ["roundtrip"]
+    # Only the tidying clear at the end of the run -- the batch pass never ran.
+    assert loader.replacements == [(roundtrip.LOADER_ID, [])]
+    assert conn.execute(
+        "SELECT 1 FROM track WHERE track_id = 'queued'"
+    ).fetchone() is None
+
+
+def test_the_alias_route_saves_a_well_formed_batch(client, conn):
+    """The wiring from the review table's Save button to
+    `roundtrip.set_manual_aliases`, which only a route test can see -- the
+    module tests above call it directly and would pass against a route that
+    never reached it.
+    """
+    # source: S_sweep.md §3 -- `or` at app.py:882 and `true` at app.py:891.
+    # The `or` mutant makes `(body.get("aliases") and [])` collapse a supplied
+    # list to empty, so the route 400s on a batch it should have saved; the
+    # `true` mutant flips the reported flag while the write still happens.
+    needs_review(conn, uri("x"), "Opalite", "Yungblud")
+    builders.make_track(conn, "remix", name="Opalite - BUNT. Remix")
+    conn.commit()
+
+    resp = client.post(
+        "/api/roundtrip/alias",
+        json={"aliases": [{"requested_uri": uri("x"), "track_id": "remix"}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "saved": 1}
+    assert alias_target(conn, uri("x")) == "remix"
+    assert failed_state(conn, uri("x")) is None
+
+
+def test_the_alias_route_refuses_a_body_with_no_aliases_key(client, conn):
+    """What the `or []` fallback is for. A body that names no aliases at all
+    is a client mistake and must come back as the same 400 an empty list does
+    -- not as a 500 from iterating `None`, which is what the fallback's
+    absence produces.
+    """
+    # source: S_sweep.md §3 -- `or` at app.py:882. The mutant leaves
+    # `body.get("aliases")` (None) as the loop's iterable and the request dies
+    # in a TypeError, so the discriminating assertion is the 400 and its
+    # description, not that the request failed.
+    needs_review(conn, uri("x"), "Opalite", "Yungblud")
+
+    resp = client.post("/api/roundtrip/alias", json={"not_aliases": []})
+
+    assert resp.status_code == 400
+    assert "non-empty list" in resp.get_json()["detail"]
+    assert alias_target(conn, uri("x")) is None
+
+
+def test_the_alias_route_refuses_a_half_formed_entry_before_the_module_sees_it(
+    client, conn, monkeypatch
+):
+    """The route validates the *shape* of every entry itself, so a pair with
+    no `track_id` never reaches `roundtrip.set_manual_aliases` at all.
+
+    Both layers refuse, so the status code cannot tell them apart -- weaken
+    the route's check and the module still raises `ValueError` and still 400s.
+    The discriminating assertions are that the writer was never called and
+    that the description is the route's own.
+    """
+    # source: S_sweep.md §3 -- `and` at app.py:884. The mutant relaxes
+    # `uri and track_id` to `uri or track_id`, so an entry carrying only one
+    # of the two passes the route's guard and is handed to the writer to
+    # reject instead.
+    needs_review(conn, uri("x"), "Opalite", "Yungblud")
+    needs_review(conn, uri("y"), "Alpha", "Artist One")
+    builders.make_track(conn, "remix", name="Opalite - BUNT. Remix")
+    conn.commit()
+
+    calls = []
+    real = roundtrip.set_manual_aliases
+    monkeypatch.setattr(
+        roundtrip,
+        "set_manual_aliases",
+        lambda c, pairs: (calls.append(list(pairs)), real(c, pairs))[1],
+    )
+
+    resp = client.post(
+        "/api/roundtrip/alias",
+        json={
+            "aliases": [
+                {"requested_uri": uri("x"), "track_id": "remix"},
+                {"requested_uri": uri("y")},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert calls == []
+    assert "non-empty list" in resp.get_json()["detail"]
+    # And the well-formed half of the batch was not written either.
+    assert alias_target(conn, uri("x")) is None
+
+
+def test_the_clear_failures_route_reopens_every_failed_uri(client, conn):
+    """[Clear] beside the failed-uri table. The point is not that rows
+    disappear but that the uris come *back into the work list* -- clearing
+    only ever re-opens work, which is why it needs no confirm step.
+    """
+    # source: S_sweep.md §3 -- `true` at app.py:897, asserted beside the
+    # behaviour it reports (the mutant flips the flag while the delete still
+    # happens). The behavioural half is roundtrip.clear_failures' docstring:
+    # "Empties roundtrip_failed_uri so a later run retries those uris."
+    for name in ("dead", "review", "untouched"):
+        builders.make_play(conn, uri=uri(name))
+    roundtrip._fail_uris(conn, [uri("dead")], roundtrip.STATE_DEAD)
+    roundtrip._fail_uris(conn, [uri("review")], roundtrip.STATE_NEEDS_REVIEW)
+    conn.commit()
+    assert set(roundtrip._work_list(conn)) == {uri("untouched")}
+
+    resp = client.post("/api/roundtrip/clear-failures")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+    assert failed_uris(conn) == set()
+    assert set(roundtrip._work_list(conn)) == {
+        uri("dead"),
+        uri("review"),
+        uri("untouched"),
+    }
+
+
+def test_clearing_one_wanted_source_leaves_the_other_source_intact(client, conn):
+    """The queue box's two [Clear] buttons, and the reason this test asserts
+    on *which* rows survive rather than how many.
+
+    `source = ?` inverted to `source <> ?` deletes exactly the rows the user
+    did not ask about and keeps the ones they did -- a silent data loss that
+    every count-only assertion passes. The two sources are given different row
+    counts so even a count assertion could not coincide.
+    """
+    # source: S_sweep.md §3 -- `sql=` at app.py:914 (the DELETE's comparison)
+    # and `true` at app.py:916. grouping-fixes-backfill-M.md §4.6: each row's
+    # Clear removes that row's own queue and nothing else.
+    conn.executemany(
+        "INSERT INTO wanted_uri (uri, source) VALUES (?, ?)",
+        [
+            (uri("page-a"), "album"),
+            (uri("page-b"), "album"),
+            (uri("filled"), "backfill"),
+        ],
+    )
+    conn.commit()
+
+    resp = client.post("/api/roundtrip/wanted/clear", json={"source": "album"})
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+    assert {
+        (row["uri"], row["source"])
+        for row in conn.execute("SELECT uri, source FROM wanted_uri")
+    } == {(uri("filled"), "backfill")}
+    counts = roundtrip.counts(conn)
+    assert (counts["album_page_uris"], counts["album_backfill_uris"]) == (0, 1)
+
+
+def test_the_mute_route_drops_the_listening_arm_and_unmutes_it_again(client, conn):
+    """The listening row's [Clear] and [Re-add]. One endpoint serves both, and
+    what it stores is derived from the request body -- so a route that ignored
+    `muted` and always stored "1" would answer both calls identically.
+
+    The behavioural half is what the flag is *for*: the listening arm leaves
+    the work list while muted and comes back when it is cleared.
+    """
+    # source: S_sweep.md §3 -- `true` at app.py:927, asserted beside the
+    # behaviour (the mutant flips the flag while the meta write still lands).
+    # grouping-fixes-backfill-M.md §4.6: "[Clear] on it sets the
+    # roundtrip_listening_muted meta flag instead", and it is fully reversible.
+    queue_fixture(conn)
+
+    muted = client.post("/api/roundtrip/listening/mute", json={"muted": True})
+
+    assert muted.status_code == 200
+    assert muted.get_json() == {"ok": True}
+    assert db.get_meta(conn, "roundtrip_listening_muted") == "1"
+    assert set(roundtrip._work_list(conn)) == {uri("page"), uri("filled")}
+    assert roundtrip.counts(conn)["listening_muted"] is True
+
+    unmuted = client.post("/api/roundtrip/listening/mute", json={"muted": False})
+
+    assert unmuted.get_json() == {"ok": True}
+    assert db.get_meta(conn, "roundtrip_listening_muted") == "0"
+    assert set(roundtrip._work_list(conn)) == {
+        uri("listened"),
+        uri("page"),
+        uri("filled"),
+    }
+    assert roundtrip.counts(conn)["listening_muted"] is False
+
+
+def test_the_isrc_clear_route_closes_its_own_queue_row_and_no_other(client, conn):
+    """The fourth queue row's [Clear]. It settles rather than deletes, so the
+    observable outcome is that *that row's* count goes to zero -- the other
+    arms of the partition are untouched, and a track that has an ISRC was
+    never in the set and must not be settled either.
+    """
+    # source: S_sweep.md §3 -- `true` at app.py:936, asserted beside the
+    # behaviour (the mutant flips the flag while the settle still lands).
+    # scrobbling-R.md §5.3: track_isrc_absent is arm 3's own stop condition.
+    for track_id in ("noisrc-a", "noisrc-b"):
+        builders.make_track(conn, track_id, isrc=None)
+        builders.make_play(conn, uri=uri(track_id))
+    builders.make_track(conn, "has-isrc", isrc="GBAAA0000001")
+    builders.make_play(conn, uri=uri("has-isrc"))
+    conn.execute("INSERT INTO wanted_uri (uri, source) VALUES (?, 'album')", (uri("page"),))
+    conn.commit()
+    assert roundtrip.counts(conn)["incomplete_isrc_uris"] == 2
+
+    resp = client.post("/api/roundtrip/incomplete-isrc/clear")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+    counts = roundtrip.counts(conn)
+    assert counts["incomplete_isrc_uris"] == 0
+    assert counts["album_page_uris"] == 1
+    assert {
+        row["track_id"] for row in conn.execute("SELECT track_id FROM track_isrc_absent")
+    } == {"noisrc-a", "noisrc-b"}

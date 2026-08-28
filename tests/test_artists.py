@@ -153,6 +153,34 @@ def test_a_third_id_folds_the_whole_existing_group_in(conn):
     assert alias_rows(conn) == {("ar-b", "ar-a"), ("ar-c", "ar-a")}
 
 
+def test_merging_leaves_an_unrelated_merge_groups_alias_rows_alone(conn):
+    """The rebuild DELETE clears only the ids in *this* group, and its
+    collateral is what nothing pinned: every fixture in this file held one
+    merge group, so a condition that swept the whole table looked identical.
+
+    Asserted as the exact set of surviving (alias, canonical) pairs rather
+    than a count, because an inverted condition deletes a different set of
+    the same size once a second group exists.
+    """
+    # source: S_sweep.md §3 -- sqlIN at artists.py:66, cols 50 and 81. Both
+    # halves of that DELETE's condition are `IN`; inverting either to
+    # `NOT IN` makes it delete the alias rows of every *other* merge group,
+    # silently un-merging artists this decision never touched -- while the
+    # group actually being merged is rebuilt correctly either way, which is
+    # why a one-group fixture cannot see it.
+    scored_artist(conn, "ar-zeta", "Zed", ["t1"], [90.0])
+    scored_artist(conn, "ar-alpha", "Zed", ["t2"], [10.0])
+    artists.mark_same(conn, "ar-zeta", "ar-alpha")
+    assert alias_rows(conn) == {("ar-alpha", "ar-zeta")}
+
+    # A second, entirely unrelated merge -- no id, name or track in common.
+    scored_artist(conn, "ar-omega", "Pip", ["t3"], [90.0])
+    scored_artist(conn, "ar-beta", "Pip", ["t4"], [10.0])
+    artists.mark_same(conn, "ar-omega", "ar-beta")
+
+    assert alias_rows(conn) == {("ar-alpha", "ar-zeta"), ("ar-beta", "ar-omega")}
+
+
 def test_merging_records_the_pair_as_reviewed(conn):
     # source: detection-artist-model.md §1 -- "reviewed_artist_pair records
     # only that a pair was *looked at*... which is what stops a decided pair
@@ -321,6 +349,63 @@ def test_candidate_pairs_carry_sample_tracks_for_the_page(conn):
     assert pair["a"]["track_count"] == 1
 
 
+def test_the_candidate_queue_samples_at_most_four_track_names_a_side(conn):
+    """The sample is capped, and the cap is 4.
+
+    `artists.html` joins the whole list into one table cell, so the bound is
+    the only thing standing between a 300-track artist and 300 names in a
+    row of the queue. The five names are inserted out of alphabetical order,
+    so which four come back also pins the `ORDER BY t.name` rather than
+    insertion order.
+    """
+    # source: characterization -- nothing in detection-artist-model.md fixes
+    # the number; 4 is what the page has always rendered.
+    # S_sweep.md §3 -- num at artists.py:143: `limit=4` -> `limit=5` is
+    # invisible to any fixture whose artists hold fewer tracks than the cap,
+    # which until now was every one of them.
+    builders.make_artist(conn, "ar-many", name="Nova")
+    builders.make_artist(conn, "ar-one", name="NOVA")
+    for name in ["Echo", "Alpha", "Delta", "Bravo", "Charlie"]:
+        builders.make_track(conn, f"t-{name.lower()}", name=name, artists=["ar-many"])
+    builders.make_track(conn, "t-solo", name="Solo", artists=["ar-one"])
+
+    pair = artists.candidate_pairs(conn)[0]
+
+    assert (pair["a"]["artist_id"], pair["b"]["artist_id"]) == ("ar-many", "ar-one")
+    assert pair["a"]["sample_tracks"] == ["Alpha", "Bravo", "Charlie", "Delta"]
+    # The cap is a cap, not a fixed width: a one-track artist samples one.
+    assert pair["b"]["sample_tracks"] == ["Solo"]
+
+
+def test_an_artist_with_no_credits_of_one_kind_counts_zero_not_one(conn):
+    """Both count defaults, each with a real 1 beside it.
+
+    `ar-comp` is an album artist with no track of its own in the library (a
+    compilation credit); `ar-guest` is a featured credit on someone else's
+    album. So each id is missing from exactly one of the two count maps, and
+    holds a genuine 1 in the other -- an implementation that ignored the maps
+    and answered a constant fails just as surely as one whose default is
+    wrong.
+    """
+    # source: S_sweep.md §3 -- num at artists.py:137 and :138. The `0` in
+    # `counts_t.get(id, 0)` / `counts_a.get(id, 0)` only fires for an artist
+    # absent from that map; mutated to `1` it reports a phantom credit. Every
+    # other fixture in this file gives each artist exactly one track and one
+    # album, where 1 is also the right answer.
+    builders.make_artist(conn, "ar-comp", name="Nova")
+    builders.make_artist(conn, "ar-guest", name="NOVA")
+    builders.make_artist(conn, "ar-host", name="Host")
+    builders.make_album(conn, album_id="al-comp", name="Compilation", artists=["ar-comp"])
+    builders.make_album(conn, album_id="al-host", name="Host Album", artists=["ar-host"])
+    builders.make_track(conn, "t1", album_id="al-host", artists=["ar-host", "ar-guest"])
+
+    pair = artists.candidate_pairs(conn)[0]
+
+    assert (pair["a"]["artist_id"], pair["b"]["artist_id"]) == ("ar-comp", "ar-guest")
+    assert (pair["a"]["track_count"], pair["a"]["album_count"]) == (0, 1)
+    assert (pair["b"]["track_count"], pair["b"]["album_count"]) == (1, 0)
+
+
 def test_merged_groups_lists_one_entry_per_canonical(conn):
     # characterization -- the unmerge list on /dev/artists: one row per
     # canonical artist carrying the ids folded into it.
@@ -335,6 +420,47 @@ def test_merged_groups_lists_one_entry_per_canonical(conn):
     assert len(groups) == 1
     assert groups[0]["canonical"]["artist_id"] == "ar-a"
     assert sorted(a["artist_id"] for a in groups[0]["aliases"]) == ["ar-b", "ar-c"]
+
+
+def test_the_unmerge_list_is_newest_decision_first(conn):
+    """`artists.html` renders one row per alias in the order this returns, so
+    the sort is what the page shows: the most recent merge at the top, both
+    across groups and within one.
+
+    `decided_at` is stamped by hand *after* the merges, because `mark_same`
+    rebuilds the whole group's rows on every call -- and because two merges in
+    one test land in the same second, which is a tie, not an order.
+    """
+    # source: characterization -- the ordering is `merged_groups`' own
+    # `ORDER BY decided_at DESC`; nothing in detection-artist-model.md fixes
+    # it, and the page has always listed the newest decision first.
+    # S_sweep.md §3 -- sqlDESC at artists.py:209: flipped to ASC the list
+    # reverses in both dimensions, which no fixture with a single group or
+    # tied timestamps can see.
+    scored_artist(conn, "ar-a", "half alive", ["t1"], [90.0])
+    scored_artist(conn, "ar-b", "half alive", ["t2"], [50.0])
+    scored_artist(conn, "ar-c", "half alive", ["t3"], [10.0])
+    scored_artist(conn, "ar-p", "Pip", ["t4"], [90.0])
+    scored_artist(conn, "ar-q", "Pip", ["t5"], [10.0])
+    artists.mark_same(conn, "ar-a", "ar-b")
+    artists.mark_same(conn, "ar-a", "ar-c")
+    artists.mark_same(conn, "ar-p", "ar-q")
+    for artist_id, decided_at in [
+        ("ar-b", "2026-01-01T00:00:00Z"),
+        ("ar-c", "2026-02-01T00:00:00Z"),
+        ("ar-q", "2026-03-01T00:00:00Z"),
+    ]:
+        conn.execute(
+            "UPDATE artist_alias SET decided_at = ? WHERE artist_id = ?", (decided_at, artist_id)
+        )
+    conn.commit()
+
+    groups = artists.merged_groups(conn)
+
+    # The group holding the newest decision leads...
+    assert [g["canonical"]["artist_id"] for g in groups] == ["ar-p", "ar-a"]
+    # ...and inside a group the newer alias leads too.
+    assert [a["artist_id"] for a in groups[1]["aliases"]] == ["ar-c", "ar-b"]
 
 
 # -- Per-track artist sets --------------------------------------------------
@@ -377,6 +503,68 @@ def test_a_track_with_no_credits_is_absent(conn):
     conn.commit()
 
     assert "t1" not in artists.artist_sets(conn)
+
+
+# -- The two artist API routes ----------------------------------------------
+
+
+def test_the_alias_route_merges_the_pair_and_reports_ok(client, conn):
+    """The merge branch of `/api/artists/alias`, end to end.
+
+    The catalog sweep posts this route with `same: False` and asserts only
+    that it does not 500, so nothing had ever checked that a truthy `same`
+    reaches `mark_same` -- nor that the response says so.
+    """
+    # source: characterization -- app.py's alias_artists is wiring: a truthy
+    # `same` calls artists.mark_same, anything else mark_not_same, and the
+    # answer is {"ok": True}. S_sweep.md §3 -- true at app.py:980: flipped to
+    # False the merge still happens, so only an assertion on the body sees it.
+    scored_artist(conn, "ar-zeta", "BONES", ["t1"], [90.0])
+    scored_artist(conn, "ar-alpha", "BONES", ["t2"], [10.0])
+
+    resp = client.post(
+        "/api/artists/alias",
+        json={"artist_id_a": "ar-alpha", "artist_id_b": "ar-zeta", "same": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+    assert alias_rows(conn) == {("ar-alpha", "ar-zeta")}
+    assert reviewed_artist_pairs(conn) == {("ar-alpha", "ar-zeta")}
+
+
+def test_the_alias_route_records_a_not_same_verdict_without_merging(client, conn):
+    # source: characterization -- the other side of that branch, and the one
+    # the catalog sweep issues: `same` absent or false records the review and
+    # writes no alias row.
+    scored_artist(conn, "ar-zeta", "LiSA", ["t1"], [90.0])
+    scored_artist(conn, "ar-alpha", "LISA", ["t2"], [10.0])
+
+    resp = client.post(
+        "/api/artists/alias",
+        json={"artist_id_a": "ar-alpha", "artist_id_b": "ar-zeta", "same": False},
+    )
+
+    assert resp.get_json() == {"ok": True}
+    assert alias_rows(conn) == set()
+    assert reviewed_artist_pairs(conn) == {("ar-alpha", "ar-zeta")}
+
+
+def test_the_unmerge_route_drops_the_alias_row_and_reports_ok(client, conn):
+    # source: characterization -- app.py's unmerge_artist is the same shape:
+    # artists.unmerge then {"ok": True}. S_sweep.md §3 -- true at app.py:990.
+    scored_artist(conn, "ar-zeta", "BONES", ["t1"], [90.0])
+    scored_artist(conn, "ar-alpha", "BONES", ["t2"], [10.0])
+    artists.mark_same(conn, "ar-zeta", "ar-alpha")
+    assert alias_rows(conn) == {("ar-alpha", "ar-zeta")}
+
+    resp = client.post("/api/artists/unmerge", json={"artist_id": "ar-alpha"})
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+    assert alias_rows(conn) == set()
+    # And the review is forgotten, so the pair returns to the queue.
+    assert reviewed_artist_pairs(conn) == set()
 
 
 # -- Recompute call sites (async-recompute-N.md §4.2) -----------------------

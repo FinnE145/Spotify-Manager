@@ -599,6 +599,94 @@ these are killed, these are open — meant none of them re-derived it.
 
 ---
 
+### 3.7 Round 3 — 29 survivors closed, and a test that could never fail
+
+2026-08-28. Three triage agents. **25 gap — fixed, 3 equivalent, 1
+harness-masked, 0 recorded.** 21 tests added and one existing test rewritten;
+the suite went 1072 → 1093 passed, 3 skipped. All 29 verdicts were re-run by
+the master session and **all 29 reproduced** — 25 kill proofs to `PASS`, 4
+non-fix verdicts still `SURVIVED`.
+
+| domain | test file | survivors | fixed | equiv | masked |
+|---|---|---:|---:|---:|---:|
+| round-trip (`app.py` ×9) | `test_roundtrip.py` | 9 | 9 | — | — |
+| jobs (`jobs.py` ×10) | `test_jobs.py` | 10 | 8 | 1 | 1 |
+| artists (`artists.py` ×8 + `app.py` ×2) | `test_artists.py` | 10 | 8 | 2 | — |
+
+**The headline finding is a test that was already in the suite and could never
+fail.** `test_the_event_log_is_capped_so_a_long_run_stays_small` both *filled*
+and *asserted* through `jobs._LOG_LIMIT` — `range(jobs._LOG_LIMIT + 50)`, then
+`assert len(log) == jobs._LOG_LIMIT`. Under `_LOG_LIMIT = 201` it logged 201,
+retained 201 and passed green. This is `codebase-health-P.md` §2's defect in
+its purest form: a test citing a real clause, asserting something true, that a
+broken implementation satisfies identically. **The general rule it yields is
+new and belongs in every future brief: a test that derives its expected value
+from the thing being mutated moves with the mutant.** Write the expectation as
+a literal — never read it back off the constant, the default argument, or the
+query under test. Coverage cannot see this and neither can review at a glance;
+only mutation finds it.
+
+**Two new equivalent classes**, taking the named set from three to five:
+
+- **A loop bound made dead by an in-body guard** that terminates on the
+  second-to-last index. `jobs.call` states its retry cap twice — `range(2)` and
+  `attempt == 1` — and only the guard is binding, so any `range(n >= 2)`
+  behaves identically. Expect this in every bounded-retry loop carrying its own
+  last-attempt branch.
+- **A comparison-boundary flip whose two branches coincide at the boundary.**
+  `_pair_key`'s `(a, b) if a < b else (b, a)` mutated to `<=` differs only at
+  `a == b`, where both branches build `(a, a)`. Distinct from the
+  unreachable-state class: the state is trivially reachable, the two answers
+  are simply equal.
+
+**`jobs.py:23` is the sweep's first `harness-masked` verdict**, and it is a
+clean instance of the shape. `_stop_requested = False` is the module-level
+initialiser, and `conftest.py`'s autouse `_reset_module_state()` sets it before
+every test body runs — so no test can observe the initial value at all, and
+`conftest.py` is off-limits to an agent by construction. Coverage cannot
+surface this: the line executes on import every time.
+
+**A `recorded, not fixed` precedent was correctly refused.** `jobs.drain`'s
+`timeout=40` and `max(1, …)` were flagged in the brief as probably matching
+`_BUSY_TIMEOUT_SECONDS = 30`'s "needs real elapsed time" reasoning. The agent
+checked rather than inherited it, and the reasoning does not transfer:
+`_BUSY_TIMEOUT_SECONDS` is handed to SQLite, which spends the time inside C
+with nothing to observe, whereas drain spends it in `time.sleep` calls the
+suite's `no_sleep` fixture already intercepts — so the poll *count* is an
+instant, exact assertion and the timeout is recoverable from it. Three
+survivors moved from "probably recorded" to killed. The lesson is about
+precedent, not about drain: a prior verdict is a hypothesis to re-test, not a
+rule to apply.
+
+**The `{"ok": True}` question, settled a third time and now stable.** Both
+agents that met it grepped the consuming JS first, as instructed, and both
+found what round 2 found: the handlers branch on `.error` and never read `.ok`
+or `.started` at all. Neither ruled the flag cosmetic, because at all eleven
+sites there was a real unasserted behavioural property at the same endpoint to
+attach it to — six round-trip endpoints and two artist endpoints had no test
+beyond `routes_catalog.py`'s non-5xx sweep. The rule from §3.6 holds unchanged:
+assert the flag where a real assertion is already being made; `cosmetic` is
+right only where the flag is the sole thing left.
+
+**One more instance of "the guard is duplicated one layer down".**
+`app.py:884`'s shape check is behaviourally redundant with
+`roundtrip.set_manual_aliases`'s own validation — both refuse, and both refuse
+with 400, so no status assertion can separate them. It is still killable, on
+*which* layer refused: the test spies on the writer and asserts it was never
+reached. Worth naming because it will recur, and because the tempting verdict
+(`equivalent`) is wrong.
+
+**The partition needed one correction, of exactly §3.5's kind.** The handoff's
+round 3/4 split assigned `app.py:940` to round-trip and `app.py:952` to
+backfill — but 940 is `_BACKFILL_GENERATION_COUNTS`, the constant that the view
+returning 952 validates against, twelve lines up in one route. Two agents in
+two rounds would have written tests for one endpoint into two files. No rule
+was missing; the domain boundary was simply drawn at the wrong line, which is
+the failure mode §3.5 already predicted and is worth recording as its second
+sighting.
+
+---
+
 ## 4. What was added
 
 **§3.4 is complete.** **39 new test cases**, taking the suite from 944 to 983.

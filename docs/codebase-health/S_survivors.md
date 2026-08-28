@@ -1,6 +1,6 @@
 # S sweep — the untriaged survivors
 
-**62 survivors still owed a verdict**, from the corrected sweep of
+**33 survivors still owed a verdict**, from the corrected sweep of
 2026-08-24 (`S_sweep.md` §2.4). Everything §3.1–§3.4 already ruled on is
 excluded, so this file is exactly the remaining work.
 
@@ -22,22 +22,30 @@ Regenerate with the snippet in `S_handoff.md` if the sweep is ever re-run.
 
 ---
 
-**Rounds 1 and 2 closed 150 of the original 212** (2026-08-24/26), and their rows are
-gone from this file. Three sections went entirely — `history_import.py` (27),
-`scrobble.py` (18), `grouping.py` (2) — and 24 of `app.py`'s 50 went with them,
-because `app.py`'s survivors are **not one module's work**: they are nine
-feature clusters whose fixes land in the test file that owns the *feature*, not
-one that owns `app.py`. See `S_sweep.md` §3.5. The partition rule is therefore
-**test-file ownership by feature domain** (spec §7.2's rule, applied to the
-domain rather than the module); what remains here is still listed by module,
-so read it against §3.5's domain table before assigning anyone a batch.
+**Rounds 1, 2 and 3 closed 179 of the original 212** (2026-08-24/28), and their
+rows are gone from this file. Five sections went entirely — `history_import.py`
+(27), `scrobble.py` (18), `jobs.py` (10), `artists.py` (8), `grouping.py` (2) —
+and this file's `app.py` section went 50 → 18 → 7 with them, because `app.py`'s
+survivors are **not one module's work**: they are nine feature clusters whose fixes land in the test
+file that owns the *feature*, not one that owns `app.py`. See `S_sweep.md` §3.5.
+The partition rule is therefore **test-file ownership by feature domain** (spec
+§7.2's rule, applied to the domain rather than the module); what remains here is
+still listed by module, so read it against §3.5's and §3.7's domain tables
+before assigning anyone a batch.
 
-Every verdict from round 1 was re-verified by the master session: 67 of 67
-reproduced — 56 kill proofs re-run to `PASS`, 11 claimed equivalents re-run
-and still `SURVIVED`.
+**`app.py:940` is a worked example of why the domain, not the module, is the
+unit.** The round 3/4 partition first put it with the round-trip lot and
+`app.py:952` with the backfill lot — but 940 is the constant `start_backfill_job`
+validates against and 952 is that same view's return, twelve lines apart in one
+route. They are one job and are now both listed above, owed to whoever takes
+backfill.
+
+Every verdict from every round was re-verified by the master session: 67 of 67
+in round 1, 79 of 79 in round 2, 29 of 29 in round 3 — kill proofs re-run to
+`PASS`, non-fix verdicts re-run and still `SURVIVED`.
 
 
-## `app.py` — 18 survivors
+## `app.py` — 7 survivors
 
 | line | col | op | before → after |
 |---:|---:|---|---|
@@ -46,47 +54,8 @@ and still `SURVIVED`.
 | 788 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
 | 807 | 48 | `or` | `playlist_ids = body.get("playlist_ids") or []`<br>→ `playlist_ids = body.get("playlist_ids") and []` |
 | 812 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 861 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
-| 882 | 46 | `or` | `for entry in (body.get("aliases") or [])`<br>→ `for entry in (body.get("aliases") and [])` |
-| 884 | 36 | `and` | `if not pairs or not all(uri and track_id for uri, track_id in pairs):`<br>→ `if not pairs or not all(uri or track_id for uri, track_id in pairs):` |
-| 891 | 30 | `true` | `return jsonify({"ok": True, "saved": saved})`<br>→ `return jsonify({"ok": False, "saved": saved})` |
-| 897 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 914 | 58 | `sql=` | `conn.execute("DELETE FROM wanted_uri WHERE source = ?", (source,))`<br>→ `conn.execute("DELETE FROM wanted_uri WHERE source <> ?", (source,))` |
-| 916 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 927 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 936 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
 | 940 | 38 | `num` | `_BACKFILL_GENERATION_COUNTS = (2, 7)`<br>→ `_BACKFILL_GENERATION_COUNTS = (2, 8)` |
 | 952 | 35 | `true` | `return jsonify({"started": True})`<br>→ `return jsonify({"started": False})` |
-| 980 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-| 990 | 30 | `true` | `return jsonify({"ok": True})`<br>→ `return jsonify({"ok": False})` |
-
-## `jobs.py` — 10 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 23 | 18 | `false` | `_stop_requested = False`<br>→ `_stop_requested = True` |
-| 27 | 13 | `num` | `_LOG_LIMIT = 200`<br>→ `_LOG_LIMIT = 201` |
-| 32 | 28 | `num` | `_SHORT_WAIT_LIMIT_SECONDS = 30`<br>→ `_SHORT_WAIT_LIMIT_SECONDS = 31` |
-| 73 | 40 | `true` | `threading.Thread(target=run, daemon=True).start()`<br>→ `threading.Thread(target=run, daemon=False).start()` |
-| 104 | 18 | `num` | `def drain(timeout=40):`<br>→ `def drain(timeout=41):` |
-| 124 | 15 | `max` | `attempts = max(1, int(timeout / _DRAIN_POLL_SECONDS))`<br>→ `attempts = min(1, int(timeout / _DRAIN_POLL_SECONDS))` |
-| 124 | 19 | `num` | `attempts = max(1, int(timeout / _DRAIN_POLL_SECONDS))`<br>→ `attempts = max(2, int(timeout / _DRAIN_POLL_SECONDS))` |
-| 151 | 25 | `num` | `for attempt in range(2):`<br>→ `for attempt in range(3):` |
-| 159 | 27 | `cmp>` | `if retry_after > _SHORT_WAIT_LIMIT_SECONDS or attempt == 1:`<br>→ `if retry_after >= _SHORT_WAIT_LIMIT_SECONDS or attempt == 1:` |
-| 222 | 58 | `num` | `self._fields[key] = self._fields.get(key, 0) + delta`<br>→ `self._fields[key] = self._fields.get(key, 1) + delta` |
-
-## `artists.py` — 8 survivors
-
-| line | col | op | before → after |
-|---:|---:|---|---|
-| 15 | 23 | `cmp<` | `return (a, b) if a < b else (b, a)`<br>→ `return (a, b) if a <= b else (b, a)` |
-| 66 | 50 | `sqlIN` | `"DELETE FROM artist_alias WHERE artist_id IN ({}) OR canonical_artist_id IN ({})".format(`<br>→ `"DELETE FROM artist_alias WHERE artist_id NOT IN ({}) OR canonical_artist_id IN ({})".form` |
-| 66 | 58 | `sqlOR` | `"DELETE FROM artist_alias WHERE artist_id IN ({}) OR canonical_artist_id IN ({})".format(`<br>→ `"DELETE FROM artist_alias WHERE artist_id IN ({}) AND canonical_artist_id IN ({})".format(` |
-| 66 | 81 | `sqlIN` | `"DELETE FROM artist_alias WHERE artist_id IN ({}) OR canonical_artist_id IN ({})".format(`<br>→ `"DELETE FROM artist_alias WHERE artist_id IN ({}) OR canonical_artist_id NOT IN ({})".form` |
-| 137 | 56 | `num` | `"track_count": counts_t.get(r["artist_id"], 0),`<br>→ `"track_count": counts_t.get(r["artist_id"], 1),` |
-| 138 | 56 | `num` | `"album_count": counts_a.get(r["artist_id"], 0),`<br>→ `"album_count": counts_a.get(r["artist_id"], 1),` |
-| 143 | 42 | `num` | `def _sample_tracks(conn, artist_id, limit=4):`<br>→ `def _sample_tracks(conn, artist_id, limit=5):` |
-| 209 | 29 | `sqlDESC` | `"ORDER BY decided_at DESC"`<br>→ `"ORDER BY decided_at ASC"` |
 
 ## `backfill.py` — 7 survivors
 
