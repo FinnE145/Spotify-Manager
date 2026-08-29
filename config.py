@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -7,6 +8,15 @@ load_dotenv()
 SPOTIFY_CLIENT_ID = os.environ["SPOTIFY_CLIENT_ID"]
 SPOTIFY_CLIENT_SECRET = os.environ["SPOTIFY_CLIENT_SECRET"]
 SPOTIFY_REDIRECT_URI = os.environ["SPOTIFY_REDIRECT_URI"]
+
+# Derived once from SPOTIFY_REDIRECT_URI so /login can redirect onto the
+# canonical host before touching the session (T1, docs/specs/small-fixes-T.md
+# §1.2) -- localhost and 127.0.0.1 never share cookies, so reaching /login on
+# the wrong one guarantees oauth_state is missing at /callback.
+_parsed_redirect_uri = urlparse(SPOTIFY_REDIRECT_URI)
+SPOTIFY_CANONICAL_HOST = (_parsed_redirect_uri.hostname or "").lower()
+SPOTIFY_CANONICAL_ORIGIN = f"{_parsed_redirect_uri.scheme}://{_parsed_redirect_uri.netloc}"
+
 # playlist-modify-private is the round-trip's write scope: it is used only to add
 # to and clear the private "<Play History Loader>" scratch playlist, never any
 # other playlist. Everything else here is read-only, including

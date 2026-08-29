@@ -876,16 +876,17 @@ def test_a_forged_state_is_refused_before_the_token_exchange(client, auth_spy):
     doesn't merely change which 400 is returned -- it completes the flow. That
     is what `auth_spy` is asserting on.
     """
-    # source: app.py -- `if not expected or request.args.get("state") !=
-    # expected: abort(400, description="Invalid OAuth state.")`, and
-    # CLAUDE.md's rule that auth and session handling are done fully.
+    # source: app.py -- `if request.args.get("state") != expected:
+    # abort(400, description="The OAuth state did not match.")` (T1,
+    # small-fixes-T.md §1.4), and CLAUDE.md's rule that auth and session
+    # handling are done fully.
     with client.session_transaction() as sess:
         sess["oauth_state"] = "the-real-state"
 
     resp = client.get("/callback?state=forged&code=an-auth-code")
 
     assert resp.status_code == 400
-    assert "Invalid OAuth state." in resp.get_data(as_text=True)
+    assert "The OAuth state did not match." in resp.get_data(as_text=True)
     assert auth_spy == []
 
 
@@ -899,18 +900,45 @@ def test_a_callback_carrying_no_state_at_all_is_refused(client, auth_spy):
     A mismatched-state test cannot show this: there the comparison already
     fails on its own.
     """
-    # source: app.py -- the `not expected` disjunct; an unsolicited callback
-    # is one that names no state at all.
+    # source: app.py -- the `not expected` branch, `abort(400,
+    # description="This session carried no OAuth state.")` (T1,
+    # small-fixes-T.md §1.4); an unsolicited callback is one that names no
+    # state at all.
     resp = client.get("/callback?code=an-auth-code")
 
     assert resp.status_code == 400
-    assert "Invalid OAuth state." in resp.get_data(as_text=True)
+    assert "This session carried no OAuth state." in resp.get_data(as_text=True)
     assert auth_spy == []
+
+
+def test_the_two_callback_refusals_say_different_things(client, auth_spy):
+    """T1 (small-fixes-T.md §1.4/§5.1): splitting the guard into two `if`
+    statements is the point only if the two branches actually say different
+    things. A test that checks each message individually, where both happen
+    to be equal, would pass against an implementation that split the branches
+    but left their text identical.
+    """
+    # source: app.py's callback -- the `not expected` and the mismatch
+    # branches now abort with distinct descriptions.
+    no_state = client.get("/callback?code=x").get_data(as_text=True)
+
+    with client.session_transaction() as sess:
+        sess["oauth_state"] = "the-real-state"
+    mismatched = client.get("/callback?state=forged&code=x").get_data(as_text=True)
+
+    assert "This session carried no OAuth state." in no_state
+    assert "The OAuth state did not match." in mismatched
+    assert "The OAuth state did not match." not in no_state
+    assert "This session carried no OAuth state." not in mismatched
 
 
 def test_the_state_is_single_use_so_a_replayed_callback_is_refused(client, auth_spy):
     # source: app.py -- `session.pop("oauth_state", None)`. A pop, not a get:
     # a captured callback url must not be replayable against a live session.
+    # The replay carries a (now-stale) state argument but the session has
+    # nothing left to compare it to, so it lands on the `not expected` branch
+    # (T1, small-fixes-T.md §1.4) -- "This session carried no OAuth state.",
+    # not the mismatch message.
     with client.session_transaction() as sess:
         sess["oauth_state"] = "the-real-state"
 
@@ -918,7 +946,7 @@ def test_the_state_is_single_use_so_a_replayed_callback_is_refused(client, auth_
     replay = client.get("/callback?state=the-real-state&code=second")
 
     assert replay.status_code == 400
-    assert "Invalid OAuth state." in replay.get_data(as_text=True)
+    assert "This session carried no OAuth state." in replay.get_data(as_text=True)
     assert auth_spy == ["first"]
 
 
@@ -1322,6 +1350,10 @@ def test_the_scoring_backstop_runs_on_authenticated_requests_but_not_public_ones
     calls = []
     monkeypatch.setattr(scoring, "ensure_fresh", lambda: calls.append(True))
 
+    # The test client's default host is "localhost", which is also the
+    # canonical host conftest sets SPOTIFY_REDIRECT_URI to -- so this
+    # deliberately exercises T1's pass-through path (small-fixes-T.md §5.1),
+    # not the host-redirect branch, which is covered separately below.
     client.get("/login")
     assert calls == [], "the backstop must not run on a public endpoint"
 
@@ -1371,6 +1403,9 @@ def test_the_oauth_state_carries_at_least_the_entropy_login_asks_for(client):
     here so the next sweep does not re-derive the same verdict.
     """
     # source: S_sweep.md §3 -- num at app.py:741
+    # Same host note as above: the client's default host is the canonical
+    # one, so this is the pass-through path, deliberately (small-fixes-T.md
+    # §5.1).
     client.get("/login")
 
     with client.session_transaction() as sess:
@@ -1407,3 +1442,78 @@ def test_the_token_exchange_uses_spotipys_non_deprecated_form(client, monkeypatc
 
     assert resp.status_code == 302
     assert seen["as_dict"] is False
+
+
+# -- T1: the OAuth host-canonicalization redirect (small-fixes-T.md §1) -----
+#
+# conftest sets SPOTIFY_REDIRECT_URI = "http://localhost:45660/callback", and
+# the test client's default host is also "localhost" -- they agree, so the
+# redirect branch fires in no test above. Every test below deliberately
+# issues its request from a non-canonical host via base_url= to reach it.
+
+
+def test_login_from_a_non_canonical_host_redirects_before_touching_the_session(
+    client,
+):
+    """§1.1's bug: reaching /login from a host other than the canonical one
+    must redirect there *before* session["oauth_state"] is set -- otherwise
+    the state cookie is scoped to the wrong host and /callback always 400s.
+    Both halves are asserted: a redirect that fires after setting the cookie
+    fixes nothing.
+    """
+    # source: small-fixes-T.md §1.2/§5.1 -- "the redirect fires... and sets
+    # no oauth_state. Both halves: a test that only checks the 302 passes
+    # against an implementation that redirects after setting the cookie."
+    import config
+
+    resp = client.get("/login", base_url="http://127.0.0.1:45660")
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == config.SPOTIFY_CANONICAL_ORIGIN + "/login?canonical=1"
+    # Same host as the request above -- Werkzeug's test cookie jar, like a
+    # real browser, keys cookies by hostname (see _update_cookies_from_response's
+    # host.partition(":")[0]), so reading the session back needs the matching
+    # base_url too.
+    with client.session_transaction(base_url="http://127.0.0.1:45660") as sess:
+        assert "oauth_state" not in sess
+
+
+def test_the_canonical_marker_suppresses_the_redirect(client):
+    """§1.3's loop bound: the redirect is one-shot. The second request --
+    the one carrying ?canonical=1 -- must proceed and actually set the
+    session state, even from the very same non-canonical host, or the marker
+    does not bound anything.
+    """
+    # source: small-fixes-T.md §1.3/§5.1 -- "The marker suppresses it.
+    # /login?canonical=1 from a non-canonical host proceeds and sets
+    # oauth_state. Without this, §1.3's whole loop bound is untested."
+    import config
+
+    resp = client.get("/login?canonical=1", base_url="http://127.0.0.1:45660")
+
+    assert resp.status_code == 302
+    # Proceeded past the redirect branch rather than looping back through it.
+    assert not resp.headers["Location"].startswith(
+        config.SPOTIFY_CANONICAL_ORIGIN + "/login"
+    )
+    with client.session_transaction(base_url="http://127.0.0.1:45660") as sess:
+        assert "oauth_state" in sess
+
+
+def test_the_comparison_is_hostname_only_not_full_origin(client):
+    """§1.2's load-bearing clause: comparing scheme or port instead of just
+    hostname would guarantee a redirect loop on fe-pro, where tailscale
+    serve terminates TLS on the host and the container sees a different
+    scheme/port than the canonical redirect URI names. A request from the
+    canonical *hostname* on a different port must pass straight through,
+    unredirected -- this is the test that stops someone "tightening" the
+    comparison into a full-origin one.
+    """
+    # source: small-fixes-T.md §1.2/§5.1 -- "The comparison is hostname-only.
+    # A request from the canonical hostname on a different port does not
+    # redirect."
+    resp = client.get("/login", base_url="http://localhost:9999")
+
+    assert resp.status_code == 302
+    with client.session_transaction(base_url="http://localhost:9999") as sess:
+        assert "oauth_state" in sess

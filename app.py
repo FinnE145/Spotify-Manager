@@ -19,7 +19,14 @@ import roundtrip
 import scoring
 import scrobble
 import snapshot
-from config import APP_DEBUG, APP_PORT, MAX_CONTENT_LENGTH, SECRET_KEY
+from config import (
+    APP_DEBUG,
+    APP_PORT,
+    MAX_CONTENT_LENGTH,
+    SECRET_KEY,
+    SPOTIFY_CANONICAL_HOST,
+    SPOTIFY_CANONICAL_ORIGIN,
+)
 from grouping import render_export_text
 from spotify_client import get_auth_manager, get_spotify_client
 
@@ -325,10 +332,11 @@ def create_app():
     @app.route("/dev/roundtrip", endpoint="dev_roundtrip")
     def roundtrip_index():
         conn = db.get_db()
+        rt_counts = roundtrip.counts(conn)
         return render_template(
             "roundtrip.html",
             active="dev_roundtrip",
-            counts=roundtrip.counts(conn),
+            counts=rt_counts,
             runs=roundtrip.run_rows(conn),
             failures=roundtrip.failed_uri_rows(conn),
             review_rows=roundtrip.manual_alias_rows(conn),
@@ -337,7 +345,7 @@ def create_app():
             # Server-rendered, no Spotify calls (spec M §4.6) -- the numbers
             # beside the Add buttons are the whole budget control, no
             # preview-then-confirm step.
-            backfill_previews=backfill.previews(conn),
+            backfill_previews=backfill.previews(conn, rt_counts["remaining_uris"]),
         )
 
     @app.route("/dev/scrobble", endpoint="dev_scrobble")
@@ -738,6 +746,10 @@ def create_app():
 
     @app.route("/login")
     def login():
+        if SPOTIFY_CANONICAL_HOST and "canonical" not in request.args:
+            host = request.host.split(":", 1)[0].lower()
+            if host != SPOTIFY_CANONICAL_HOST:
+                return redirect(f"{SPOTIFY_CANONICAL_ORIGIN}/login?canonical=1")
         state = secrets.token_urlsafe(32)
         session["oauth_state"] = state
         auth_manager = get_auth_manager()
@@ -750,8 +762,10 @@ def create_app():
             abort(400, description=f"Spotify authorization failed: {error}")
 
         expected = session.pop("oauth_state", None)
-        if not expected or request.args.get("state") != expected:
-            abort(400, description="Invalid OAuth state.")
+        if not expected:
+            abort(400, description="This session carried no OAuth state.")
+        if request.args.get("state") != expected:
+            abort(400, description="The OAuth state did not match.")
 
         code = request.args.get("code")
         if not code:
