@@ -171,7 +171,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► P (codebase health — P1 spec audit ▸ P2 tests ▸ P3 refactor)
                            DONE            DONE       DONE
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
-      DONE                                           DONE               DONE
+      DONE                                           DONE               DONE                   DONE
   ──► F/G ──► L (search)
 
   ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
@@ -183,8 +183,9 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N, J, P, Q and R have landed** — P in all three of its parts, verified
-and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged 2026-08-24. Their
+**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S and T have landed** — P in all three of its parts,
+verified and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged
+2026-08-24; S verified and merged 2026-08-28; T verified and merged 2026-08-28. Their
 sections below are marked, and each points at the spec that is authoritative for what actually
 shipped — read the spec, not the summary here, before touching any of them.
 
@@ -1020,11 +1021,11 @@ count and nothing left is as dense as `scoring.py`. Adding the SQL pass below br
 - **Nothing gets wired into `symr-verify`.** It already asks for mutation on a session's own new
   tests, and that stays the per-session instrument.
 
-## T — Small fixes: OAuth host mismatch, round-trip request clarity, queue colors, review-queue exit
+## T — Small fixes: OAuth host mismatch, round-trip request clarity, queue colours, review-queue exit ✅ DONE
 
-**Specced 2026-08-28 → `docs/specs/small-fixes-T.md`.** Read that spec, not this section:
-planning contradicted it in two places, both corrected inline below. Placed after **S** by
-decision — see the Order notes. A grab-bag on purpose: four unrelated papercuts, each cheap
+**Specced 2026-08-28 → `docs/specs/small-fixes-T.md`. Landed 2026-08-28.** Read that spec, not
+this section: planning contradicted it in two places, both corrected inline below. Placed after
+**S** by decision — see the Order notes. A grab-bag on purpose: four unrelated papercuts, each cheap
 enough not to deserve its own step, found or raised in the days around R's implementation
 (2026-08-24).
 
