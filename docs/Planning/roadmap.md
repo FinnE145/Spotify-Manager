@@ -10,12 +10,12 @@
 
 ## Spec index
 
-What each of the 21 specs in `docs/specs/` actually covers, and the code it's
+What each of the 22 specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
 a lookup from now on rather than a re-derivation. `codebase-health-P.md` itself isn't in the
-21 — it's the standing approach doc for this step, not an audited spec (see its own §0).
+22 — it's the standing approach doc for this step, not an audited spec (see its own §0).
 
 **Every new spec gets a row here as it is written**, with `no` in the P1 column — that step
 postdates the audit. `mutation-sweep-S.md` was missed when it landed and is added back below;
@@ -48,6 +48,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `scrobbling-R.md` | Polls recently-played into `play` as non-authoritative scrobbles, superseded by the export; ISRC upgrade path | `scrobble.py`, `roundtrip.py`, `history_import.py`, `serve.py` | R | no |
 | `mutation-sweep-S.md` | Whole-codebase mutation sweep: the operator sets, the five-way classification, the delegated-triage gate. **`docs/codebase-health/S_sweep.md` is what actually happened** | `scripts/mutation/` | S | no |
 | `small-fixes-T.md` | Four papercuts: the `localhost`/`127.0.0.1` OAuth state mismatch, combined request estimates on `/dev/roundtrip`, the review queue's chip palette, the done screen's exit | `app.py` (OAuth), `config.py`, `backfill.py`, `roundtrip.py`, `canonical_review.js` | T | no |
+| `better-search-L.md` | Two-stage fuzzy matcher (trigram prefilter → token coverage), cross-type ranking, the navbar dropdown | `search.py`, `app.py` (`/search`, `/api/search*`), `templates/search.html`, `static/js/search.js` | L | no |
 
 ---
 
@@ -172,7 +173,8 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
                            DONE            DONE       DONE
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
       DONE                                           DONE               DONE                   DONE
-  ──► F/G ──► L (search)
+  ──► L (search) ──► F/G
+      SPECCED
 
   ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
 
@@ -229,6 +231,12 @@ blocked by; it is time the log is collecting.
 when the first of its four items (the OAuth bug) surfaced during R's implementation.** No
 technical dependency on either R or S; it's simply positioned past both rather than jumping the
 queue.
+
+**L was taken ahead of F/G and O, 2026-08-29 — Finn's call, made by invoking `/symr-plan L`.**
+The block above had `F/G ──► L`. There is no dependency in either direction: F/G and O are not
+prerequisites for search, and search is not one for them. O in particular is still gated on data
+rather than work — it waits for the `api_request` log to catch a real lockout — so time spent on L
+is not time O is blocked by. Recorded here rather than silently reordering the diagram.
 
 **U sits at the very end, on its own branch, by decision, 2026-08-24.** No dependency on
 anything above — it's a toy feature, not library management, and Finn asked for it to sit last
@@ -1092,7 +1100,9 @@ same control to leave — no reach for the mouse in between.
 
 ## L — Better search
 
-**Not specced.** Own `/symr-plan` session.
+**Specced 2026-08-29** → `docs/specs/better-search-L.md`. **Not yet implemented.** Read that spec,
+not this section, before touching it — the summary below is what the step was raised for, and
+planning settled several things it does not mention.
 
 K ships the deliberately plain version: a navbar box posting to `/search?q=`, four
 `LIKE '%q%'` groups (songs, albums, artists, playlists), each capped at 50 and ordered by name,
@@ -1103,6 +1113,26 @@ or a half-remembered title still finds the track, and **ranked results** — acr
 artist you have 358 tracks by outranks a one-play song whose title happens to contain their
 name. Ranking is the part with real design in it, and it wants H's score to exist first, which
 is why this sits at the end rather than next to K.
+
+**What planning settled that this summary predates.** The matcher is a two-stage pure-Python one
+— a trigram prefilter over the 18,461 distinct normalized names, then token-coverage scoring on
+the survivors — with no new dependency and no FTS5. Ranking is
+`max(score, SCORE_FLOOR) * relevance ** ALPHA`, and `relevance = own * (1 + BUMP * assoc)`, where
+`own` is the match against the entity's **own** name. That multiplication **replaces K §10's rule
+that a song matches on any credited artist's name**, which is the concrete complaint L was raised
+over: a song by an artist named Willow no longer appears under `q=willow`.
+
+**Measured 2026-08-29, read-only against the real `symr.db`** — don't re-derive, and see
+`timings-contaminated-by-parallel-chats` before trusting a contradicting figure. The corpus is
+**24,032 raw names / 18,461 distinct** (13,244 tracks, 6,291 albums, 4,344 artists, 154
+playlists), which supersedes H §2's 9,949 tracks. The scorer without a prefilter costs
+**270–840 ms** per query; with it, **6–44 ms**. A 0.35 relevance floor admits 4,395 names for
+"willow" and 7,619 for "the", which is why the floor is 0.5 and why bounding a result list is a
+cap's job rather than a threshold's. Full tables in the spec's §10.
+
+Planning also found a **live bug** it folds in: `canonical_review.js`'s `exitState` branch returns
+before its `input`/`textarea` guard, so Enter in the navbar search box on the review queue's done
+screen navigates to `/dev/canonical` instead of searching.
 
 ## W — UI clean-up: adopt a CSS framework
 
