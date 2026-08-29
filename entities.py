@@ -5,8 +5,11 @@ arbitrary track set -- play_stats and playlists_for_tracks -- plus the two
 guarded one-request-per-page-load Spotify detail fetches (album tracklist,
 artist image). And, since P3 (docs/codebase-health/P3_refactor.md §4.1),
 one detail function per entity page: everything /track, /album, /artist,
-/playlist, /search and the four group pages render, assembled here and
-returned as the template's kwargs.
+/playlist and the four group pages render, assembled here and returned as
+the template's kwargs. (/search's own read path moved to search.py in step
+L -- it outgrew "belongs to no existing owner" once it needed module-level
+tuning constants, a cache with its own staleness check, and a two-stage
+scorer.)
 
 **No Flask in this module** (§4.1) -- no abort, no redirect, no request, no
 render_template. A missing row returns None and the route raises the 404
@@ -636,94 +639,6 @@ def artist_detail(conn, artist_id):
         "spans": generations.generation_spans(conn),
         "stats": play_stats(conn, all_track_ids),
         "score": scoring.artist_group_score(conn, [artist_id]),
-    }
-
-
-def search(conn, q):
-    """The four ranked result lists behind /search?q=... -- songs (one row
-    per version group), albums, alias-resolved artists, playlists -- as the
-    template's kwargs.
-
-    q is already stripped and known non-empty: the route owns that, and
-    owns the ensure_track_groups() pairing that only runs when there is
-    something to search for."""
-    like = f"%{q}%"
-
-    # All four groups here rank by score before capping at 50, not
-    # after: a name-ordered cap returns the alphabetically-first 50
-    # matches rather than the best 50 (docs/specs/scoring-H.md §11.1).
-    # Every match is fetched (no SQL LIMIT) so the ranking sees the
-    # whole result set, which searching bounds to a manageable size.
-    track_rows = conn.execute(
-        "SELECT t.track_id FROM track t WHERE t.name LIKE ? "
-        "   OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id) "
-        "              WHERE x.track_id = t.track_id AND ar.name LIKE ?) "
-        "ORDER BY t.name COLLATE NOCASE",
-        (like, like),
-    ).fetchall()
-    seen_versions = {}
-    for row in track_rows:
-        groups = canonical.groups_for_track(conn, row["track_id"])
-        if not groups or groups["version"] in seen_versions:
-            continue
-        seen_versions[groups["version"]] = row["track_id"]
-    version_scores = scoring.scores_for_tier(conn, "version", list(seen_versions))
-    ranked_versions = sorted(
-        seen_versions, key=lambda vid: -version_scores.get(vid, {}).get("all_time", 0.0)
-    )[:50]
-    songs = []
-    for vid in ranked_versions:
-        rep_id = canonical.representative(conn, vid) or seen_versions[vid]
-        songs.append({"version_id": vid, **canonical.track_display(conn, rep_id)})
-
-    album_rows = conn.execute(
-        "SELECT album_id, name, image_url FROM album WHERE name LIKE ? "
-        "ORDER BY name COLLATE NOCASE",
-        (like,),
-    ).fetchall()
-    album_score_map = scoring.album_scores(conn, [a["album_id"] for a in album_rows])
-    albums = sorted(
-        album_rows, key=lambda a: -album_score_map.get(a["album_id"], {}).get("all_time", 0.0)
-    )[:50]
-
-    artist_rows = conn.execute(
-        "SELECT ar.artist_id, ar.name, COALESCE(aa.canonical_artist_id, ar.artist_id) AS resolved_id "
-        "FROM artist ar LEFT JOIN artist_alias aa ON aa.artist_id = ar.artist_id "
-        "WHERE ar.name LIKE ?",
-        (like,),
-    ).fetchall()
-    seen_artists = {}
-    for row in artist_rows:
-        if row["resolved_id"] not in seen_artists:
-            canonical_artist = conn.execute(
-                "SELECT artist_id, name FROM artist WHERE artist_id = ?", (row["resolved_id"],)
-            ).fetchone()
-            seen_artists[row["resolved_id"]] = dict(canonical_artist)
-    artist_score_map = scoring.artist_scores(conn, list(seen_artists))
-    artists_result = sorted(
-        seen_artists.values(),
-        key=lambda a: (
-            -artist_score_map.get(a["artist_id"], {}).get("all_time", 0.0),
-            (a["name"] or "").casefold(),
-        ),
-    )[:50]
-
-    playlist_rows = conn.execute(
-        "SELECT playlist_id, name, image_url FROM snapshot WHERE name LIKE ? "
-        "ORDER BY name COLLATE NOCASE",
-        (like,),
-    ).fetchall()
-    playlist_score_map = scoring.playlist_scores(conn, [p["playlist_id"] for p in playlist_rows])
-    playlists_result = sorted(
-        playlist_rows,
-        key=lambda p: -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),
-    )[:50]
-
-    return {
-        "songs": songs,
-        "albums": albums,
-        "artists": artists_result,
-        "playlists": playlists_result,
     }
 
 

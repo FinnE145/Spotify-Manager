@@ -6,6 +6,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="{{ url_for('static', filename='js/format.js') }}"></script>
   <script src="{{ url_for('static', filename='js/generation_confirm.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/search.js') }}"></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <nav id="navbar">
@@ -19,9 +20,10 @@
       <a href="{{ url_for('analytics') }}" class="{{ 'active' if active == 'analytics' }}">Analytics</a>
     </div>
     <div class="nav-utility">
-      <form method="get" action="{{ url_for('search_page') }}" class="nav-search">
-        <input type="text" name="q" placeholder="Search" aria-label="Search">
+      <form method="get" action="{{ url_for('search_page') }}" class="nav-search" id="nav-search-form">
+        <input type="text" name="q" placeholder="Search" aria-label="Search" id="nav-search-input" autocomplete="off">
         <button type="submit" aria-label="Search">&rarr;</button>
+        <div id="nav-search-dropdown" class="search-dropdown" hidden></div>
       </form>
       <a href="{{ url_for('dev_index') }}" class="nav-icon {{ 'active' if active and active.startswith('dev') }}"
          title="Dev" aria-label="Dev">⚙</a>

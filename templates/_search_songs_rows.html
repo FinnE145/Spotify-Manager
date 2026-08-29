@@ -1,0 +1,15 @@
+{# The Songs section's rows -- rendered on page load and by /api/search/more?type=songs.
+   `rows` is a list of canonical.track_display() dicts (plus version_id/score),
+   the same shape K's original songs list used. #}
+{% from "_macros.html" import entity_link, score_display %}
+{% for t in rows %}
+<tr>
+  <td>{% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}</td>
+  <td>{{ entity_link('version', t.version_id, t.name) }}</td>
+  <td>{{ t.artists }}</td>
+  <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
+  <td>{{ score_display(t.score) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="empty">No songs match.</td></tr>
+{% endfor %}

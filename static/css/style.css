@@ -906,6 +906,7 @@ body.immersive {
 .nav-search {
   display: flex;
   gap: 4px;
+  position: relative; /* anchors .search-dropdown, better-search-L.md §7 */
 }
 
 .nav-search input {
@@ -923,6 +924,56 @@ body.immersive {
   border-radius: 4px;
   background: #fff;
   cursor: pointer;
+}
+
+/* The navbar search dropdown (better-search-L.md §7) -- same positioning
+   shape as #help-popover, anchored to .nav-search rather than the page. */
+.search-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  width: 360px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+}
+
+.search-dropdown .data-table {
+  font-size: 12px;
+}
+
+.search-dropdown tr.highlighted {
+  background: #eef4ff;
+}
+
+.search-type-label {
+  color: #888;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* A See more'd section becomes scrollable rather than growing the page --
+   same shape as .group-scroll. */
+.search-section.scrollable table {
+  display: block;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.search-section.scrollable thead,
+.search-section.scrollable tbody {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.search-see-more {
+  margin-top: 8px;
 }
 
 /* An album's unowned tracklist rows -- rendered from the simplified Spotify

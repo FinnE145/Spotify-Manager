@@ -1,0 +1,11 @@
+{# The Albums section's rows -- rendered on page load and by /api/search/more?type=albums. #}
+{% from "_macros.html" import entity_link, score_display %}
+{% for a in rows %}
+<tr>
+  <td>{% if a.image_url %}<img class="cover" src="{{ a.image_url }}" alt="">{% endif %}</td>
+  <td>{{ entity_link('album', a.album_id, a.name) }}</td>
+  <td>{{ score_display(a.score) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="3" class="empty">No albums match.</td></tr>
+{% endfor %}

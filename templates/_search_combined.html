@@ -1,0 +1,20 @@
+{# The mixed-type row list shared by Most Relevant (search.html) and the
+   navbar dropdown (/api/search) -- better-search-L.md §7: "the dropdown is
+   a shortcut into the same ordered list the page renders". Each row already
+   carries its own type_label/kind/name/image_url/score (search._hydrate_combined),
+   so this template has no per-type branching at all. #}
+{% from "_macros.html" import entity_link, score_display %}
+<table class="data-table search-combined">
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{% if r.image_url %}<img class="cover" src="{{ r.image_url }}" alt="">{% endif %}</td>
+      <td class="search-type-label">{{ r.type_label }}</td>
+      <td>{{ entity_link(r.kind, r.id, r.name) }}</td>
+      <td>{{ score_display(r.score) }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="empty">No matches.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>

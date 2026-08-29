@@ -224,6 +224,7 @@ import jobs  # noqa: E402
 import roundtrip  # noqa: E402
 import scoring  # noqa: E402
 import scrobble  # noqa: E402
+import search  # noqa: E402
 import snapshot  # noqa: E402
 
 # The instant every test runs at (P2_tests.md §4.3). Mid-month, mid-day, UTC --
@@ -308,6 +309,17 @@ def _reset_module_state():
     scoring._worker_pending = False
     scoring._worker_alive = False
     scoring._recompute_status = dict(_PRISTINE_RECOMPUTE_STATUS)
+
+    # search.py's own name-index cache carries exactly scoring._checker_conn's
+    # problem (better-search-L.md §4.2): an open handle to the wiped file, plus
+    # a cached index built from the previous test's rows. Both must go, or a
+    # test asserting a newly-inserted name is findable would pass by accident
+    # against a cache that never noticed the database moved at all.
+    if search._checker_conn is not None:
+        search._checker_conn.close()
+    search._checker_conn = None
+    search._cache = None
+    search._cached_version = None
 
 
 # Iterations of the settle spin below. A module constant so a test of the

@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "_macros.html" import entity_link %}
 
 {% block title %}Symr — Search{% endblock %}
 
@@ -13,74 +12,66 @@
 
   {% if q %}
   <section class="panel">
-    <h2>Songs ({{ songs|length }})</h2>
+    <h2>Most Relevant</h2>
+    {% set rows = most_relevant %}
+    {% include "_search_combined.html" %}
+  </section>
+
+  <section class="panel search-section" id="search-songs-section">
+    <h2>Songs ({{ "{:,}".format(songs_total) }})</h2>
     {% if songs %}
     <table class="data-table">
-      <thead><tr><th></th><th>Track</th><th>Artists</th><th>Album</th></tr></thead>
-      <tbody>
-        {% for t in songs %}
-        <tr>
-          <td>{% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}</td>
-          <td>{{ entity_link('version', t.version_id, t.name) }}</td>
-          <td>{{ t.artists }}</td>
-          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
+      <thead><tr><th></th><th>Track</th><th>Artists</th><th>Album</th><th>Score</th></tr></thead>
+      <tbody id="search-songs-body">{% set rows = songs %}{% include "_search_songs_rows.html" %}</tbody>
     </table>
+    {% if songs_total > songs|length %}
+    <button type="button" class="search-see-more" data-type="songs">See more</button>
+    {% endif %}
     {% else %}
     <p class="empty">No songs match "{{ q }}".</p>
     {% endif %}
   </section>
 
-  <section class="panel">
-    <h2>Albums ({{ albums|length }})</h2>
+  <section class="panel search-section" id="search-albums-section">
+    <h2>Albums ({{ "{:,}".format(albums_total) }})</h2>
     {% if albums %}
     <table class="data-table">
-      <thead><tr><th></th><th>Album</th></tr></thead>
-      <tbody>
-        {% for a in albums %}
-        <tr>
-          <td>{% if a.image_url %}<img class="cover" src="{{ a.image_url }}" alt="">{% endif %}</td>
-          <td>{{ entity_link('album', a.album_id, a.name) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
+      <thead><tr><th></th><th>Album</th><th>Score</th></tr></thead>
+      <tbody id="search-albums-body">{% set rows = albums %}{% include "_search_albums_rows.html" %}</tbody>
     </table>
+    {% if albums_total > albums|length %}
+    <button type="button" class="search-see-more" data-type="albums">See more</button>
+    {% endif %}
     {% else %}
     <p class="empty">No albums match "{{ q }}".</p>
     {% endif %}
   </section>
 
-  <section class="panel">
-    <h2>Artists ({{ artists|length }})</h2>
+  <section class="panel search-section" id="search-artists-section">
+    <h2>Artists ({{ "{:,}".format(artists_total) }})</h2>
     {% if artists %}
     <table class="data-table">
-      <tbody>
-        {% for a in artists %}
-        <tr><td>{{ entity_link('artist', a.artist_id, a.name) }}</td></tr>
-        {% endfor %}
-      </tbody>
+      <thead><tr><th>Artist</th><th>Score</th></tr></thead>
+      <tbody id="search-artists-body">{% set rows = artists %}{% include "_search_artists_rows.html" %}</tbody>
     </table>
+    {% if artists_total > artists|length %}
+    <button type="button" class="search-see-more" data-type="artists">See more</button>
+    {% endif %}
     {% else %}
     <p class="empty">No artists match "{{ q }}".</p>
     {% endif %}
   </section>
 
-  <section class="panel">
-    <h2>Playlists ({{ playlists|length }})</h2>
+  <section class="panel search-section" id="search-playlists-section">
+    <h2>Playlists ({{ "{:,}".format(playlists_total) }})</h2>
     {% if playlists %}
     <table class="data-table">
-      <thead><tr><th></th><th>Playlist</th></tr></thead>
-      <tbody>
-        {% for p in playlists %}
-        <tr>
-          <td>{% if p.image_url %}<img class="cover" src="{{ p.image_url }}" alt="">{% endif %}</td>
-          <td>{{ entity_link('playlist', p.playlist_id, p.name) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
+      <thead><tr><th></th><th>Playlist</th><th>Score</th></tr></thead>
+      <tbody id="search-playlists-body">{% set rows = playlists %}{% include "_search_playlists_rows.html" %}</tbody>
     </table>
+    {% if playlists_total > playlists|length %}
+    <button type="button" class="search-see-more" data-type="playlists">See more</button>
+    {% endif %}
     {% else %}
     <p class="empty">No playlists match "{{ q }}".</p>
     {% endif %}

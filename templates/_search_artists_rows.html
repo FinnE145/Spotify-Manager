@@ -1,0 +1,10 @@
+{# The Artists section's rows -- rendered on page load and by /api/search/more?type=artists. #}
+{% from "_macros.html" import entity_link, score_display %}
+{% for a in rows %}
+<tr>
+  <td>{{ entity_link('artist', a.artist_id, a.name) }}</td>
+  <td>{{ score_display(a.score) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="2" class="empty">No artists match.</td></tr>
+{% endfor %}

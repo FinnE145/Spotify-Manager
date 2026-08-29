@@ -182,6 +182,37 @@ def test_search_finds_a_matching_track_and_not_a_non_matching_one(client, corpus
     assert "Totally Unrelated Song" not in body
 
 
+def test_api_search_writes_nothing(client, conn):
+    # source: better-search-L.md §5 -- "Neither async endpoint calls
+    # canonical.ensure_track_groups ... a GET returning a listing has no
+    # business taking a write lock -- and here it would be a write on every
+    # keystroke." A track with no track_group row is the un-golden-able
+    # case (mirrors test_the_album_page_allocates_groups... above): nothing
+    # else in the suite would notice ensure_track_groups being quietly
+    # added back to this route.
+    builders.make_track(conn, "t-ungrouped", name="Ungrouped Track")
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM track_group WHERE track_id = 't-ungrouped'"
+    ).fetchone()[0] == 0
+
+    resp = client.get("/api/search?q=ungrouped")
+
+    assert resp.status_code == 200
+    assert conn.execute(
+        "SELECT COUNT(*) FROM track_group WHERE track_id = 't-ungrouped'"
+    ).fetchone()[0] == 0
+
+
+def test_api_search_more_rejects_a_type_outside_the_whitelist(client, corpus):
+    # source: better-search-L.md §5 -- "type is whitelisted, never
+    # interpolated." A bad type must 400, not fall through to an f-string
+    # template lookup that would 500 on a missing template file.
+    resp = client.get("/api/search/more?q=ab&type=bogus")
+
+    assert resp.status_code == 400
+
+
 def test_dev_generations_renders_generation_names(client, corpus):
     # source: generations-B.md '/dev/generations -- the generation list'.
     resp = client.get("/dev/generations")
@@ -695,11 +726,16 @@ def test_an_empty_search_allocates_nothing_but_a_real_one_does(client, corpus, m
     of that set.
 
     Nothing read it. Deleting the guard passes the full suite and the
-    golden compare, because `routes_catalog` carries `/search?q=a` but not
-    the bare path, and the url_map completeness check keys on
-    `(endpoint, method)` -- a query string is neither (P2 session 5). The
+    golden compare, because `routes_catalog` carries `/search?q=a` and
+    `?q=ab` but not the bare path, and the url_map completeness check keys
+    on `(endpoint, method)` -- a query string is neither (P2 session 5). The
     positive half is what makes this discriminating: a spy that simply
     never fires would pass against a route that had stopped calling it.
+
+    `q=a` still exercises the write path even though better-search-L.md's
+    MIN_QUERY_LEN=2 now makes it the matcher's own short-query branch (no
+    results) -- the route's `if q:` guard is about the string being
+    non-empty, not about search.py's internal length floor.
     """
     # source: app.py's search_page -- "ensure_track_groups only when there
     # is something to search for, exactly as before: an empty /search

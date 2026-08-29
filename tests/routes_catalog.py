@@ -130,7 +130,13 @@ CASES = (
     Case("album_page", "GET", "/album/{album}"),
     Case("artist_page", "GET", "/artist/{artist}"),
     Case("playlist_page", "GET", "/playlist/{playlist}"),
-    Case("search_page", "GET", "/search?q=a"),
+    # better-search-L.md §4.6: MIN_QUERY_LEN=2, so "a" is now the short-query
+    # branch (empty results, no ensure_track_groups) rather than an ordinary
+    # search -- a second, real-query variant is needed to cover the branch
+    # "a" used to exercise (P2-010: a variant proves the branch responds, and
+    # test_routes.py carries the semantic assertion for the real one).
+    Case("search_page", "GET", "/search?q=a", variant="short_query"),
+    Case("search_page", "GET", "/search?q=ab", variant="real_query"),
     # -- Dev pages --------------------------------------------------------
     Case("dev_index", "GET", "/dev"),
     Case("dev_scoring", "GET", "/dev/scoring"),
@@ -173,6 +179,9 @@ CASES = (
     Case("api_canonical_autogroup", "POST", "/api/canonical/autogroup"),
     Case("api_canonical_autogroup_undo", "POST", "/api/canonical/autogroup/undo"),
     Case("api_canonical_pin", "POST", "/api/canonical/pin", json={"track_id": "{track}"}),
+    # -- Search API (better-search-L.md §5) --------------------------------
+    Case("api_search", "GET", "/api/search?q=ab"),
+    Case("api_search_more", "GET", "/api/search/more?q=ab&type=songs"),
     # -- Snapshot API -----------------------------------------------------
     Case("snapshot_status", "GET", "/api/snapshot/status"),
     Case("pull_snapshot", "POST", "/api/snapshot/pull"),

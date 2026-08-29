@@ -659,6 +659,12 @@
   const KEY_TO_LEVEL = { 0: 1, 1: 2, 2: 3, 3: 4, 4: 5 };
 
   document.addEventListener("keydown", (e) => {
+    // better-search-L.md §8: a focused field wins in every state, checked
+    // before exitState -- the navbar search box lives outside itemSection
+    // and is reachable from the done/empty screens too, where this guard
+    // used to run after the exitState branch had already returned/navigated.
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea") return;
     if (exitState) {
       if (e.key === "Enter" && enterArmed) {
         window.location.href = exitHref();
@@ -666,8 +672,6 @@
       return;
     }
     if (itemSection.hidden) return;
-    const tag = (e.target.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea") return;
 
     // Modifier combos are handled here and nowhere else, so the bare-key
     // branches below can never swallow a browser shortcut (Cmd+R was

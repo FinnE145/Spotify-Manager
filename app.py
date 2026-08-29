@@ -18,6 +18,7 @@ import jobs
 import roundtrip
 import scoring
 import scrobble
+import search
 import snapshot
 from config import (
     APP_DEBUG,
@@ -269,13 +270,40 @@ def create_app():
 
         # ensure_track_groups only when there is something to search for,
         # exactly as before: an empty /search writes nothing.
-        results = {"songs": [], "albums": [], "artists": [], "playlists": []}
+        results = {
+            "most_relevant": [],
+            "songs": [], "songs_total": 0,
+            "albums": [], "albums_total": 0,
+            "artists": [], "artists_total": 0,
+            "playlists": [], "playlists_total": 0,
+        }
         if q:
             canonical.ensure_track_groups(conn)
             conn.commit()
-            results = entities.search(conn, q)
+            results = search.search_page(conn, q)
 
         return render_template("search.html", q=q, **results)
+
+    @app.route("/api/search")
+    def api_search():
+        """The navbar dropdown's DROPDOWN_LIMIT mixed rows (better-search-L.md
+        §5). No ensure_track_groups() here -- a GET returning a listing has
+        no business taking a write lock, and here it would be one on every
+        keystroke."""
+        conn = db.get_db()
+        q = request.args.get("q", "").strip()
+        return jsonify({"html": render_template("_search_combined.html", rows=search.search_dropdown(conn, q))})
+
+    @app.route("/api/search/more")
+    def api_search_more():
+        """One type section's rows beyond SECTION_LIMIT, up to SECTION_MAX
+        (better-search-L.md §5/§6.2). type is whitelisted, never interpolated."""
+        conn = db.get_db()
+        q = request.args.get("q", "").strip()
+        type_ = request.args.get("type", "")
+        if type_ not in search.TYPES:
+            abort(400, description="type must be one of songs/albums/artists/playlists")
+        return jsonify({"html": render_template(f"_search_{type_}_rows.html", rows=search.search_more(conn, q, type_))})
 
     @app.route("/dev")
     def dev_index():

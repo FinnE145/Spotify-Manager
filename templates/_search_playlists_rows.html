@@ -1,0 +1,11 @@
+{# The Playlists section's rows -- rendered on page load and by /api/search/more?type=playlists. #}
+{% from "_macros.html" import entity_link, score_display %}
+{% for p in rows %}
+<tr>
+  <td>{% if p.image_url %}<img class="cover" src="{{ p.image_url }}" alt="">{% endif %}</td>
+  <td>{{ entity_link('playlist', p.playlist_id, p.name) }}</td>
+  <td>{{ score_display(p.score) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="3" class="empty">No playlists match.</td></tr>
+{% endfor %}
