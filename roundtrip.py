@@ -118,6 +118,16 @@ def start(reconcile_only=False):
 # -- Reads for the page -------------------------------------------------
 
 
+def requests_estimate(n_uris):
+    """2 guard reads (the playlist and the current user) + 2 per batch (add,
+    read back) + 1 clear. The single source for this formula (T2,
+    docs/specs/small-fixes-T.md §2.3): backfill.previews() calls this too,
+    so an Add row's projected round-trip cost can't drift from the Status
+    panel's own figure."""
+    batches = -(-n_uris // BATCH_SIZE)  # ceil
+    return 2 * batches + 3
+
+
 def counts(conn):
     remaining = conn.execute(
         "SELECT COUNT(*) FROM (" + _WORK_LIST_SQL + ")"
@@ -126,9 +136,7 @@ def counts(conn):
     return {
         "remaining_uris": remaining,
         "batches": batches,
-        # 2 guard reads (the playlist and the current user) + 2 per batch
-        # (add, read back) + 1 clear.
-        "requests_estimate": 2 * batches + 3,
+        "requests_estimate": requests_estimate(remaining),
         # The round-trip's product: tracks Symr knows that sit in none of
         # Finn's playlists. Derived rather than flagged, like everything else
         # about "foreign" here.

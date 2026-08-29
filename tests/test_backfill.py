@@ -22,6 +22,7 @@ import backfill
 import builders
 import entities
 import fakes
+import roundtrip
 
 
 def album_with_tracklist(conn, album_id, track_ids, total_tracks=None, pulled=True):
@@ -54,7 +55,9 @@ def wanted(conn):
 
 
 def settled(conn, album_id):
-    return backfill._settled_map(conn)[album_id]
+    # T2 (small-fixes-T.md §2.2) turned _settled_map's values into the raw
+    # missing count; callers wanting the boolean derive it themselves.
+    return backfill._settled_map(conn)[album_id] <= 0
 
 
 # -- The settled arithmetic (§4.2) ------------------------------------------
@@ -377,7 +380,7 @@ def test_the_previews_match_what_the_job_would_do(conn):
         album_with_tracklist(conn, f"al-{ordinal}", [f"t{ordinal}", f"x{ordinal}"], pulled=False)
         generation_with_album(conn, ordinal, f"al-{ordinal}", [f"t{ordinal}"])
 
-    rows = {row["generations"]: row for row in backfill.previews(conn)}
+    rows = {row["generations"]: row for row in backfill.previews(conn, 0)}
 
     for n in (7, 2):
         expected = backfill.work_list(conn, n)
@@ -394,7 +397,7 @@ def test_the_preview_labels_the_generation_range(conn):
         album_with_tracklist(conn, f"al-{ordinal}", [f"t{ordinal}", f"x{ordinal}"])
         generation_with_album(conn, ordinal, f"al-{ordinal}", [f"t{ordinal}"])
 
-    rows = {row["generations"]: row for row in backfill.previews(conn)}
+    rows = {row["generations"]: row for row in backfill.previews(conn, 0)}
 
     assert rows[7]["range_label"] == "1–3"
     assert rows[2]["range_label"] == "2–3"
@@ -403,14 +406,18 @@ def test_the_preview_labels_the_generation_range(conn):
 def test_nothing_to_do_previews_as_zero(conn):
     # characterization -- the empty state the panel renders when every
     # generation is handled; _format_ordinal_range returns "" rather than a
-    # stray dash.
-    rows = {row["generations"]: row for row in backfill.previews(conn)}
+    # stray dash. remaining_uris=5 with nothing queued still projects a
+    # non-zero roundtrip_estimate, so this also pins that the combined figure
+    # isn't silently zeroed by an empty preview row.
+    rows = {row["generations"]: row for row in backfill.previews(conn, 5)}
 
     assert rows[7] == {
         "generations": 7,
         "album_count": 0,
         "requests_estimate": 0,
         "range_label": "",
+        "queued_uris": 0,
+        "roundtrip_estimate": roundtrip.requests_estimate(5),
     }
 
 
@@ -423,9 +430,71 @@ def test_a_plain_preview_writes_track_groups(conn):
     builders.make_track(conn, "t1")
     assert conn.execute("SELECT COUNT(*) FROM track_group").fetchone()[0] == 0
 
-    backfill.previews(conn)
+    backfill.previews(conn, 0)
 
     assert conn.execute("SELECT COUNT(*) FROM track_group").fetchone()[0] == 1
+
+
+# -- T2: the combined round-trip estimate (small-fixes-T.md §2) -------------
+
+
+def test_queued_uris_sums_missing_over_the_unsettled_chosen_albums(conn):
+    # source: T2 (small-fixes-T.md §2.2, §5.2) -- "_derive sums max(0,
+    # missing) over its chosen unsettled albums into a new queued_uris key."
+    # al-a is partly owned with nothing queued yet (missing = 4). al-b
+    # already has one unresolved wanted_uri row from an earlier partial run
+    # (missing = 2). A naive sum(total_tracks) would give 15; a naive
+    # total_tracks - owned that ignores the already-queued row would give 7.
+    # Only the right arithmetic gives 6.
+    builders.make_album(conn, album_id="al-a", total_tracks=10)
+    builders.make_album(conn, album_id="al-b", total_tracks=5)
+    for i in range(6):
+        owned_track(conn, f"a{i}", "al-a")
+    for i in range(2):
+        owned_track(conn, f"b{i}", "al-b")
+    conn.execute(
+        "INSERT INTO wanted_uri (uri, source, album_id) "
+        "VALUES ('spotify:track:bx', 'backfill', 'al-b')"
+    )
+    conn.commit()
+
+    playlist = builders.make_playlist(conn, "pl-1", name="v1.0.0")
+    conn.execute(
+        "INSERT OR REPLACE INTO generation (ordinal, playlist_id) VALUES (1, 'pl-1')"
+    )
+    conn.commit()
+    for track_id in ("a0", "b0"):
+        builders.make_membership(conn, playlist_id=playlist, track_id=track_id)
+        builders.make_group(conn, [track_id])
+
+    rows = {row["generations"]: row for row in backfill.previews(conn, 0)}
+
+    assert rows[7]["queued_uris"] == 6
+
+
+def test_roundtrip_estimate_is_a_single_source_with_backfill(conn):
+    # source: T2 (small-fixes-T.md §2.3, §5.2) -- "roundtrip.requests_estimate
+    # is the single source." counts()["requests_estimate"] and a preview
+    # row's roundtrip_estimate must both come from it, not from two copies of
+    # the formula. remaining (60) + queued_uris (41) = 101 crosses the
+    # 100-boundary into a second batch, which catches an off-by-one in the
+    # ceil that a round number (100 exactly) would hide.
+    builders.make_album(conn, album_id="al-a", total_tracks=42)
+    playlist = builders.make_playlist(conn, "pl-1", name="v1.0.0")
+    conn.execute(
+        "INSERT OR REPLACE INTO generation (ordinal, playlist_id) VALUES (1, 'pl-1')"
+    )
+    conn.commit()
+    builders.make_track(conn, "t-marker", album_id="al-a")
+    builders.make_membership(conn, playlist_id=playlist, track_id="t-marker")
+    builders.make_group(conn, ["t-marker"])
+
+    rows = {row["generations"]: row for row in backfill.previews(conn, 60)}
+    queued = rows[7]["queued_uris"]
+    assert queued == 41  # 42 total - 1 owned (t-marker) - 0 queued
+
+    assert rows[7]["roundtrip_estimate"] == roundtrip.requests_estimate(60 + queued)
+    assert rows[7]["roundtrip_estimate"] == roundtrip.requests_estimate(101)
 
 
 def test_a_freshly_reset_status_reports_zero_albums(conn):
@@ -728,17 +797,38 @@ def test_a_started_backfill_says_so_in_its_response(client, run_jobs_inline):
 # -- Scope: an ingest route and nothing else (§4) ---------------------------
 
 
-def test_the_backfill_does_not_chain_into_anything(conn):
-    # source: M §4 -- "an ingest route, nothing more. No chaining into the
-    # round-trip or auto-group", plus P1-017's note that "backfill.py doesn't
-    # import scoring at all" -- a documented exception to the eleven job call
-    # sites, caught by scoring.ensure_fresh()'s backstop instead.
-    import sys
+def test_the_backfill_does_not_chain_into_anything(conn, fake_spotify, monkeypatch):
+    """M §4 -- "an ingest route, nothing more. No chaining into the
+    round-trip or auto-group", plus P1-017's note that "backfill.py doesn't
+    import scoring at all" -- a documented exception to the eleven job call
+    sites, caught by scoring.ensure_fresh()'s backstop instead.
 
-    module_globals = vars(backfill)
-    assert "roundtrip" not in module_globals
-    assert "canonical_autogroup" not in module_globals
-    assert "scoring" not in module_globals
-    assert sys.modules["backfill"].__name__ == "backfill"
+    T2 (small-fixes-T.md §2.3) gives backfill.py a real `roundtrip` import,
+    for the one shared pure formula (roundtrip.requests_estimate()) -- so a
+    static "roundtrip is not imported" check is no longer true, and would be
+    wrong to keep. What "no chaining" actually means is behavioral: a
+    completed run never *starts* a round-trip job or an auto-group run. That
+    is what's asserted below instead, which also catches a deferred
+    in-function import a module-globals check would miss entirely.
+    """
+    # source: grouping-fixes-backfill-M.md §4 -- "an ingest route, nothing
+    # more. No chaining into the round-trip or auto-group", amended by T2
+    # (small-fixes-T.md §2.3)'s legitimate roundtrip import.
+    import canonical_autogroup
+    import roundtrip
+
+    assert "canonical_autogroup" not in vars(backfill)
+    assert "scoring" not in vars(backfill)
+
+    started = []
+    monkeypatch.setattr(roundtrip, "start", lambda *a, **kw: started.append("roundtrip"))
+    monkeypatch.setattr(canonical_autogroup, "run", lambda *a, **kw: started.append("autogroup"))
+
+    builders.make_album(conn, album_id="al-1", total_tracks=1)
+    generation_with_album(conn, 1, "al-1", ["t1"])
+
+    run_job(conn, fake_spotify)
+
+    assert started == []
 
 

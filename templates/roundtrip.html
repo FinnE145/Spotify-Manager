@@ -98,7 +98,9 @@
     <p class="meta">
       Fetches tracklists for albums Symr only partly owns, in the most recent generations, and
       queues the rest into the round-trip queue above. Costs are estimated with no Spotify calls;
-      seeing them is the whole budget control before clicking Add.
+      seeing them is the whole budget control before clicking Add. The Add's requests spend
+      immediately, on click; the round-trip's spend when you next run it above — the two totals
+      below combine both so the adjacency doesn't read as one cost.
     </p>
     <table class="data-table">
       <tbody>
@@ -106,7 +108,10 @@
         <tr>
           <td>
             Next {{ p.generations }} generation{{ "s" if p.generations != 1 }}{% if p.range_label %} ({{ p.range_label }}){% endif %}:
-            {{ p.album_count }} album{{ "s" if p.album_count != 1 }}, ~{{ p.requests_estimate }} request{{ "s" if p.requests_estimate != 1 }}
+            {{ p.album_count }} album{{ "s" if p.album_count != 1 }}
+            &middot; ~{{ p.requests_estimate }} request{{ "s" if p.requests_estimate != 1 }} now,
+            ~{{ "{:,}".format(p.roundtrip_estimate) }} on the next round-trip
+            &middot; <strong>~{{ "{:,}".format(p.requests_estimate + p.roundtrip_estimate) }} total</strong>
           </td>
           <td><button type="button" data-backfill-add="{{ p.generations }}" data-empty="{{ '1' if not p.album_count else '0' }}" {{ 'disabled' if not p.album_count }}>Add</button></td>
         </tr>

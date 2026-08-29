@@ -17,6 +17,7 @@ import db
 import entities
 import generations
 import jobs
+import roundtrip
 from jobs import RateLimited
 from spotify_client import get_spotify_client
 
@@ -52,10 +53,13 @@ def start(n_generations):
 
 
 def _settled_map(conn):
-    """album_id -> settled, where settled means missing(A) <= 0:
-    total_tracks - owned(A) - queued(A), and queued(A) only counts
-    wanted_uri rows for A that are still unresolved. Three cheap aggregates,
-    combined in Python rather than a per-album correlated query."""
+    """album_id -> missing: total_tracks - owned(A) - queued(A), where
+    queued(A) only counts wanted_uri rows for A that are still unresolved.
+    Settled means missing <= 0 -- every caller derives that itself. The
+    count, not just the boolean, is kept because it is precisely how many
+    URIs an Add would queue (T2, docs/specs/small-fixes-T.md §2.2), at zero
+    further request cost. Three cheap aggregates, combined in Python rather
+    than a per-album correlated query."""
     owned = {
         r["album_id"]: r["n"]
         for r in conn.execute(
@@ -72,13 +76,12 @@ def _settled_map(conn):
             "GROUP BY w.album_id"
         )
     }
-    settled = {}
+    missing_map = {}
     for row in conn.execute("SELECT album_id, total_tracks FROM album"):
-        missing = (row["total_tracks"] or 0) - owned.get(row["album_id"], 0) - queued.get(
+        missing_map[row["album_id"]] = (row["total_tracks"] or 0) - owned.get(
             row["album_id"], 0
-        )
-        settled[row["album_id"]] = missing <= 0
-    return settled
+        ) - queued.get(row["album_id"], 0)
+    return missing_map
 
 
 def _unhandled_ordinals_desc(conn, settled):
@@ -97,7 +100,9 @@ def _unhandled_ordinals_desc(conn, settled):
         for row in conn.execute("SELECT ordinal FROM generation ORDER BY ordinal DESC")
     ]
     return [
-        o for o in all_ordinals if not all(settled.get(aid, False) for aid in by_ordinal.get(o, ()))
+        o
+        for o in all_ordinals
+        if not all(settled.get(aid, 1) <= 0 for aid in by_ordinal.get(o, ()))
     ]
 
 
@@ -147,12 +152,16 @@ def _derive(conn, n_generations, settled, unhandled):
     ordinals they take."""
     chosen = unhandled[:n_generations]
     album_ids = _albums_for_ordinals(conn, chosen)
-    unsettled = sorted(a for a in album_ids if not settled.get(a, False))
+    unsettled = sorted(a for a in album_ids if settled.get(a, 1) > 0)
+    # T2 (docs/specs/small-fixes-T.md §2.2): exactly how many URIs an Add
+    # would queue, free arithmetic off the missing map above.
+    queued_uris = sum(max(0, settled.get(a, 1)) for a in unsettled)
 
     return {
         "ordinals": sorted(chosen),
         "albums": unsettled,
         "requests_estimate": _requests_estimate(conn, unsettled),
+        "queued_uris": queued_uris,
     }
 
 
@@ -175,13 +184,19 @@ def work_list(conn, n_generations):
     return _derive(conn, n_generations, settled, _unhandled_ordinals_desc(conn, settled))
 
 
-def previews(conn, counts=(7, 2)):
+def previews(conn, remaining_uris, counts=(7, 2)):
     """Display shape of work_list() for the Add buttons, one row per button,
     computed fresh on every /dev/roundtrip page load (spec M §4.6). Both
     buttons share a single _refresh() / _settled_map() /
     _unhandled_ordinals_desc() pass: they are identical for every button, so
     doing them per button was a second track-group check and a second commit
-    on a plain page load."""
+    on a plain page load.
+
+    `remaining_uris` is the round-trip's own queue size (roundtrip.counts()'s
+    `remaining_uris`) -- T2 (docs/specs/small-fixes-T.md §2.3) combines it
+    with this button's own `queued_uris` through roundtrip.requests_estimate,
+    the single formula the Status panel also uses, so the two figures can't
+    drift apart."""
     _refresh(conn)
     settled = _settled_map(conn)
     unhandled = _unhandled_ordinals_desc(conn, settled)
@@ -194,6 +209,10 @@ def previews(conn, counts=(7, 2)):
                 "album_count": len(wl["albums"]),
                 "requests_estimate": wl["requests_estimate"],
                 "range_label": _format_ordinal_range(wl["ordinals"]),
+                "queued_uris": wl["queued_uris"],
+                "roundtrip_estimate": roundtrip.requests_estimate(
+                    remaining_uris + wl["queued_uris"]
+                ),
             }
         )
     return rows

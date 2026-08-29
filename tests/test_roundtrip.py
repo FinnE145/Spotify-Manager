@@ -483,6 +483,12 @@ def test_the_request_estimate_is_two_per_batch_plus_three(conn):
     assert counts["remaining_uris"] == roundtrip.BATCH_SIZE + 1
     assert counts["batches"] == 2
     assert counts["requests_estimate"] == 2 * 2 + 3
+    # T2 (small-fixes-T.md §2.3/§5.2): counts() must source this from the
+    # module-level requests_estimate(), the same one backfill.previews()
+    # calls, so the two pages' figures can't drift apart.
+    assert counts["requests_estimate"] == roundtrip.requests_estimate(
+        counts["remaining_uris"]
+    )
 
 
 # -- Reconciliation's matching rule (§4.5) ----------------------------------
