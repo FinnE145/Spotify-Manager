@@ -10,7 +10,31 @@
 
   const TIERS = ["song", "version", "recording", "release"]; // coarsest -> finest
   const TIER_ABBR = { song: "S", version: "V", recording: "R", release: "L" };
-  const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777"];
+  // [background, text] pairs, every one passing 4.5:1 against its own text
+  // colour (T3, docs/specs/small-fixes-T.md §3.1/§3.2) -- white text alone
+  // caps a safe background's lightness at ~18%, which is why lightness
+  // varies here and the text colour goes per-chip instead. Cycle order is
+  // chosen so the first few slots, which co-occur on nearly every item, are
+  // maximally separated on the lightness ladder.
+  const COLORS = [
+    ["#2563eb", "#fff"], // Blue
+    ["#dc2626", "#fff"], // Red
+    ["#047857", "#fff"], // Green
+    ["#facc15", "#000"], // Gold
+    ["#ec4899", "#000"], // Pink
+    ["#1e3a8a", "#fff"], // Navy
+    ["#ddd6fe", "#000"], // Lavender
+    ["#fb923c", "#000"], // Orange
+    ["#14b8a6", "#000"], // Teal
+    ["#78350f", "#fff"], // Brown
+    ["#7dd3fc", "#000"], // Sky
+    ["#84cc16", "#000"], // Lime
+  ];
+  // The ISRC stripe (§3.3) is a 4px left border, not a filled chip -- a
+  // lightness that reads well filled disappears as a hairline, so this is
+  // its own smaller palette of saturated mid-tones, bare hex with no text
+  // colour to pair.
+  const ISRC_COLORS = ["#2563eb", "#dc2626", "#047857", "#ec4899", "#14b8a6", "#fb923c"];
 
   const headerProgress = document.getElementById("progress-label");
   const progressFill = document.getElementById("progress-fill");
@@ -25,11 +49,38 @@
   const errorEl = document.getElementById("review-error");
   const helpToggle = document.getElementById("help-toggle");
   const helpPopover = document.getElementById("help-popover");
+  const saveBtn = document.getElementById("save-btn");
+  const clearBtn = document.getElementById("clear-btn");
+  const backBtn = document.getElementById("back-btn");
 
   let items = [];
   let index = 0;
   let committedCount = 0;
   const committedKeys = new Set();
+
+  // T4 (docs/specs/small-fixes-T.md §4): the done/empty screens' way out.
+  // exitState is one-way -- once the queue is finished or was empty on
+  // arrival, the only path forward is navigating off this page. enterArmed
+  // guards Enter specifically: it auto-repeats, so a key still held down
+  // from the final commit would otherwise navigate away before the "Got
+  // through N items" screen was ever seen (§4.3). No timeout -- a keyup is
+  // the actual event being waited for.
+  let exitState = false;
+  let enterArmed = true;
+
+  function enterExitState() {
+    exitState = true;
+    enterArmed = false;
+    saveBtn.textContent = "Done";
+    clearBtn.disabled = true;
+    backBtn.disabled = true;
+  }
+
+  function exitHref() {
+    const screen = doneEl.hidden ? emptyEl : doneEl;
+    const link = screen.querySelector("a");
+    return link ? link.getAttribute("href") : null;
+  }
 
   let selection = new Set();
   let focus = null;
@@ -81,6 +132,7 @@
             : "Main queue";
       if (!items.length) {
         emptyEl.hidden = false;
+        enterExitState();
         updateProgress();
         return;
       }
@@ -341,6 +393,7 @@
     itemSection.hidden = true;
     doneEl.hidden = false;
     doneCountEl.textContent = String(committedCount);
+    enterExitState();
     updateProgress(); // the last commit advanced the count but never redrew it
   }
 
@@ -412,7 +465,7 @@
     for (const tid of item.track_ids) {
       const isrc = item.tracks[tid].isrc;
       if (isrc && counts.get(isrc) >= 2 && !colorMap.has(isrc)) {
-        colorMap.set(isrc, COLORS[ci % COLORS.length]);
+        colorMap.set(isrc, ISRC_COLORS[ci % ISRC_COLORS.length]);
         ci += 1;
       }
     }
@@ -473,7 +526,9 @@
     const chip = document.createElement("span");
     chip.className = "tier-chip";
     chip.textContent = `${TIER_ABBR[tier]}${displayNums.get(label)}`;
-    chip.style.background = colorMap.get(label);
+    const [background, color] = colorMap.get(label);
+    chip.style.background = background;
+    chip.style.color = color;
 
     td.appendChild(chip);
     return td;
@@ -585,13 +640,17 @@
     });
   });
 
-  document.getElementById("clear-btn").addEventListener("click", () => {
+  clearBtn.addEventListener("click", () => {
     if (!itemSection.hidden) clearAll();
   });
-  document.getElementById("back-btn").addEventListener("click", () => {
+  backBtn.addEventListener("click", () => {
     if (!itemSection.hidden) goBack();
   });
-  document.getElementById("save-btn").addEventListener("click", () => {
+  saveBtn.addEventListener("click", () => {
+    if (exitState) {
+      window.location.href = exitHref();
+      return;
+    }
     if (!itemSection.hidden) commit();
   });
 
@@ -600,6 +659,12 @@
   const KEY_TO_LEVEL = { 0: 1, 1: 2, 2: 3, 3: 4, 4: 5 };
 
   document.addEventListener("keydown", (e) => {
+    if (exitState) {
+      if (e.key === "Enter" && enterArmed) {
+        window.location.href = exitHref();
+      }
+      return;
+    }
     if (itemSection.hidden) return;
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea") return;
@@ -643,6 +708,13 @@
       e.preventDefault();
       goBack();
     }
+  });
+
+  // Re-arms Enter (§4.3) once whatever key press carried the queue into the
+  // exit state is actually released -- the real event to wait for, not a
+  // guessed delay.
+  document.addEventListener("keyup", (e) => {
+    if (e.key === "Enter") enterArmed = true;
   });
 
   loadQueue();
