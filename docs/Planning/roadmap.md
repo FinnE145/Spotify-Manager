@@ -10,12 +10,16 @@
 
 ## Spec index
 
-What each of the 19 audited specs in `docs/specs/` actually covers, and the code it's
+What each of the 21 specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
 a lookup from now on rather than a re-derivation. `codebase-health-P.md` itself isn't in the
-18 — it's the standing approach doc for this step, not an audited spec (see its own §0).
+21 — it's the standing approach doc for this step, not an audited spec (see its own §0).
+
+**Every new spec gets a row here as it is written**, with `no` in the P1 column — that step
+postdates the audit. `mutation-sweep-S.md` was missed when it landed and is added back below;
+the two counts in this paragraph had also drifted apart (19 and 18) before T reconciled them.
 
 Four predate the lettered steps entirely (Symr's original build-out, before this roadmap
 existed); the rest map onto the lettered order above. **P1 audited** tracks
@@ -42,6 +46,8 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `async-recompute-N.md` | Moves `scoring.recompute()` off the request path for queue-driven writes | `scoring.py` (worker/backstop) | N | no |
 | `host-on-fe-pro-Q.md` | Symr on `fe-pro`: Docker + waitress behind `tailscale serve`, graceful shutdown, nightly backups, bootstrap/deploy | `serve.py`, `deploy/`, `config.py`, `jobs.drain()` | Q | no |
 | `scrobbling-R.md` | Polls recently-played into `play` as non-authoritative scrobbles, superseded by the export; ISRC upgrade path | `scrobble.py`, `roundtrip.py`, `history_import.py`, `serve.py` | R | no |
+| `mutation-sweep-S.md` | Whole-codebase mutation sweep: the operator sets, the five-way classification, the delegated-triage gate. **`docs/codebase-health/S_sweep.md` is what actually happened** | `scripts/mutation/` | S | no |
+| `small-fixes-T.md` | Four papercuts: the `localhost`/`127.0.0.1` OAuth state mismatch, combined request estimates on `/dev/roundtrip`, the review queue's chip palette, the done screen's exit | `app.py` (OAuth), `config.py`, `backfill.py`, `roundtrip.py`, `canonical_review.js` | T | no |
 
 ---
 
@@ -1016,10 +1022,11 @@ count and nothing left is as dense as `scoring.py`. Adding the SQL pass below br
 
 ## T — Small fixes: OAuth host mismatch, round-trip request clarity, queue colors, review-queue exit
 
-**Not specced.** Own `/symr-plan` session, though each item here is likely small enough that the
-whole step doesn't need much of one. Placed after **S** by decision — see the Order notes. A
-grab-bag on purpose: four unrelated papercuts, each cheap enough not to deserve its own step,
-found or raised in the days around R's implementation (2026-08-24).
+**Specced 2026-08-28 → `docs/specs/small-fixes-T.md`.** Read that spec, not this section:
+planning contradicted it in two places, both corrected inline below. Placed after **S** by
+decision — see the Order notes. A grab-bag on purpose: four unrelated papercuts, each cheap
+enough not to deserve its own step, found or raised in the days around R's implementation
+(2026-08-24).
 
 **T1 — the `localhost`/`127.0.0.1` OAuth state mismatch.** `/callback` has been failing with
 "Invalid OAuth state" on every re-auth for months, previously assumed each time to be a mistake
@@ -1048,8 +1055,12 @@ immediately on click, *before* any of those newly-queued uris show up in the rou
 number above. A user has no way to read "clicking Add for 7 generations, then running the
 round-trip, costs how many requests total" off the page as it stands — the two numbers are
 adjacent but uncombined, and it's not obvious the backfill's spend and the round-trip's spend
-happen at different times for different reasons. Worth solving alongside **O**, which is already
-about surfacing request cost — may turn out to be the same UI work.
+happen at different times for different reasons. ~~Worth solving alongside **O**~~ — **corrected
+in planning, 2026-08-28:** T2 needs nothing from O and does not wait for it. The combined figure
+is derivable at **zero** request cost, because `backfill._settled_map` already computes, per
+album, exactly the number of URIs an Add would queue (`total_tracks - owned - queued`) and
+discards it after reducing it to a boolean. O still owns the "remaining today" figure and the
+measured ceiling; T2 only combines two numbers the page already renders.
 
 **T3 — the canonical queue's group colors are too close together.** Raised by Finn 2026-08-24.
 `static/js/canonical_review.js`'s `COLORS` array (`["#2563eb", "#dc2626", "#059669", "#d97706",
@@ -1059,6 +1070,14 @@ degrades further once more than ~3-4 groups are visible together — six colors 
 enough headroom, but only a few of the six are reliably distinguishable before the cycle repeats
 or the eye starts confusing adjacent chips. Wants a larger, deliberately-chosen palette (varying
 lightness as well as hue, not just hue) rather than a bigger version of the same six.
+
+**Corrected in planning, 2026-08-28:** "varying lightness" and the existing white chip text are
+**mutually exclusive**, which this section assumed away. White text at 12px needs a 4.5:1
+contrast ratio, which caps a chip's relative luminance at about 18% — so every white-text-safe
+colour is dark, and a fourteen-colour white-text set built during planning put nine of the
+fourteen between 13% and 18%, i.e. the reported bug again with more hues on it. Two of today's
+six already fail that ratio outright (`#059669` at 3.77:1, `#d97706` at 3.19:1). The palette
+therefore carries **per-colour text**, black or white, which is what buys the lightness range.
 
 **T4 — the review queue's "done" screen has no keyboard/button way out.** Raised by Finn
 2026-08-24. `canonical_review.js`'s `#save-btn` (labelled "Save >", title `Enter`) and the
