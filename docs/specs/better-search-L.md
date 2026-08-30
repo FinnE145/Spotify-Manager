@@ -6,6 +6,15 @@ Planning contradicted the roadmap in one place, recorded in §11: L was taken **
 which the Order block had ahead of it. No technical dependency either way — F/G and O are not
 prerequisites for search, and search is not one for them.
 
+> **Partly superseded by `docs/specs/better-search-L2.md`.** L shipped as specced and this file
+> remains the record of what it built, but using it on the real library exposed three defects in
+> its *formula*. **§3's exact-match decision (one bullet only), §4.4, §4.5's constants list in
+> §4.6, and §10.1's worked numbers are replaced by L2 §3, §4 and §7** — read L2, not the sections
+> below, for how the matcher scores today. Everything else here is still authoritative: §4.1's
+> normalization, §4.2's index and cache, §4.3's trigram prefilter, §4.7's cost rules, §5's routes,
+> §6's page, §7's dropdown, §8's guard-order fix, §9's module placement and §10.2's costs. The
+> defects, and every figure L's Verify pass measured, are in `docs/better-search/L2_handoff.md`.
+
 ---
 
 ## 1. What this is
@@ -53,7 +62,8 @@ version group, and an empty query rendering the page with no results.
   separate section.
 - **Ranking is `all_time` only.** `recent` is not consulted. If quality turns out poor in use,
   switching horizons is a one-constant change — but it is not this step.
-- **An exact match does not automatically sort first.** Score still speaks.
+- **An exact match does not automatically sort first.** Score still speaks. *(Re-examined and
+  upheld in L2 §3 against the evidence L's Verify pass raised.)*
 - **Enter in the navbar box submits to `/search`.** The dropdown is a shortcut, not the main
   experience, so the full page is always one keystroke away.
 
@@ -132,6 +142,11 @@ the full scorer alone costs 270–840 ms over the whole universe, against 4–10
 
 ### 4.4 Stage 2 — `own`, `assoc`, and relevance
 
+**Superseded by `docs/specs/better-search-L2.md` §4.** `tsim`'s difflib branch and the
+whole-string reading are now gated at `FUZZY_FLOOR`; `own`, `assoc` and `BUMP` are replaced by a
+per-query-token coverage measure with `ASSOC_WEIGHT`; and the artist-only exclusion this section
+argues from arithmetic is now an explicit rule (L2 §4.3). Kept as written for the record.
+
 Only candidates are scored. For a candidate name, define the per-token similarity
 
 ```
@@ -180,6 +195,9 @@ An entity with `relevance < RELEVANCE_FLOOR` is dropped outright.
 
 ### 4.5 The rank key
 
+**`rank_key`'s shape, `ALPHA` and `SCORE_FLOOR` are unchanged by L2** — only the `relevance`
+fed into it changed (L2 §4.2).
+
 ```
 rank_key = max(score, SCORE_FLOOR) * relevance ** ALPHA
 ```
@@ -199,6 +217,10 @@ only for the newest rows. `SCORE_FLOOR` is the bottom of display space, so an un
 ranks as a poor one rather than as no entity at all.
 
 ### 4.6 Constants
+
+**Superseded by `docs/specs/better-search-L2.md` §4.4:** `BUMP` is deleted, `FUZZY_FLOOR` and
+`ASSOC_WEIGHT` are added, and every other value below is unchanged but re-measured against L2's
+formula.
 
 | Constant | Value | What it does |
 |---|---:|---|
@@ -345,6 +367,9 @@ these; don't trust a contradicting number without re-measuring. Note
 low, but a wildly different figure is more likely another chat than a finding.
 
 ### 10.1 The matcher's worked numbers
+
+**Superseded by `docs/specs/better-search-L2.md` §7.1.** The numbers below are L's and are no
+longer what the matcher produces; L2 §7.1 gives the current values beside these for comparison.
 
 Every illustrative figure in §4.4 is one of these, computed against the specced formula rather
 than estimated. They double as the expected values for §12's matcher tests.

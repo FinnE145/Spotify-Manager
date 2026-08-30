@@ -20,9 +20,10 @@ That block is written at session start, so it's a *fresh-session* check. If Finn
 Before reading any code, confirm where this work lives — a fresh session inherits whatever branch was last checked out, likely the wrong one.
 1. Check `git branch --show-current`.
 2. Propose a fresh `feat/<slug>` cut from up-to-date `main` (derive `<slug>` from the feature; confirm it), or a switch to the existing branch this belongs on. **When the work is a roadmap step, the slug ends with that step's letter** — `feat/entity-pages-K`, `feat/foreign-roundtrip-D`, `feat/grouping-catch-up-E`. Non-roadmap work carries no suffix.
+   - **One branch per letter, and a sub-letter stays on its letter's branch.** L2 is planned, built and verified on `feat/better-search-L`, not on a new `feat/…-L2`. A sub-letter is follow-up work on a step that already landed, so keeping it on the same branch keeps that step's whole history in one place. It still gets its own spec, its own three phases and its own commits.
 3. Wait for Finn's OK, then dive in.
 
-The spec is the **first commit on that feature branch**; implementation commits stack on top later.
+The spec is the **first commit of the step** (on a fresh branch, the branch's first commit); implementation commits stack on top later.
 
 ## How to ask
 - **Question-driven, no assumptions.** Never decide anything Finn hasn't stated — scope, UX, data model, scopes, naming, all of it. If something's undefined, ask.
@@ -38,4 +39,4 @@ The spec is the **first commit on that feature branch**; implementation commits 
 - Per-feature extra files (sub-specs, notes) go in `docs/<feature>/`, referenced from the spec.
 - Commit the spec (in Finn's name, when he asks) as the branch's **first** commit. Don't push.
 - **If this session started a dev server at any point (e.g. to check current behavior while shaping the spec), stop it once the commit lands.** Don't leave port 45660 occupied for whatever session comes next.
-- **Planning routinely produces edits outside the spec** — a new roadmap step, a correction to an existing doc, a skill or `CLAUDE.md` change. Those never join the spec commit: they land as a **second commit at the end of the plan phase**, so the first commit on a feature branch is always exactly the spec and nothing else.
+- **Planning routinely produces edits outside the spec** — a new roadmap step, a correction to an existing doc, a skill or `CLAUDE.md` change. Those never join the spec commit: they land as a **second commit at the end of the plan phase**, so a step's first commit is always exactly the spec and nothing else.

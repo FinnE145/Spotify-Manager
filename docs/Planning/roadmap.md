@@ -10,7 +10,7 @@
 
 ## Spec index
 
-What each of the 22 specs in `docs/specs/` actually covers, and the code it's
+What each of the 23 specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
@@ -49,6 +49,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `mutation-sweep-S.md` | Whole-codebase mutation sweep: the operator sets, the five-way classification, the delegated-triage gate. **`docs/codebase-health/S_sweep.md` is what actually happened** | `scripts/mutation/` | S | no |
 | `small-fixes-T.md` | Four papercuts: the `localhost`/`127.0.0.1` OAuth state mismatch, combined request estimates on `/dev/roundtrip`, the review queue's chip palette, the done screen's exit | `app.py` (OAuth), `config.py`, `backfill.py`, `roundtrip.py`, `canonical_review.js` | T | no |
 | `better-search-L.md` | Two-stage fuzzy matcher (trigram prefilter → token coverage), cross-type ranking, the navbar dropdown | `search.py`, `app.py` (`/search`, `/api/search*`), `templates/search.html`, `static/js/search.js` | L | no |
+| `better-search-L2.md` | The matcher's relevance formula: the `FUZZY_FLOOR` gate, per-query-token coverage, and album search-result dedupe. **Supersedes L §4.4/§4.6/§10.1** | `search.py` | L2 | no |
 
 ---
 
@@ -173,10 +174,8 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
                            DONE            DONE       DONE
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
       DONE                                           DONE               DONE                   DONE
-  ──► L (search) ──► F/G
-      DONE
-
-  ──► L2 (search ranking, round two — position undecided)
+  ──► L (search) ──► L2 (search ranking, round two) ──► F/G
+      DONE               SPECCED — next
 
   ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
 
@@ -1163,10 +1162,13 @@ Verify also corrected two spec claims the build disproved (§4.2's cache-invalid
 
 ## L2 — Better search, round two
 
-**Not specced. Position in the order undecided.** Own `/symr-plan` session, and its brain-dump is
-already written: **`docs/better-search/L2_handoff.md`**, produced by L's Verify pass on
-2026-08-29. Read that, not this — it carries every figure measured against the real `symr.db` and
-exists so none of them get re-derived.
+**Specced 2026-08-30 → `docs/specs/better-search-L2.md`. Next in the order.** Read that spec, not
+this summary. Its brain-dump was `docs/better-search/L2_handoff.md`, produced by L's Verify pass on
+2026-08-29; both carry figures measured against the real `symr.db` and exist so none get
+re-derived.
+
+**It stays on `feat/better-search-L`** — a sub-letter continues its letter's branch rather than
+opening a new one (Finn's call, 2026-08-30; the rule is now in the `symr-plan` skill).
 
 Three pieces of work, plus the tests: the **self-titled `assoc` double-count** (one line, measured,
 no regression in any spec-worked case, and it fixes the complaint that raised L2 — two entities
@@ -1175,9 +1177,23 @@ floor**, where the honest fix is entangled with `_name_score`'s mean over query 
 real design work; the **relevance-vs-score scale mismatch**, which lets an exact match lose to a
 partial one; and **eight tests** L's suite is missing, four of which must wait for the first three.
 
-The one measured constraint to carry into planning: **all observed noise scores ≤ 0.800 and all
-genuine typos ≥ 0.933**, an empty gap — but `ALPHA` reaches none of the three defects, and
-sharpening `tsim` naively breaks L §4.4's own worked example.
+**What planning decided, and the one measured claim it corrected.** The three defects turned out to
+be one: `SequenceMatcher.ratio()` has a high noise floor on short strings, and L's formula was
+tuned around that floor rather than against it. L2 gates the ratio at `FUZZY_FLOOR = 0.85` and
+replaces `own`/`assoc`/`BUMP` with a per-query-token coverage measure — which makes the self-titled
+double-count arithmetically impossible, so that "one-line fix" is not written at all. Measured:
+`q=test` goes from 97 rows (45 containing no "test") to 13, all of them containing it.
+
+The handoff's *"all noise ≤ 0.800, all genuine typos ≥ 0.933, the gap is empty"* is **corrected**:
+real typos land as low as 0.857 (`beyonse`→Beyoncé, `cardigen`→cardigan), so the gap is narrower
+than that sample suggested. 0.85 is the only defensible cut in it, and 0.90 was measured losing two
+typo cases. The gate's accepted cost is `creap`→*creep*: one substitution in a five-letter word
+scores 0.800, and so does `test`/`best` — no rule separates them, so short-word typo tolerance is
+given up rather than guessed at.
+
+Albums also gain a search-result dedupe (name + artists + overlapping release groups), after cover
+equality was measured collapsing **0 of 294** duplicate name+artist groups — Spotify issues every
+duplicate album id its own artwork URL.
 
 ## W — UI clean-up: adopt a CSS framework
 
