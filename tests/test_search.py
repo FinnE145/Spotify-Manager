@@ -1,10 +1,13 @@
-"""search.py's matcher, cache and ranking (docs/specs/better-search-L.md).
+"""search.py's matcher, cache and ranking (docs/specs/better-search-L.md,
+docs/specs/better-search-L2.md).
 
 Route-level rendering and the write-nothing guarantee live in test_routes.py
 alongside the rest of the permanent sweep; this file is the matcher itself,
 tested against `search.rank()`'s raw output rather than rendered HTML, so a
 fixture can name exactly the id it expects without parsing a page.
 """
+
+import pytest
 
 import builders
 import scoring
@@ -102,10 +105,11 @@ def test_accent_folding_finds_the_artist(conn):
 
 
 def test_the_assoc_bump_ranks_the_credited_track_higher(conn):
-    # source: better-search-L.md §4.4/§10.1 -- two tracks sharing the
+    # source: better-search-L2.md §4.2/§7.1 -- two tracks sharing the
     # **identical** title, one credited to the artist named in the query.
-    # Identical titles isolate `assoc`: with different titles, `own` alone
-    # could explain the ordering.
+    # Identical titles isolate the associated-name term: with different
+    # titles, `own` alone could explain the ordering. (L's `BUMP` is
+    # retired; this is the ASSOC_WEIGHT-weighted coverage term now.)
     radiohead = builders.make_artist(conn, name="Radiohead")
     other = builders.make_artist(conn, name="Someone Else")
     match_track = builders.make_track(conn, name="Creep", artists=[radiohead])
@@ -123,9 +127,15 @@ def test_the_assoc_bump_ranks_the_credited_track_higher(conn):
 
 
 def test_relevance_floor_drops_an_artist_only_match(conn):
-    # source: better-search-L.md §4.4/§10.1 -- "Wait a Minute!" by Willow
-    # scores own=0.400 on "willow", below RELEVANCE_FLOOR=0.5, and nothing
-    # about score or assoc rescues it.
+    # source: better-search-L2.md §4.3, the exact worked case named there --
+    # "Wait a Minute!" by Willow, on q=willow, is absent. Its own title
+    # contributes nothing to the query at all (own_scores all 0), so §4.3
+    # drops it *by rule* before relevance is computed -- not because a
+    # RELEVANCE_FLOOR comparison happens to come out below 0.5. At
+    # ASSOC_WEIGHT=0.5 the artist-only evidence alone would compute to
+    # exactly 0.500, which is RELEVANCE_FLOOR and would survive a plain
+    # floor check: this fixture is what distinguishes "dropped by the
+    # explicit rule" from "dropped by a threshold coincidence" (L2 §4.3).
     willow = builders.make_artist(conn, name="Willow")
     track = builders.make_track(conn, name="Wait a Minute!", artists=[willow])
     group = builders.make_group(conn, [track])
@@ -151,6 +161,201 @@ def test_score_floor_lets_an_unscored_entity_still_rank(conn):
     songs_by_id = {r["id"]: r for r in ranked["songs"]}
     assert group["version"] in songs_by_id
     assert songs_by_id[group["version"]]["rank_key"] > 0
+
+
+# -- L2: the fuzzy gate (§4.1, §8) --------------------------------------------
+
+
+def test_the_gate_zeroes_a_fallback_ratio_below_the_floor():
+    # source: better-search-L2.md §4.1/§8 -- "assert the values, not
+    # presence: a mutant that gates at 0.95 also returns 0.0 for the first
+    # two." "test"/"greatest" and "test"/"best" are noise (0.667, 0.750);
+    # "rapsody"/"rhapsody" is a real typo at 0.933 -- asserting its exact
+    # value is what catches a gate raised to e.g. 0.95, which would zero it
+    # too.
+    assert search._tsim("test", "greatest") == 0.0
+    assert search._tsim("test", "best") == 0.0
+    assert search._tsim("rapsody", "rhapsody") == pytest.approx(0.9333333333333333)
+
+
+def test_the_gate_does_not_touch_the_prefix_branch():
+    # source: better-search-L2.md §4.1/§8, handoff §5's 1c -- "the prefix
+    # branch is what makes an as-you-type query work ... it is not a fuzzy
+    # match", and coverage confirmed this line was never executed by L's
+    # suite at all.
+    assert search._tsim("boh", "bohemian") == pytest.approx(0.90625)
+
+
+def test_the_whole_string_reading_is_gated_too(conn):
+    # source: better-search-L2.md §4.1/§8 -- "beyonce against beyond scores
+    # 0.769 both per-token and whole-string, so a one-sided gate changes
+    # nothing for it." An implementation that gates `_tsim` but forgets to
+    # gate the whole-string reading inside `_name_token_scores` would still
+    # let "Beyond" through here, at relevance 0.769 (above RELEVANCE_FLOOR).
+    builders.make_artist(conn, name="Beyond")
+    conn.commit()
+
+    ranked = search.rank(conn, "beyonce")
+
+    assert ranked["artists"] == []
+
+
+def test_whole_still_carries_a_cross_boundary_match():
+    # source: better-search-L2.md §4.2/§8, subsumes handoff §5's 1e --
+    # "bohemianrhapsody" (no space) is one query token whose per-token
+    # reading against "bohemian rhapsody" is gated to 0 (0.667 raw, below
+    # FUZZY_FLOOR), while `whole` = 0.970 carries it across the token
+    # boundary the query doesn't share. Both readings clear RELEVANCE_FLOOR
+    # in L's version, so presence alone doesn't discriminate -- assert the
+    # value.
+    scores = search._name_token_scores(
+        "bohemianrhapsody", ["bohemianrhapsody"], "bohemian rhapsody"
+    )
+
+    assert scores == (pytest.approx(0.9696969696969697),)
+
+
+def test_a_single_token_typo_still_clears_stage_1(conn):
+    # source: better-search-L2.md §8, handoff §5's 1d -- the existing typo
+    # test above ("bohemian rapsody") is two-token, and "bohemian" alone
+    # already admits the candidate at stage 1 regardless of TRIGRAM_FLOOR,
+    # so the typo'd token itself never faces the trigram prefilter. A
+    # single-token typo query does: "rapsody" covers 5 of its own 8
+    # trigrams (0.625) against "bohemian rhapsody", which clears
+    # TRIGRAM_FLOOR=0.5 but would not clear a mutant raised to e.g. 0.95.
+    track = builders.make_track(conn, name="Bohemian Rhapsody")
+    group = builders.make_group(conn, [track])
+    conn.commit()
+
+    ranked = search.rank(conn, "rapsody")
+
+    assert group["version"] in _song_ids(ranked)
+
+
+def test_trigrams_pad_the_string_so_word_boundaries_participate():
+    # source: better-search-L.md §4.3/L2 §8, handoff §5's 1f -- "two leading
+    # spaces, one trailing, so word boundaries participate in the coverage
+    # test." Direct assertion on the literal output; brittle by the
+    # handoff's own admission, but there is no behavioural isolation for
+    # this specific padding choice.
+    assert search._trigrams("hi") == {"  h", " hi", "hi "}
+
+
+# -- L2: per-token coverage and the own-must-contribute rule (§4.2-4.3, §8) --
+
+
+def test_coverage_spreads_evidence_across_own_and_associated_names(conn):
+    # source: better-search-L2.md §4.2/§8 -- "taylor swift cardigan covers
+    # two tokens from the artist and one from the title, for
+    # (0.5 + 0.5 + 1.0) / 3 = 0.667." This is the test that fails against
+    # L's formula, where the mean-over-query-tokens `own` term is dragged
+    # under RELEVANCE_FLOOR by the two unmatched tokens and the track is
+    # dropped entirely (handoff §3) -- the discriminating case for the
+    # whole step.
+    artist = builders.make_artist(conn, name="Taylor Swift")
+    track = builders.make_track(conn, name="cardigan", artists=[artist])
+    group = builders.make_group(conn, [track])
+    conn.commit()
+
+    ranked = search.rank(conn, "taylor swift cardigan")
+
+    songs_by_id = {r["id"]: r for r in ranked["songs"]}
+    assert group["version"] in songs_by_id
+    assert songs_by_id[group["version"]]["relevance"] == pytest.approx(2 / 3)
+
+
+def test_a_self_titled_album_is_not_counted_twice(conn):
+    # source: better-search-L2.md §3/§8, handoff §5's 1g -- under per-token
+    # coverage, a name appearing as both `own` and an associated name
+    # contributes max(own_i, ASSOC_WEIGHT * own_i) = own_i: one string can
+    # no longer be read twice. L's old formula (own * (1 + BUMP * assoc))
+    # double-counted the one string and, at real-library scale, split two
+    # identically-named/identically-scored rows 22 rank-key points apart
+    # (L2 §1). The fixture must assert *equality of the two rank keys*, not
+    # merely that both appear.
+    artist = builders.make_artist(conn, name="Zzz Artist")
+    album = builders.make_album(conn, name="Zzzselftitled", artists=[artist])
+    track = builders.make_track(conn, name="Zzzselftitled", album_id=album, artists=[artist])
+    group = builders.make_group(conn, [track])
+    builders.make_score(conn, "version", group["version"], all_time=50.0)
+    conn.commit()
+
+    ranked = search.rank(conn, "zzzselftitled")
+
+    songs_by_id = {r["id"]: r for r in ranked["songs"]}
+    albums_by_id = {r["id"]: r for r in ranked["albums"]}
+    assert group["version"] in songs_by_id
+    assert album in albums_by_id
+    assert songs_by_id[group["version"]]["relevance"] == pytest.approx(1.0)
+    assert albums_by_id[album]["relevance"] == pytest.approx(1.0)
+    assert songs_by_id[group["version"]]["rank_key"] == pytest.approx(
+        albums_by_id[album]["rank_key"]
+    )
+
+
+def test_combined_cross_type_ranking_by_rank_key_not_type_or_insertion_order(conn, monkeypatch):
+    # source: better-search-L2.md §8, handoff §5's 1a -- "combined left
+    # unsorted; sorted worst-first; ALPHA = 0.0" all survived L's suite
+    # ("the most valuable gap. Cross-type ranking is L's headline and
+    # nothing asserts it").
+    #
+    # `TYPES` (and so `by_type`'s own iteration order) is
+    # songs/albums/artists/playlists, so a song and an artist naturally
+    # land song-first if `combined` is merely concatenated by type,
+    # unsorted -- that would accidentally look "correct" here whichever
+    # type the fixture used unless the *lower*-TYPES-order entity is
+    # deliberately given the higher rank_key. The artist below has
+    # relevance 0.5/score 1000 (rank_key 125.0); the song has relevance
+    # 1.0/score 15 (rank_key 15.0) -- so a correct sort must move the
+    # artist ahead of the song, which an unsorted or ascending ("worst-
+    # first") `combined` cannot do. The exact rank_key values separately
+    # catch ALPHA=0.0 (artist_row would read 1000.0, not 125.0).
+    song_artist = builders.make_artist(conn, name="Someone")
+    song_track = builders.make_track(conn, name="Zzzalpha Zzzbeta", artists=[song_artist])
+    song_group = builders.make_group(conn, [song_track])
+    builders.make_score(conn, "version", song_group["version"], all_time=15.0)
+
+    scored_artist = builders.make_artist(conn, name="Zzzalpha")
+    carrier_track = builders.make_track(conn, artists=[scored_artist])
+    carrier_group = builders.make_group(conn, [carrier_track])
+    builders.make_score(conn, "version", carrier_group["version"], all_time=1000.0)
+    conn.commit()
+
+    ranked = search.rank(conn, "zzzalpha zzzbeta")
+
+    combined_by_key = {(r["type"], r["id"]): r for r in ranked["combined"]}
+    song_row = combined_by_key[("songs", song_group["version"])]
+    artist_row = combined_by_key[("artists", scored_artist)]
+    assert song_row["relevance"] == pytest.approx(1.0)
+    assert artist_row["relevance"] == pytest.approx(0.5)
+    assert song_row["rank_key"] == pytest.approx(15.0)
+    assert artist_row["rank_key"] == pytest.approx(125.0)
+    assert ranked["combined"].index(artist_row) < ranked["combined"].index(song_row)
+
+    monkeypatch.setattr(search, "COMBINED_LIMIT", 1)
+    page_kwargs = search.search_page(conn, "zzzalpha zzzbeta")
+    assert [r["id"] for r in page_kwargs["most_relevant"]] == [scored_artist]
+
+
+def test_combined_rows_carry_their_own_type_label_and_image(conn):
+    # source: better-search-L2.md §8, handoff §5's 1h -- Most Relevant and
+    # the dropdown render both `type_label` and `image_url`, and nothing in
+    # search.py itself reads either back, so a hardcoded `"Song"` / `None`
+    # survived L's suite untested. An album and a playlist, both matching,
+    # isolate the two fields from each other and from the "songs" default.
+    builders.make_album(conn, name="Zzzcombinedlabel Album", image_url="https://img/album")
+    builders.make_playlist(
+        conn, name="Zzzcombinedlabel Playlist", image_url="https://img/playlist"
+    )
+    conn.commit()
+
+    rows = search.search_dropdown(conn, "zzzcombinedlabel")
+
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["albums"]["type_label"] == "Album"
+    assert by_type["albums"]["image_url"] == "https://img/album"
+    assert by_type["playlists"]["type_label"] == "Playlist"
+    assert by_type["playlists"]["image_url"] == "https://img/playlist"
 
 
 # -- Caching (§4.2, §12) ------------------------------------------------------
@@ -303,6 +508,120 @@ def test_an_album_ranks_before_its_slice_is_cut_not_after(conn, monkeypatch):
 
     assert kwargs["albums_total"] == 20
     assert kwargs["albums"][0]["name"] == "Zzzcap Record 20"
+
+
+def test_an_artist_ranks_before_its_slice_is_cut_not_after(conn, monkeypatch):
+    # source: better-search-L2.md §8, handoff §5's 1b -- the artist twin of
+    # the album test above; L's suite only ever asserted "rank before cut"
+    # for songs and albums, so a dropped `.sort()` in `_rank_artists`
+    # survived.
+    #
+    # Named "Person", not "Artist": make_group()'s own internal
+    # make_track() call also mints a fresh, unrequested artist for its
+    # phantom album (builders.py's own default "Artist {id}") -- same trap
+    # as "Album" above, just one entity type over.
+    monkeypatch.setattr(search, "SECTION_LIMIT", 1)
+    for i in range(1, 21):
+        artist = builders.make_artist(conn, name=f"Zzzcap Person {i:02d}")
+        if i == 20:
+            track = builders.make_track(conn, artists=[artist])
+            groups = builders.make_group(conn, [track])
+            builders.make_score(conn, "version", groups["version"], all_time=95.0)
+    conn.commit()
+
+    kwargs = search.search_page(conn, "zzzcap person")
+
+    assert kwargs["artists_total"] == 20
+    assert kwargs["artists"][0]["name"] == "Zzzcap Person 20"
+
+
+def test_a_playlist_ranks_before_its_slice_is_cut_not_after(conn, monkeypatch):
+    # source: better-search-L2.md §8, handoff §5's 1b -- the playlist twin;
+    # a dropped `.sort()` in `_rank_playlists` also survived L's suite.
+    monkeypatch.setattr(search, "SECTION_LIMIT", 1)
+    for i in range(1, 21):
+        playlist = builders.make_playlist(conn, name=f"Zzzcap Playlist {i:02d}")
+        if i == 20:
+            track = builders.make_track(conn)
+            builders.make_membership(conn, playlist_id=playlist, track_id=track)
+            groups = builders.make_group(conn, [track])
+            builders.make_score(conn, "version", groups["version"], all_time=95.0)
+    conn.commit()
+
+    kwargs = search.search_page(conn, "zzzcap playlist")
+
+    assert kwargs["playlists_total"] == 20
+    assert kwargs["playlists"][0]["name"] == "Zzzcap Playlist 20"
+
+
+# -- L2: album dedupe (§5, §8) -------------------------------------------------
+
+
+def test_album_dedupe_keeps_the_highest_ranked_of_a_colliding_pair(conn):
+    # source: better-search-L2.md §5/§8 -- all three conditions hold (equal
+    # normalized name, equal normalized artist list, overlapping release
+    # groups), so the pair collapses to one row, "always ... the
+    # highest-ranked of its group": deliberately different scores, and the
+    # lower-scored id must not survive.
+    #
+    # Named "Record", not "Album", for the same reason as the rank-before-
+    # cut test above: make_group()'s internal make_track() call mints a
+    # fresh phantom album named "Album {id}", which would fuzzy-match a
+    # query containing the literal word "album".
+    artist = builders.make_artist(conn, name="Zzzdupe Artist")
+    album_hi = builders.make_album(conn, name="Zzzdupe Record", artists=[artist])
+    album_lo = builders.make_album(conn, name="Zzzdupe Record", artists=[artist])
+    track_hi = builders.make_track(conn, album_id=album_hi, artists=[artist])
+    track_lo = builders.make_track(conn, album_id=album_lo, artists=[artist])
+    group_hi = builders.make_group(conn, [track_hi])
+    group_lo = builders.make_group(conn, [track_lo], release=group_hi["release"])
+    builders.make_score(conn, "version", group_hi["version"], all_time=80.0)
+    builders.make_score(conn, "version", group_lo["version"], all_time=20.0)
+    conn.commit()
+
+    ranked = search.rank(conn, "zzzdupe record")
+
+    assert {r["id"] for r in ranked["albums"]} == {album_hi}
+
+
+def test_album_dedupe_does_not_collapse_disjoint_release_groups(conn):
+    # source: better-search-L2.md §5/§8 -- name+artist equality alone is not
+    # enough: "294 name+artist groups cover 624 album rows, and 75 of those
+    # groups are genuinely different releases" (a deluxe edition against
+    # the album it reissued). Same name, same artist, no shared release
+    # group -- both ids must survive.
+    artist = builders.make_artist(conn, name="Zzzdisjoint Artist")
+    album_a = builders.make_album(conn, name="Zzzdisjoint Record", artists=[artist])
+    album_b = builders.make_album(conn, name="Zzzdisjoint Record", artists=[artist])
+    track_a = builders.make_track(conn, album_id=album_a, artists=[artist])
+    track_b = builders.make_track(conn, album_id=album_b, artists=[artist])
+    builders.make_group(conn, [track_a])
+    builders.make_group(conn, [track_b])  # its own, disjoint release group
+    conn.commit()
+
+    ranked = search.rank(conn, "zzzdisjoint record")
+
+    assert {r["id"] for r in ranked["albums"]} == {album_a, album_b}
+
+
+def test_album_dedupe_does_not_collapse_different_artists(conn):
+    # source: better-search-L2.md §5/§8 -- condition 2: name equality and an
+    # overlapping release group are not enough either without matching
+    # credited artists. Same name, same (shared) release group, different
+    # artists -- both ids must survive.
+    artist_a = builders.make_artist(conn, name="Zzzartistone")
+    artist_b = builders.make_artist(conn, name="Zzzartisttwo")
+    album_a = builders.make_album(conn, name="Zzzsamename Record", artists=[artist_a])
+    album_b = builders.make_album(conn, name="Zzzsamename Record", artists=[artist_b])
+    track_a = builders.make_track(conn, album_id=album_a, artists=[artist_a])
+    track_b = builders.make_track(conn, album_id=album_b, artists=[artist_b])
+    group_a = builders.make_group(conn, [track_a])
+    builders.make_group(conn, [track_b], release=group_a["release"])
+    conn.commit()
+
+    ranked = search.rank(conn, "zzzsamename record")
+
+    assert {r["id"] for r in ranked["albums"]} == {album_a, album_b}
 
 
 # -- Ported from the old entities.search suite (still valid under L: §2's

@@ -1,21 +1,25 @@
-"""Search (docs/specs/better-search-L.md): one matcher, used by three
-surfaces -- the /search page, the navbar dropdown (/api/search) and each
-type section's See more (/api/search/more). There is no separate "dropdown
-ranking" and "page ranking"; every surface slices the same ranked lists
-`rank()` builds.
+"""Search (docs/specs/better-search-L.md, docs/specs/better-search-L2.md):
+one matcher, used by three surfaces -- the /search page, the navbar dropdown
+(/api/search) and each type section's See more (/api/search/more). There is
+no separate "dropdown ranking" and "page ranking"; every surface slices the
+same ranked lists `rank()` builds.
 
-Two-stage fuzzy matcher (§4): a trigram prefilter narrows ~18,461 distinct
-normalized names down to a handful of candidates, then only those are scored
-with a token-aware SequenceMatcher blend. Ranking multiplies each entity's
-materialized `all_time` score by its match relevance -- an artist-only match
-on a song title is worth less than the artist itself, however high the
-song's own score, because relevance is raised to `ALPHA` and an unrelated
-title's `own` score is below `RELEVANCE_FLOOR` to begin with.
+Two-stage fuzzy matcher: a trigram prefilter (L §4.3) narrows ~18,461
+distinct normalized names down to a handful of candidates, then only those
+are scored with a token-aware SequenceMatcher blend, gated at FUZZY_FLOOR
+(L2 §4.1) -- a raw SequenceMatcher ratio has a high noise floor on short
+strings ("test" vs "best" scores 0.750), so below the gate it counts as no
+match at all. A name yields one relevance value per query token (L2 §4.2),
+and an entity whose own name contributes nothing to any query token is
+dropped outright regardless of what its associated names score (L2 §4.3) --
+what makes an artist-only match on an unrelated song title not a result,
+however high the artist's own score. Albums additionally dedupe on name +
+artists + overlapping release groups after ranking (L2 §5).
 
 Read-only w.r.t. Spotify and w.r.t. the database -- nothing here writes
 anything, unlike `/search`'s own route, which still owns the
-`ensure_track_groups()` + commit pairing (§5: "a GET returning a listing has
-no business taking a write lock")."""
+`ensure_track_groups()` + commit pairing (L §5: "a GET returning a listing
+has no business taking a write lock")."""
 
 import sqlite3
 import threading
@@ -28,18 +32,20 @@ import scoring
 from config import DB_PATH
 
 # ============================================================================
-# PARAMETERS -- docs/specs/better-search-L.md §4.6. Tuned in planning against
-# the real DB (§10's measured figures); THESE ARE NOT LIVE DIALS. Not in
-# config.py and not environment-tunable, for scoring.py's reason (H §10):
-# two environments ranking under two different algorithms is worse than one
-# algorithm everywhere.
+# PARAMETERS -- docs/specs/better-search-L.md §4.6, docs/specs/
+# better-search-L2.md §4.4. Tuned in planning against the real DB (both
+# specs' measured figures); THESE ARE NOT LIVE DIALS. Not in config.py and
+# not environment-tunable, for scoring.py's reason (H §10): two environments
+# ranking under two different algorithms is worse than one algorithm
+# everywhere.
 # ============================================================================
 
 MIN_QUERY_LEN = 2      # shorter (after normalizing) yields no results at all
-TRIGRAM_FLOOR = 0.5    # stage-1 candidate admission, §4.3
-RELEVANCE_FLOOR = 0.5  # below this an entity is dropped outright, §4.4
-BUMP = 0.5             # how much `assoc` lifts `own`, §4.4
-ALPHA = 3.0            # match quality vs score, §4.5
+TRIGRAM_FLOOR = 0.5    # stage-1 candidate admission, L §4.3
+FUZZY_FLOOR = 0.85     # below this a SequenceMatcher ratio is 0.0, L2 §4.1
+RELEVANCE_FLOOR = 0.5  # below this an entity is dropped outright, L2 §4.2 (re-measured)
+ASSOC_WEIGHT = 0.5     # what an associated name's evidence is worth against `own`, L2 §4.2 -- replaces L's BUMP
+ALPHA = 3.0            # match quality vs score, L §4.5 (re-measured against L2's formula)
 SCORE_FLOOR = 10.0     # bottom of display space, for unscored entities, §4.5
 COMBINED_LIMIT = 20    # rows in Most Relevant / the dropdown's own cap, §4.6
 SECTION_LIMIT = 10     # rows rendered per type on page load
@@ -176,44 +182,89 @@ def _stage1_candidates(query_tokens, names_index):
 
 
 def _tsim(qt, nt):
-    """Per-token similarity (§4.4): exact and prefix fast paths keep most
-    pairs away from difflib, and the prefix branch is what makes an
-    as-you-type query behave sensibly."""
+    """Per-token similarity (L2 §4.1): exact and prefix fast paths keep most
+    pairs away from difflib and are not gated -- the prefix branch is what
+    makes an as-you-type query behave sensibly and it is not a fuzzy match.
+    The fallback is difflib's ratio, gated: below FUZZY_FLOOR it is 0.0.
+    A flat threshold, not a curve -- measured, one character substituted in
+    a 5-letter word scores 0.800 regardless of which word, so no
+    length-aware rule separates a short-word typo from a different short
+    word (L2 §3)."""
     if qt == nt:
         return 1.0
     if nt.startswith(qt):
         return 0.85 + 0.15 * len(qt) / len(nt)
-    return SequenceMatcher(None, qt, nt).ratio()
+    r = SequenceMatcher(None, qt, nt).ratio()
+    return r if r >= FUZZY_FLOOR else 0.0
 
 
-def _name_score(query_norm, query_tokens, name):
-    """The better of a whole-string reading and an order-free, token-coverage
-    one (§4.4) -- the second is what makes word order irrelevant, the first
-    is what stops a long name being matched by one of its many tokens."""
+def _whole_string(query_norm, name):
+    """The whole-string reading, gated by the same FUZZY_FLOOR as `_tsim`'s
+    fallback (L2 §4.1) -- gating only `_tsim` leaves the same noise in a
+    second way: "beyonce" against "beyond" scores 0.769 both per-token and
+    whole-string."""
+    r = SequenceMatcher(None, query_norm, name).ratio()
+    return r if r >= FUZZY_FLOOR else 0.0
+
+
+def _name_token_scores(query_norm, query_tokens, name):
+    """One similarity value per query token, not one score for the whole
+    name (L2 §4.2): the better of the best per-word `_tsim` against `name`
+    and the whole-string reading. Folding `whole` into every token is what
+    carries a match across a token boundary the query doesn't share --
+    "bohemianrhapsody" (no space) is one query token whose per-token reading
+    against "bohemian rhapsody" is gated to 0, while `whole` = 0.970 carries
+    it."""
     name_tokens = name.split()
-    whole = SequenceMatcher(None, query_norm, name).ratio()
+    whole = _whole_string(query_norm, name)
     if not name_tokens:
-        return whole
-    token_term = sum(max(_tsim(qt, nt) for nt in name_tokens) for qt in query_tokens) / len(
-        query_tokens
-    )
-    return max(whole, token_term)
+        return tuple(whole for _ in query_tokens)
+    return tuple(max(max(_tsim(qt, nt) for nt in name_tokens), whole) for qt in query_tokens)
 
 
 def _score_names(query_norm, query_tokens, names_index):
-    """{normalized_name: name_score} for every stage-1 candidate only --
-    scored once and shared by every entity bearing that name (§4.2)."""
+    """{normalized_name: tuple_of_per_query_token_scores} for every stage-1
+    candidate only -- scored once and shared by every entity bearing that
+    name (§4.2)."""
     candidates = _stage1_candidates(query_tokens, names_index)
-    return {name: _name_score(query_norm, query_tokens, name) for name in candidates}
+    return {name: _name_token_scores(query_norm, query_tokens, name) for name in candidates}
 
 
-def _relevance(name_scores, own, assoc):
-    """own * (1 + BUMP * assoc), capped at 1.0 (§4.4). `own` multiplies --
-    an artist-only match on an unrelated title is below RELEVANCE_FLOOR on
-    `own` alone, and no `assoc` bump rescues it."""
-    own_score = name_scores.get(own, 0.0)
-    assoc_score = max((name_scores.get(a, 0.0) for a in assoc), default=0.0)
-    return min(1.0, own_score * (1 + BUMP * assoc_score))
+def _relevance(name_scores, query_tokens, own, assoc):
+    """Mean over query tokens of max(own_i, ASSOC_WEIGHT * assoc_i) (L2
+    §4.2) -- a coverage measure: an unmatched query token scores 0 rather
+    than a difflib coincidence, so a query can no longer be dragged down by
+    a token that matches nothing, and it can no longer be rescued by one
+    either.
+
+    L2 §4.3: an entity whose own name contributes nothing to *any* query
+    token is dropped -- returns None -- before relevance is computed and
+    regardless of what its associated names score. Stated as a rule rather
+    than left to a threshold coincidence (own=0 forcing relevance below
+    RELEVANCE_FLOOR only by chance), so ASSOC_WEIGHT stays free to be tuned
+    without silently breaking the guarantee."""
+    own_scores = name_scores.get(own)
+    if own_scores is None or not any(own_scores):
+        return None
+    assoc_scores = [name_scores[a] for a in assoc if a in name_scores]
+    total = sum(
+        max(own_scores[i], ASSOC_WEIGHT * max((s[i] for s in assoc_scores), default=0.0))
+        for i in range(len(query_tokens))
+    )
+    return total / len(query_tokens)
+
+
+def _candidates(name_scores, query_tokens, items):
+    """`items` is (id, own, assoc) triples from the index. Returns
+    (id, relevance, own, assoc) for every entity clearing L2 §4.3's
+    own-must-contribute rule and RELEVANCE_FLOOR -- the filter every
+    `_rank_*` function applies before its own type-specific work."""
+    out = []
+    for id_, own, assoc in items:
+        rel = _relevance(name_scores, query_tokens, own, assoc)
+        if rel is not None and rel >= RELEVANCE_FLOOR:
+            out.append((id_, rel, own, assoc))
+    return out
 
 
 # ---------------------------------------------------------------- ranking, per type (§4.5, §4.7)
@@ -223,17 +274,16 @@ def _rank_key(score, relevance):
     return max(score or 0.0, SCORE_FLOOR) * (relevance**ALPHA)
 
 
-def _rank_songs(conn, name_scores, index):
+def _rank_songs(conn, name_scores, index, query_tokens):
     """Candidates are individual tracks (own = the track's own title, per
-    §2's replaced rule), but the ranked entity is the **version group**
+    L §2's replaced rule), but the ranked entity is the **version group**
     (§4.7): the version-group lookup is one batched query over the
     candidate track ids, and songs dedupe to one row per version group,
     keeping the highest-relevance member (ties broken by its own track-tier
     score)."""
     candidates = [
-        (track_id, _relevance(name_scores, own, assoc)) for track_id, own, assoc in index["songs"]
+        (tid, rel) for tid, rel, _, _ in _candidates(name_scores, query_tokens, index["songs"])
     ]
-    candidates = [(tid, rel) for tid, rel in candidates if rel >= RELEVANCE_FLOOR]
     if not candidates:
         return []
 
@@ -278,37 +328,79 @@ def _rank_songs(conn, name_scores, index):
     return ranked
 
 
-def _rank_albums(conn, name_scores, index):
-    candidates = [
-        (album_id, _relevance(name_scores, own, assoc)) for album_id, own, assoc in index["albums"]
-    ]
-    candidates = [(aid, rel) for aid, rel in candidates if rel >= RELEVANCE_FLOOR]
-    if not candidates:
+def _rank_albums(conn, name_scores, index, query_tokens):
+    """Candidates score exactly like every other type; after ranking, §5's
+    dedupe collapses rows that are almost certainly the same release under
+    two different Spotify album ids."""
+    items = _candidates(name_scores, query_tokens, index["albums"])
+    if not items:
         return []
-    score_map = scoring.album_scores(conn, [aid for aid, _ in candidates])
-    ranked = [
-        {
-            "type": "albums",
-            "id": aid,
-            "relevance": rel,
-            "score": (score := score_map.get(aid, {}).get("all_time", 0.0)),
-            "rank_key": _rank_key(score, rel),
-        }
-        for aid, rel in candidates
-    ]
-    ranked.sort(key=lambda r: -r["rank_key"])
-    return ranked
+    score_map = scoring.album_scores(conn, [aid for aid, *_ in items])
+    ranked = sorted(
+        (
+            (
+                {
+                    "type": "albums",
+                    "id": aid,
+                    "relevance": rel,
+                    "score": (score := score_map.get(aid, {}).get("all_time", 0.0)),
+                    "rank_key": _rank_key(score, rel),
+                },
+                own,
+                tuple(assoc),
+            )
+            for aid, rel, own, assoc in items
+        ),
+        key=lambda t: -t[0]["rank_key"],
+    )
+    return _dedupe_albums(conn, ranked)
 
 
-def _rank_artists(conn, name_scores, index):
+def _dedupe_albums(conn, ranked):
+    """§5: two album rows collapse into one when their normalized names and
+    normalized credited-artist lists are equal *and* their owned tracks'
+    release-group ids intersect -- display-only, `canonical_group` /
+    `track_group` are only ever read. `ranked` is (row, own, assoc) triples
+    already sorted by `rank_key` descending, so a collision always attaches
+    to the first (highest-ranked) already-kept row it matches, and the kept
+    row is therefore always the best-ranked of its group.
+
+    The release-id lookup is one query over the *candidate* album ids
+    (L §4.7: work proportional to what is ranked, not to the library)."""
+    ids = [row["id"] for row, _, _ in ranked]
+    placeholders = ",".join("?" for _ in ids)
+    release_sets = defaultdict(set)
+    for r in conn.execute(
+        f"""SELECT t.album_id AS album_id, tg.release_id AS release_id
+            FROM track t
+            JOIN track_group tg ON tg.track_id = t.track_id
+            WHERE t.album_id IN ({placeholders})""",
+        ids,
+    ):
+        release_sets[r["album_id"]].add(r["release_id"])
+
+    kept = []  # (own, assoc, releases) for each row already in `result`
+    result = []
+    for row, own, assoc in ranked:
+        releases = release_sets.get(row["id"], set())
+        if any(
+            k_own == own and k_assoc == assoc and k_releases & releases
+            for k_own, k_assoc, k_releases in kept
+        ):
+            continue
+        kept.append((own, assoc, releases))
+        result.append(row)
+    return result
+
+
+def _rank_artists(conn, name_scores, index, query_tokens):
     """Every raw artist row is its own candidate (a duplicate Spotify id can
     carry its own spelling), then deduped onto its **resolved** id --
     `artists.py`'s convention, kept here since K's original search already
-    resolved through `artist_alias` and §2 does not name this as replaced."""
+    resolved through `artist_alias` and L §2 does not name this as replaced."""
     candidates = [
-        (artist_id, _relevance(name_scores, own, [])) for artist_id, own, _ in index["artists"]
+        (aid, rel) for aid, rel, _, _ in _candidates(name_scores, query_tokens, index["artists"])
     ]
-    candidates = [(aid, rel) for aid, rel in candidates if rel >= RELEVANCE_FLOOR]
     if not candidates:
         return []
 
@@ -339,11 +431,10 @@ def _rank_artists(conn, name_scores, index):
     return ranked
 
 
-def _rank_playlists(conn, name_scores, index):
+def _rank_playlists(conn, name_scores, index, query_tokens):
     candidates = [
-        (pid, _relevance(name_scores, own, [])) for pid, own, _ in index["playlists"]
+        (pid, rel) for pid, rel, _, _ in _candidates(name_scores, query_tokens, index["playlists"])
     ]
-    candidates = [(pid, rel) for pid, rel in candidates if rel >= RELEVANCE_FLOOR]
     if not candidates:
         return []
     score_map = scoring.playlist_scores(conn, [pid for pid, _ in candidates])
@@ -395,7 +486,7 @@ def rank(conn, q):
     index = _get_index(conn)
     name_scores = _score_names(query_norm, query_tokens, index["names"])
 
-    by_type = {t: _RANKERS[t](conn, name_scores, index) for t in TYPES}
+    by_type = {t: _RANKERS[t](conn, name_scores, index, query_tokens) for t in TYPES}
     combined = sorted(
         (row for rows in by_type.values() for row in rows), key=lambda r: -r["rank_key"]
     )
