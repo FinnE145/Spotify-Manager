@@ -732,10 +732,11 @@ def test_an_empty_search_allocates_nothing_but_a_real_one_does(client, corpus, m
     positive half is what makes this discriminating: a spy that simply
     never fires would pass against a route that had stopped calling it.
 
-    `q=a` still exercises the write path even though better-search-L.md's
-    MIN_QUERY_LEN=2 now makes it the matcher's own short-query branch (no
-    results) -- the route's `if q:` guard is about the string being
-    non-empty, not about search.py's internal length floor.
+    The guard is `search.is_searchable(q)`, not `if q:` -- a query below
+    MIN_QUERY_LEN returns nothing whichever way it is routed, so taking a
+    write lock for it is pure cost. The companion test below is the half
+    that can fail for that distinction; this one would pass against either
+    guard, since "Corpus" clears both.
     """
     # source: app.py's search_page -- "ensure_track_groups only when there
     # is something to search for, exactly as before: an empty /search
@@ -748,6 +749,26 @@ def test_an_empty_search_allocates_nothing_but_a_real_one_does(client, corpus, m
 
     assert client.get("/search?q=Corpus").status_code == 200
     assert calls == [1]
+
+
+def test_a_sub_min_query_len_search_takes_no_write_lock(client, corpus, monkeypatch):
+    """The half above cannot see: "a" is non-empty, so a `if q:` guard calls
+    ensure_track_groups for a query the matcher then refuses to run at all.
+    Only a query that is truthy *and* below MIN_QUERY_LEN separates the two
+    guards, which is why this is its own test rather than an extra assertion
+    up there."""
+    # source: better-search-L.md §4.1/§4.6 (MIN_QUERY_LEN=2) and §5's rule
+    # that a GET returning a listing has no business taking a write lock.
+    calls = []
+    monkeypatch.setattr(canonical, "ensure_track_groups", lambda conn: calls.append(1))
+
+    assert client.get("/search?q=a").status_code == 200
+    assert calls == []
+
+    # "%" is the sharper case: non-empty and two characters wide once
+    # stripped is still nothing after base_string deletes punctuation.
+    assert client.get("/search?q=%25").status_code == 200
+    assert calls == []
 
 
 def test_an_aliased_artist_id_redirects_to_the_canonical_artist(client, corpus, conn):

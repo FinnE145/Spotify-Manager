@@ -268,8 +268,10 @@ def create_app():
         conn = db.get_db()
         q = request.args.get("q", "").strip()
 
-        # ensure_track_groups only when there is something to search for,
-        # exactly as before: an empty /search writes nothing.
+        # ensure_track_groups only when there is something to search for --
+        # and "something" means a query the matcher will actually run, not
+        # merely a non-empty string. A sub-MIN_QUERY_LEN query returns
+        # nothing either way, so taking a write lock for it is pure cost.
         results = {
             "most_relevant": [],
             "songs": [], "songs_total": 0,
@@ -277,7 +279,7 @@ def create_app():
             "artists": [], "artists_total": 0,
             "playlists": [], "playlists_total": 0,
         }
-        if q:
+        if search.is_searchable(q):
             canonical.ensure_track_groups(conn)
             conn.commit()
             results = search.search_page(conn, q)

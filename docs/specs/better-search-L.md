@@ -97,8 +97,15 @@ one would compare unrelated numbers.
 
 Caching is a measured decision, not a reflex. Building the index costs a fixed **108 ms** per
 request (63 ms normalizing, 45 ms trigrams) against **6–44 ms** of actual query work, so
-uncached the fixed cost is 70–95% of every keystroke, for data that changes perhaps twice a day.
-Both figures are §10's.
+uncached the fixed cost is 70–95% of every keystroke. Both figures are §10's.
+
+**Corrected at Verify (2026-08-29): "data that changes perhaps twice a day" was wrong**, and the
+claim is struck rather than softened. The check is `PRAGMA data_version`, which moves on a commit
+by *any other* connection — and `api_log.record()` writes an `api_request` row, on its own
+connection, for **every outbound Spotify request**. Scrobbling alone is ~14 polls a day before
+token refreshes, and a snapshot pull writes continuously. Each invalidation costs a **285 ms**
+rebuild (measured, §10.2). The caching decision still stands — the cost is one rebuild on the
+first search after a write, not per keystroke — but the frequency it was argued from does not.
 
 In-process module state is safe here for exactly the reason `serve.py` records: waitress runs
 single-process, and multiple worker processes are ruled out as a correctness constraint — the
@@ -396,6 +403,31 @@ Two conclusions the design rests on. **0.35 admits a quarter to 40% of the libra
 bound anything. And **no floor can bound a short common query**, because thousands of names really
 do match "the"; what bounds a result list is the rank and a cap, which is why `SECTION_MAX` exists
 and why See more fetches rather than pre-rendering.
+
+### 10.2 What the shipped path actually costs (measured at Verify, 2026-08-29)
+
+**§10's 6–44 ms is the matcher, and only the matcher.** It is not what a request costs, and the
+distinction was not drawn when those figures were taken. A real `/api/search` request against the
+running app measures **185–340 ms**, and the gap is not in anything §4 describes.
+
+| | measured |
+|---|---:|
+| `/api/search` end to end, any real query | **185–340 ms** |
+| `rank()`, `'bohemian rapsody'` / `'willow'` / `'the'` | 109 / 138 / 220 ms |
+| — of which `_rank_artists` | **85–99 ms, on every query** |
+| — of which stage 1 + `_score_names` | 5–45 ms (this is §10's figure, and it is accurate) |
+| index rebuild, when `data_version` has moved | 285 ms |
+
+`_rank_artists` is `scoring.artist_scores`, which has a **fixed ~71 ms floor for a single
+artist** — `_artist_role_rows` scans the `track_artist_role` *view* (60 ms at n=1, 86 ms at
+n=500, i.e. essentially independent of how many artists matched) plus `_version_scores_maps` at
+11 ms. This is a pre-existing `scoring.py` shape, not something L introduced: K's `/search` paid
+it once per page load, and L pays it per keystroke.
+
+It does, however, mean **§4.7's licensed exception is justified on a premise that does not hold
+for artists**: "cheap because it reads materialized scores" is true of the version tier and false
+of `artist_scores`, which aggregates. Finn's call at Verify was that **the latency is fine** and
+this is out of scope; it is recorded here so it is not rediscovered as a finding.
 
 ---
 

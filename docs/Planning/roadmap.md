@@ -174,7 +174,9 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
       DONE                                           DONE               DONE                   DONE
   ──► L (search) ──► F/G
-      SPECCED
+      DONE
+
+  ──► L2 (search ranking, round two — position undecided)
 
   ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
 
@@ -185,9 +187,10 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S and T have landed** — P in all three of its parts,
+**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S, T and L have landed** — P in all three of its parts,
 verified and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged
-2026-08-24; S verified and merged 2026-08-28; T verified and merged 2026-08-28. Their
+2026-08-24; S verified and merged 2026-08-28; T verified and merged 2026-08-28; L verified and
+merged 2026-08-29, with a documented follow-up in `docs/better-search/L2_handoff.md`. Their
 sections below are marked, and each points at the spec that is authoritative for what actually
 shipped — read the spec, not the summary here, before touching any of them.
 
@@ -1098,11 +1101,11 @@ to `dev_canonical` (what that link already points at) instead of no-op'ing, so f
 queue is still one press to commit-and-reveal-done exactly as today, and one more press of the
 same control to leave — no reach for the mouse in between.
 
-## L — Better search
+## L — Better search ✅ DONE
 
-**Specced 2026-08-29** → `docs/specs/better-search-L.md`. **Not yet implemented.** Read that spec,
-not this section, before touching it — the summary below is what the step was raised for, and
-planning settled several things it does not mention.
+**Verified and merged 2026-08-29** → `docs/specs/better-search-L.md`, which is authoritative for
+what actually shipped. Read that spec, not this section, before touching it — the summary below is
+what the step was raised for, and planning settled several things it does not mention.
 
 K ships the deliberately plain version: a navbar box posting to `/search?q=`, four
 `LIKE '%q%'` groups (songs, albums, artists, playlists), each capped at 50 and ordered by name,
@@ -1130,9 +1133,51 @@ playlists), which supersedes H §2's 9,949 tracks. The scorer without a prefilte
 "willow" and 7,619 for "the", which is why the floor is 0.5 and why bounding a result list is a
 cap's job rather than a threshold's. Full tables in the spec's §10.
 
-Planning also found a **live bug** it folds in: `canonical_review.js`'s `exitState` branch returns
-before its `input`/`textarea` guard, so Enter in the navbar search box on the review queue's done
-screen navigates to `/dev/canonical` instead of searching.
+Planning also found a **live bug** it folded in, now fixed (spec §8): `canonical_review.js`'s
+`exitState` branch returned before its `input`/`textarea` guard, so Enter in the navbar search box
+on the review queue's done screen navigated to `/dev/canonical` instead of searching. Verify
+reproduced it and confirmed both halves — a focused field now wins in every state, and T4's
+Enter-to-exit still works from outside a field.
+
+**What Verify found, and what is left → `docs/better-search/L2_handoff.md`.** L is a faithful
+build of its spec and everything in §1's three parts works, but using it on the real library
+exposed three defects **in the formula, not the implementation**, and they are the input to a
+planned **L2**:
+
+1. **A name counts as its own `assoc`.** A track on a self-titled album has one string read twice
+   and multiplied, so `q=test` ranks the song *Testarossa* at 88.1 and the album of the same name
+   and same score at 66.4. One-line fix, measured, no regression in any spec-worked case.
+2. **`SequenceMatcher` scores shared letters like real matches** — `test`/`greatest` = 0.667,
+   `test`/`best` = 0.750, against `test`/`testing` = 0.936. **46% of `q=test`'s 97 rows (45) do
+   not contain the string at all.** The obvious fix breaks the spec's own §4.4 worked example,
+   because `own = 0.643` for *Creep* on `radiohead creep` is arithmetically `(1.000 + 0.286)/2` —
+   carried by difflib's score for a deliberate non-match.
+3. **`relevance` and `score` are not on comparable scales**, so an exact match can lose to a
+   partial one (`q=beyonce` puts the artist 4th). **ALPHA cannot fix any of the three** — measured
+   at 6.0 it widens defect 1's gap and leaves defect 3 untouched.
+
+Verify also corrected two spec claims the build disproved (§4.2's cache-invalidation frequency and
+§10's per-request cost, now §10.2) and fixed `/search` taking a write lock for a query below
+`MIN_QUERY_LEN`. **Eight missing tests** are itemised in the handoff, found by a 40-mutant sweep
+(23 killed); four of them assert behaviour L2 may change and should be written after it.
+
+## L2 — Better search, round two
+
+**Not specced. Position in the order undecided.** Own `/symr-plan` session, and its brain-dump is
+already written: **`docs/better-search/L2_handoff.md`**, produced by L's Verify pass on
+2026-08-29. Read that, not this — it carries every figure measured against the real `symr.db` and
+exists so none of them get re-derived.
+
+Three pieces of work, plus the tests: the **self-titled `assoc` double-count** (one line, measured,
+no regression in any spec-worked case, and it fixes the complaint that raised L2 — two entities
+with the same name and the same score ranking 22 points apart); the **difflib fallback's noise
+floor**, where the honest fix is entangled with `_name_score`'s mean over query tokens and so is
+real design work; the **relevance-vs-score scale mismatch**, which lets an exact match lose to a
+partial one; and **eight tests** L's suite is missing, four of which must wait for the first three.
+
+The one measured constraint to carry into planning: **all observed noise scores ≤ 0.800 and all
+genuine typos ≥ 0.933**, an empty gap — but `ALPHA` reaches none of the three defects, and
+sharpening `tsim` naively breaks L §4.4's own worked example.
 
 ## W — UI clean-up: adopt a CSS framework
 

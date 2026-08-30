@@ -369,16 +369,28 @@ _RANKERS = {
 }
 
 
+def is_searchable(q):
+    """Whether `q` can match anything at all -- MIN_QUERY_LEN measured after
+    normalizing (§4.1), which is why this is not `len(q) >= 2`: "%" and "a "
+    are both empty once base_string is done with them.
+
+    Public because the /search route asks it *before* taking
+    ensure_track_groups' write lock: a query that is going to return nothing
+    has no business taking one, and re-deriving the rule at the route would
+    be two places encoding one threshold."""
+    return len(normalize.base_string(q)) >= MIN_QUERY_LEN
+
+
 def rank(conn, q):
     """The full ranked lists for all four types, unclipped, plus their
     mixed-type "combined" merge -- what every one of the three routes slices
     from. §4.7: ranking must see every candidate before any cap is applied,
     so nothing here is capped; only the hydration step below touches
     anything past what will actually render."""
-    query_norm = normalize.base_string(q)
-    if len(query_norm) < MIN_QUERY_LEN:
+    if not is_searchable(q):
         return {"songs": [], "albums": [], "artists": [], "playlists": [], "combined": []}
 
+    query_norm = normalize.base_string(q)
     query_tokens = query_norm.split()
     index = _get_index(conn)
     name_scores = _score_names(query_norm, query_tokens, index["names"])
