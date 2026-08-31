@@ -261,6 +261,14 @@ Per-token similarities:
 
 ### 7.2 What it does to result lists
 
+**The basis of the row counts below, added by Verify.** They come from the §4 reference
+implementation and count a *candidate track* per song row, not the version-group-deduped rows
+`rank()` returns, and their album halves are pre-§5. The shipped code therefore reports fewer:
+`willow` 13 not 23, `cardigan` 5 not 6, `the` 2519 not 2683, `love` 488 not 537. Adding candidate
+tracks and pre-dedupe albums back reconstructs five of the six totals exactly (`the` is off by one
+in 2683). The **containing** halves, §7.1, §7.3 and the ordering table below are all unaffected and
+were re-measured against the shipped implementation on 2026-08-30, every figure matching.
+
 | query | L: rows / rows containing the query | L2: rows / containing |
 |---|---:|---:|
 | `test` | 97 / 52 | **13 / 13** |

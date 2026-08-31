@@ -127,15 +127,15 @@ def test_the_assoc_bump_ranks_the_credited_track_higher(conn):
 
 
 def test_relevance_floor_drops_an_artist_only_match(conn):
-    # source: better-search-L2.md §4.3, the exact worked case named there --
-    # "Wait a Minute!" by Willow, on q=willow, is absent. Its own title
-    # contributes nothing to the query at all (own_scores all 0), so §4.3
-    # drops it *by rule* before relevance is computed -- not because a
-    # RELEVANCE_FLOOR comparison happens to come out below 0.5. At
-    # ASSOC_WEIGHT=0.5 the artist-only evidence alone would compute to
-    # exactly 0.500, which is RELEVANCE_FLOOR and would survive a plain
-    # floor check: this fixture is what distinguishes "dropped by the
-    # explicit rule" from "dropped by a threshold coincidence" (L2 §4.3).
+    # source: better-search-L2.md §4.3/§7.1, the exact worked case named
+    # there -- "Wait a Minute!" by Willow, on q=willow, is absent.
+    #
+    # **This fixture exercises the stage-1 half of the rule, not the gate
+    # half.** "wait a minute" covers 1 of q=willow's 7 trigrams (0.143), so
+    # it never becomes a stage-1 candidate and `_relevance` returns on its
+    # `own_scores is None` branch. Verified by mutation: deleting the
+    # `not any(own_scores)` half of §4.3's guard leaves this test green.
+    # The test below is the one that covers that half.
     willow = builders.make_artist(conn, name="Willow")
     track = builders.make_track(conn, name="Wait a Minute!", artists=[willow])
     group = builders.make_group(conn, [track])
@@ -144,6 +144,59 @@ def test_relevance_floor_drops_an_artist_only_match(conn):
     ranked = search.rank(conn, "willow")
 
     assert group["version"] not in _song_ids(ranked)
+
+
+def test_own_must_contribute_drops_an_entity_whose_own_name_gates_to_zero(conn):
+    # source: better-search-L2.md §4.3/§8 -- "Construct it at
+    # ASSOC_WEIGHT * 1.0 == RELEVANCE_FLOOR exactly ... so a missing §4.3
+    # guard is a failure rather than a rounding question."
+    #
+    # Unlike the test above, this track's own title IS a stage-1 candidate:
+    # "beyond" covers 5 of q=beyonce's 8 trigrams (0.625, clear of
+    # TRIGRAM_FLOOR), and is then gated to 0.0 by FUZZY_FLOOR (0.769 raw,
+    # §7.1). Its artist matches exactly, so without §4.3's rule relevance
+    # would be max(0.0, 0.5 * 1.0) = 0.500 -- **exactly** RELEVANCE_FLOOR,
+    # which `>=` admits. §4.3 is the only thing dropping it, which is why
+    # this fixture and not the one above kills a guard reduced to its
+    # `own_scores is None` branch.
+    artist = builders.make_artist(conn, name="Beyonce")
+    track = builders.make_track(conn, name="Beyond", artists=[artist])
+    group = builders.make_group(conn, [track])
+    builders.make_score(conn, "version", group["version"], all_time=90.0)
+    conn.commit()
+
+    name_scores = search._score_names("beyonce", ["beyonce"], search._get_index(conn)["names"])
+    assert name_scores["beyond"] == (0.0,)  # a candidate, gated to nothing
+    assert name_scores["beyonce"] == (1.0,)  # the assoc that would rescue it
+
+    ranked = search.rank(conn, "beyonce")
+
+    assert group["version"] not in _song_ids(ranked)
+
+
+def test_relevance_floor_drops_a_partially_covered_query(conn):
+    # source: better-search-L2.md §4.2/§8 -- "an entity with
+    # relevance < RELEVANCE_FLOOR is dropped outright", and §8's "ALPHA and
+    # RELEVANCE_FLOOR still bite".
+    #
+    # The two tests that already move when the floor RISES to 0.6 leave the
+    # other direction unasserted: mutation found LOWERING it to 0.4 kills
+    # nothing. This lands an entity squarely in the 0.4-0.5 band that only a
+    # lowered floor admits. "Zzzabcdef" is 9 characters and the query's
+    # first token is 3, so the prefix branch gives 0.85 + 0.15 * 3/9 = 0.90
+    # exactly; the second token matches nothing and gates to 0.0; the mean
+    # over the two is 0.45.
+    builders.make_artist(conn, name="Zzzabcdef")
+    conn.commit()
+
+    name_scores = search._score_names(
+        "zzz zzzqqqqqqqq", ["zzz", "zzzqqqqqqqq"], search._get_index(conn)["names"]
+    )
+    assert name_scores["zzzabcdef"] == (pytest.approx(0.9), 0.0)
+
+    ranked = search.rank(conn, "zzz zzzqqqqqqqq")
+
+    assert ranked["artists"] == []
 
 
 def test_score_floor_lets_an_unscored_entity_still_rank(conn):
@@ -356,6 +409,32 @@ def test_combined_rows_carry_their_own_type_label_and_image(conn):
     assert by_type["albums"]["image_url"] == "https://img/album"
     assert by_type["playlists"]["type_label"] == "Playlist"
     assert by_type["playlists"]["image_url"] == "https://img/playlist"
+
+
+def test_combined_rows_carry_an_artist_credit_where_the_type_has_one(conn):
+    # source: verify-phase change, 2026-08-30 (Finn: "show the artist in the
+    # Most Relevant list") -- same shape as the test above and the same
+    # reason it exists: `_search_combined.html` renders `artists`, nothing in
+    # search.py reads it back, so a hardcoded None would go untested.
+    #
+    # All four types in one fixture, because the discriminating half is the
+    # two that must NOT carry one: an artist row *is* its artist, and a
+    # playlist has none. An implementation that filled the key from the
+    # entity's own name would pass a songs-only assertion.
+    artist = builders.make_artist(conn, name="Zzzcredit Artist")
+    album = builders.make_album(conn, name="Zzzcredit Record", artists=[artist])
+    track = builders.make_track(conn, name="Zzzcredit Song", album_id=album, artists=[artist])
+    builders.make_group(conn, [track])
+    builders.make_playlist(conn, name="Zzzcredit Playlist")
+    conn.commit()
+
+    rows = search.search_page(conn, "zzzcredit")["most_relevant"]
+
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["songs"]["artists"] == "Zzzcredit Artist"
+    assert by_type["albums"]["artists"] == "Zzzcredit Artist"
+    assert by_type["artists"]["artists"] is None
+    assert by_type["playlists"]["artists"] is None
 
 
 # -- Caching (§4.2, §12) ------------------------------------------------------
@@ -620,6 +699,29 @@ def test_album_dedupe_does_not_collapse_different_artists(conn):
     conn.commit()
 
     ranked = search.rank(conn, "zzzsamename record")
+
+    assert {r["id"] for r in ranked["albums"]} == {album_a, album_b}
+
+
+def test_album_dedupe_does_not_collapse_different_names(conn):
+    # source: better-search-L2.md §5's condition 1 -- §8 names three dedupe
+    # fixtures and this is not among them, but mutation found the name
+    # equality unkilled by all three: dropping `k_own == own` from the
+    # collision test leaves the suite green. Same artist and a *shared*
+    # release group (which a deluxe edition and the album it reissues
+    # genuinely have, since the canonical engine groups the same track
+    # across both), different names -- both ids must survive, or "Record"
+    # would swallow "Record Deluxe".
+    artist = builders.make_artist(conn, name="Zzzedition Artist")
+    album_a = builders.make_album(conn, name="Zzzedition Record", artists=[artist])
+    album_b = builders.make_album(conn, name="Zzzedition Record Deluxe", artists=[artist])
+    track_a = builders.make_track(conn, album_id=album_a, artists=[artist])
+    track_b = builders.make_track(conn, album_id=album_b, artists=[artist])
+    group_a = builders.make_group(conn, [track_a])
+    builders.make_group(conn, [track_b], release=group_a["release"])
+    conn.commit()
+
+    ranked = search.rank(conn, "zzzedition record")
 
     assert {r["id"] for r in ranked["albums"]} == {album_a, album_b}
 
