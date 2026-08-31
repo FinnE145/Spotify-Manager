@@ -4,11 +4,13 @@
 
 {% block content %}
 <main class="page">
+  {# No search box of its own: the navbar's is the only one, and it is the one with the
+     dropdown. base.html fills it with `q` on this endpoint. #}
   <h1>Search</h1>
-  <form method="get" action="{{ url_for('search_page') }}" class="inline-form">
-    <input type="text" name="q" value="{{ q }}" placeholder="Track, artist, album or playlist name" autofocus>
-    <button type="submit">Search</button>
-  </form>
+
+  {% if not q %}
+  <p class="empty">Use the search box in the navbar.</p>
+  {% endif %}
 
   {% if q %}
   <section class="panel">
@@ -51,7 +53,7 @@
     <h2>Artists ({{ "{:,}".format(artists_total) }})</h2>
     {% if artists %}
     <table class="data-table">
-      <thead><tr><th>Artist</th><th>Score</th></tr></thead>
+      <thead><tr><th></th><th>Artist</th><th>Score</th></tr></thead>
       <tbody id="search-artists-body">{% set rows = artists %}{% include "_search_artists_rows.html" %}</tbody>
     </table>
     {% if artists_total > artists|length %}

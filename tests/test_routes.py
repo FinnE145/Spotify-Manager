@@ -15,6 +15,8 @@ without spawning a thread -- this sweep is about routes, not job bodies
 an unrelated job crash present as a route failure.
 """
 
+import re
+
 import pytest
 
 import builders
@@ -180,6 +182,67 @@ def test_search_finds_a_matching_track_and_not_a_non_matching_one(client, corpus
     body = resp.get_data(as_text=True)
     assert "Corpus Track One" in body
     assert "Totally Unrelated Song" not in body
+
+
+def test_the_navbar_box_carries_the_query_on_search_and_only_there(client, corpus, conn):
+    # source: verify-phase change, 2026-08-30 -- /search has no search box of
+    # its own any more; base.html fills the navbar one, which is the one with
+    # the dropdown. Keyed on `request.endpoint`, not on `q` merely being
+    # defined, and **that** is the half worth a test: /dev/canonical passes
+    # its own unrelated `q` to its own template, so a condition written as
+    # `{% if q %}` would put a canonical-groups filter into the site search
+    # box. Only a route test sees this -- it is template wiring.
+    # Scoped to the navbar input itself, not the whole body: /dev/canonical
+    # has a filter box of its own that legitimately carries the same value,
+    # and a body-wide `not in` passes for the wrong reason (or, as written
+    # first, fails for one).
+    def nav_value(body):
+        tag = re.search(r"<input[^>]*id=\"nav-search-input\"[^>]*>", body, re.S).group(0)
+        return re.search(r"value=\"([^\"]*)\"", tag).group(1)
+
+    resp = client.get("/search?q=Corpus")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert nav_value(body) == "Corpus"
+    assert body.count('name="q"') == 1  # the navbar's box, and no second one on the page
+
+    other = client.get("/dev/canonical?q=Corpus")
+
+    assert other.status_code == 200
+    assert nav_value(other.get_data(as_text=True)) == ""
+
+
+def test_every_search_row_reserves_a_cover_cell_image_or_not(client, conn):
+    # source: verify-phase change, 2026-08-30 (Finn: artist rows looked wrong
+    # without an image, "then all the rows can appear the same height too",
+    # then "can you add like a person icon or something?").
+    #
+    # _macros.html's cover_cell always emits a cell, which is what keeps the
+    # rows one height: an <img> when there is an image_url, Bootstrap Icons'
+    # person-fill when there is not *and* the kind is 'artist', and an empty
+    # placeholder otherwise. Both artists below match, one with an image and
+    # one without, and each appears twice (its Artists-section row and its
+    # Most Relevant row).
+    #
+    # The `kind` half is the discriminating one and the reason the album is
+    # here: an implementation that drew the person glyph for every missing
+    # image would pass an artists-only assertion. Albums never lack an image
+    # in the real library (0 of 6,291), so the glyph would be silently wrong
+    # rather than visibly wrong.
+    builders.make_artist(conn, name="Zzzcover Pictured", image_url="https://img/artist")
+    builders.make_artist(conn, name="Zzzcover Bare")
+    builders.make_album(conn, name="Zzzcover Record", image_url=None)
+    conn.commit()
+
+    resp = client.get("/search?q=zzzcover")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert body.count('<img class="cover" src="https://img/artist"') == 2
+    assert body.count("cover-person") == 2  # the imageless artist, twice
+    # The imageless album gets a cell too -- but a bare one, with no glyph.
+    assert body.count('class="cover cover-placeholder"') == 2
 
 
 def test_api_search_writes_nothing(client, conn):

@@ -243,6 +243,25 @@ body.immersive {
   white-space: nowrap;
 }
 
+/* H's score chip. `score_display` is already the one way a score reaches any
+   page -- 13 templates import it, exactly as scoring-H.md intended -- but the
+   class it emits had **no rule anywhere**, so every score on the site has been
+   rendering as plain inline text since H landed. The macro shipped; its
+   styling never did. This is that rule, and because everything already goes
+   through the macro it lands on all 13 at once. `tabular-nums` is what makes a
+   column of scores line up. */
+.score-display {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid #e2e2e2;
+  background: #fafafa;
+  color: #555;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .badge.explicit {
   font-weight: 700;
   border-color: #ccc;
@@ -955,6 +974,40 @@ body.immersive {
   color: #888;
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* The artist credit under a combined row's name -- a second line rather than
+   a column, so it fits the navbar dropdown as well as the full-width page. */
+.search-combined-artists {
+  color: #888;
+  font-size: 12px;
+}
+
+/* _macros.html's cover_cell. The width is fixed on the cell so the name column
+   starts at the same x on every row, and .cover-placeholder reserves the same
+   32x32 a real image would take so a row without one is not shorter -- which
+   is what artist rows were, since almost no artist has an image_url yet. The
+   bare placeholder draws nothing; only the artist one gets a glyph, because
+   only artists routinely lack an image (see the macro's own note). */
+.cover-cell {
+  width: 32px;
+}
+
+.cover-placeholder {
+  display: block;
+}
+
+.cover-placeholder.cover-person {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f0f0;
+  color: #b4b4b4;
+}
+
+.cover-placeholder.cover-person svg {
+  width: 17px;
+  height: 17px;
 }
 
 /* A See more'd section becomes scrollable rather than growing the page --

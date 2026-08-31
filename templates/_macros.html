@@ -96,6 +96,35 @@
 {%- if explicit %}<span class="badge explicit" title="Explicit">E</span>{% endif -%}
 {%- endmacro %}
 
+{# The square image cell every search listing opens with -- the one place that
+   decides what a missing image looks like, so the five search row templates
+   can't drift the way hand-built ones did before entity_link.
+
+   It always emits something 32x32, so a row without an image is not shorter
+   than the ones beside it.
+
+   `kind` decides what a *missing* image looks like, and only 'artist' draws
+   anything. That is the measured split, not a guess: 4,332 of 4,344 artists
+   have no `image_url` (it is filled one at a time by
+   entities.fetch_artist_image, on that artist's own page), against 0 of
+   6,291 albums and 2 of 154 playlists. So the artist fallback is the normal
+   case and deserves a real glyph, while drawing one for the others would
+   invent a placeholder nobody ever sees.
+
+   The glyph is Bootstrap Icons' `person-fill`, inlined as SVG rather than
+   linked: pulling in the icon font or a CDN is step W's decision (adopt a
+   CSS framework), and this keeps the page self-contained until then while
+   matching what W would land. #}
+{% macro cover_cell(url, kind='') -%}
+<td class="cover-cell">
+  {%- if url %}<img class="cover" src="{{ url }}" alt="">
+  {%- elif kind == 'artist' %}<span class="cover cover-placeholder cover-person" aria-hidden="true">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1H3Zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>
+  </span>
+  {%- else %}<span class="cover cover-placeholder"></span>{% endif -%}
+</td>
+{%- endmacro %}
+
 {# 6,070 of 9,693 tracks are in no playlist at all. Without this, a group of
    tracks you recognise gives no hint that none of them are actually yours. #}
 {% macro not_in_library(live_count) -%}

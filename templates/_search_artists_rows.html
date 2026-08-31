@@ -1,10 +1,13 @@
-{# The Artists section's rows -- rendered on page load and by /api/search/more?type=artists. #}
-{% from "_macros.html" import entity_link, score_display %}
+{# The Artists section's rows -- rendered on page load and by /api/search/more?type=artists.
+   Carries an image cell like the other three sections: only 12 of 4,344 artists have an
+   `image_url` today, but the cell reserves its square either way so the rows line up. #}
+{% from "_macros.html" import entity_link, score_display, cover_cell %}
 {% for a in rows %}
 <tr>
+  {{ cover_cell(a.image_url, 'artist') }}
   <td>{{ entity_link('artist', a.artist_id, a.name) }}</td>
   <td>{{ score_display(a.score) }}</td>
 </tr>
 {% else %}
-<tr><td colspan="2" class="empty">No artists match.</td></tr>
+<tr><td colspan="3" class="empty">No artists match.</td></tr>
 {% endfor %}

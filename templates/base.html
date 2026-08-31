@@ -21,7 +21,11 @@
     </div>
     <div class="nav-utility">
       <form method="get" action="{{ url_for('search_page') }}" class="nav-search" id="nav-search-form">
-        <input type="text" name="q" placeholder="Search" aria-label="Search" id="nav-search-input" autocomplete="off">
+        {# On /search this box IS the page's search box -- search.html has none of its own,
+           so the navbar one carries the current query. Keyed on the endpoint, not on `q`
+           simply being defined: /dev/canonical passes its own unrelated `q`. #}
+        <input type="text" name="q" placeholder="Search" aria-label="Search" id="nav-search-input"
+               autocomplete="off" value="{{ q if request.endpoint == 'search_page' else '' }}">
         <button type="submit" aria-label="Search">&rarr;</button>
         <div id="nav-search-dropdown" class="search-dropdown" hidden></div>
       </form>

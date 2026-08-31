@@ -517,6 +517,18 @@ def _hydrate_albums(conn, ranked_slice):
             f"SELECT album_id, name, image_url FROM album WHERE album_id IN ({placeholders})", ids
         )
     }
+    # The credited-artist display string, batched over the rendered slice only
+    # (L §4.7). `track_display` hands songs theirs already; albums had none,
+    # and Most Relevant renders an artist for every row that has one.
+    album_artists = defaultdict(list)
+    for row in conn.execute(
+        f"""SELECT aa.album_id, ar.name
+            FROM album_artist aa JOIN artist ar ON ar.artist_id = aa.artist_id
+            WHERE aa.album_id IN ({placeholders})
+            ORDER BY aa.album_id, aa.position""",
+        ids,
+    ):
+        album_artists[row["album_id"]].append(row["name"])
     out = []
     for r in ranked_slice:
         row = rows.get(r["id"])
@@ -528,6 +540,7 @@ def _hydrate_albums(conn, ranked_slice):
                 "id": row["album_id"],
                 "album_id": row["album_id"],
                 "name": row["name"],
+                "artists": ", ".join(album_artists.get(row["album_id"], ())),
                 "image_url": row["image_url"],
                 "score": r["score"],
             }
@@ -602,9 +615,11 @@ _HYDRATORS = {
 }
 
 # combined/dropdown rows are one uniform shape regardless of type -- a type
-# label, a link kind + id, a name, an optional cover, and a score. Built from
-# the richer per-type hydrate dicts above rather than duplicating their
-# queries.
+# label, a link kind + id, a name, an optional cover, an optional artist
+# credit, and a score. Built from the richer per-type hydrate dicts above
+# rather than duplicating their queries. An artist row *is* its artist and a
+# playlist has none, so for those two `artists` is absent and the row renders
+# without one; only songs and albums carry the key at all.
 _COMBINED_KIND = {"songs": "version", "albums": "album", "artists": "artist", "playlists": "playlist"}
 _COMBINED_IMAGE_KEY = {
     "songs": "album_image_url",
@@ -636,6 +651,7 @@ def _hydrate_combined(conn, combined_slice):
                 "kind": _COMBINED_KIND[r["type"]],
                 "id": r["id"],
                 "name": h["name"],
+                "artists": h.get("artists") or None,
                 "image_url": h.get(_COMBINED_IMAGE_KEY[r["type"]]),
                 "score": h["score"],
             }

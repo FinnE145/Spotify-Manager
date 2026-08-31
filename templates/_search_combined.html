@@ -1,16 +1,21 @@
 {# The mixed-type row list shared by Most Relevant (search.html) and the
    navbar dropdown (/api/search) -- better-search-L.md §7: "the dropdown is
    a shortcut into the same ordered list the page renders". Each row already
-   carries its own type_label/kind/name/image_url/score (search._hydrate_combined),
-   so this template has no per-type branching at all. #}
-{% from "_macros.html" import entity_link, score_display %}
+   carries its own type_label/kind/name/artists/image_url/score (search._hydrate_combined),
+   so this template has no per-type branching at all. `artists` is None for an
+   artist row (which is its own artist) and for a playlist, so it renders as a
+   second line under the name rather than as a column of its own: a column
+   would be blank on two of the four types, and this same fragment is what the
+   360px navbar dropdown renders. #}
+{% from "_macros.html" import entity_link, score_display, cover_cell %}
 <table class="data-table search-combined">
   <tbody>
   {% for r in rows %}
     <tr>
-      <td>{% if r.image_url %}<img class="cover" src="{{ r.image_url }}" alt="">{% endif %}</td>
+      {{ cover_cell(r.image_url, r.kind) }}
       <td class="search-type-label">{{ r.type_label }}</td>
-      <td>{{ entity_link(r.kind, r.id, r.name) }}</td>
+      <td>{{ entity_link(r.kind, r.id, r.name) }}
+        {%- if r.artists %}<div class="search-combined-artists">{{ r.artists }}</div>{% endif %}</td>
       <td>{{ score_display(r.score) }}</td>
     </tr>
   {% else %}
