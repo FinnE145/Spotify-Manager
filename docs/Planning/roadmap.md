@@ -49,7 +49,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `mutation-sweep-S.md` | Whole-codebase mutation sweep: the operator sets, the five-way classification, the delegated-triage gate. **`docs/codebase-health/S_sweep.md` is what actually happened** | `scripts/mutation/` | S | no |
 | `small-fixes-T.md` | Four papercuts: the `localhost`/`127.0.0.1` OAuth state mismatch, combined request estimates on `/dev/roundtrip`, the review queue's chip palette, the done screen's exit | `app.py` (OAuth), `config.py`, `backfill.py`, `roundtrip.py`, `canonical_review.js` | T | no |
 | `better-search-L.md` | Two-stage fuzzy matcher (trigram prefilter → token coverage), cross-type ranking, the navbar dropdown | `search.py`, `app.py` (`/search`, `/api/search*`), `templates/search.html`, `static/js/search.js` | L | no |
-| `better-search-L2.md` | The matcher's relevance formula: the `FUZZY_FLOOR` gate, per-query-token coverage, and album search-result dedupe. **Supersedes L §4.4/§4.6/§10.1** | `search.py` | L2 | no |
+| `better-search-L2.md` | The matcher's relevance formula: the `FUZZY_FLOOR` gate, per-query-token coverage, and album search-result dedupe. **Supersedes L §4.4/§4.6/§10.1.** Its spec says "no template change"; Verify added three on request — the page's own search box removed, artist credits in Most Relevant, and `cover_cell` | `search.py`, `templates/_macros.html` + the five `_search_*` fragments, `templates/base.html`, `static/css/style.css` | L2 | no |
 
 ---
 
@@ -175,7 +175,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► Q (host on fe-pro) ──► O (request budgets) ──► R (scrobbling) ──► S (mutation sweep) ──► T (small fixes)
       DONE                                           DONE               DONE                   DONE
   ──► L (search) ──► L2 (search ranking, round two) ──► F/G
-      DONE               SPECCED — next
+      DONE               DONE
 
   ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
 
@@ -186,10 +186,11 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S, T and L have landed** — P in all three of its parts,
-verified and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged
+**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S, T, L and L2 have landed** — P in all three of its
+parts, verified and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged
 2026-08-24; S verified and merged 2026-08-28; T verified and merged 2026-08-28; L verified and
-merged 2026-08-29, with a documented follow-up in `docs/better-search/L2_handoff.md`. Their
+merged 2026-08-29; L2 verified and merged 2026-08-30, closing the `L2_handoff.md` follow-up L
+left. Their
 sections below are marked, and each points at the spec that is authoritative for what actually
 shipped — read the spec, not the summary here, before touching any of them.
 
@@ -1160,17 +1161,36 @@ Verify also corrected two spec claims the build disproved (§4.2's cache-invalid
 `MIN_QUERY_LEN`. **Eight missing tests** are itemised in the handoff, found by a 40-mutant sweep
 (23 killed); four of them assert behaviour L2 may change and should be written after it.
 
-## L2 — Better search, round two
+## L2 — Better search, round two ✅ DONE
 
-**Specced 2026-08-30 → `docs/specs/better-search-L2.md`. Next in the order.** Read that spec, not
-this summary. Its brain-dump was `docs/better-search/L2_handoff.md`, produced by L's Verify pass on
-2026-08-29; both carry figures measured against the real `symr.db` and exist so none get
-re-derived.
+**Verified and merged 2026-08-30 → `docs/specs/better-search-L2.md` is authoritative for what
+shipped.** Read that spec, not this summary. Its brain-dump was `docs/better-search/L2_handoff.md`,
+produced by L's Verify pass on 2026-08-29; both carry figures measured against the real `symr.db`
+and exist so none get re-derived.
 
-**It stays on `feat/better-search-L`** — a sub-letter continues its letter's branch rather than
+**What Verify found, and what the section below gets wrong.** Every one of L2 §7's normative
+figures reproduced exactly against the real library — all six per-token similarities, all eight
+relevance values, all four ordering claims, and §5's own 8→5 album collapse on `q=willow`. The
+one correction is to §7.2's *row counts*, which came from the §4 reference implementation and
+count a candidate track per song row rather than the version-group-deduped rows `rank()` returns
+(their album halves are also pre-§5); the shipped code returns fewer, and §7.2 now carries a note
+saying so. Mutation over the new code killed 21 of 24 targeted mutants; the three survivors were
+all **test** gaps, not implementation ones, and all three are now closed — §4.3's own-must-
+contribute rule (the fixture the spec named for it never reached the rule, being filtered at
+stage 1), §5's name-equality condition, and `RELEVANCE_FLOOR` in the downward direction.
+
+**Three UI changes landed at Verify, on Finn's ask, beyond the spec's "no template change":**
+`/search` lost its own search box (the navbar's is the only one, and the one with the dropdown,
+and it now carries the query on that endpoint); Most Relevant and the dropdown render each row's
+artist credit; and the search listings got a shared `cover_cell` macro so rows are one height —
+with a Bootstrap Icons `person-fill` glyph for artists, which is where **`.score-display` was
+found to have had no CSS rule at all** since H, and got one.
+
+**It stayed on `feat/better-search-L`** — a sub-letter continues its letter's branch rather than
 opening a new one (Finn's call, 2026-08-30; the rule is now in the `symr-plan` skill).
 
-Three pieces of work, plus the tests: the **self-titled `assoc` double-count** (one line, measured,
+*What the handoff expected, kept for the record — the paragraph after it is what actually
+happened.* Three pieces of work, plus the tests: the **self-titled `assoc` double-count** (one line, measured,
 no regression in any spec-worked case, and it fixes the complaint that raised L2 — two entities
 with the same name and the same score ranking 22 points apart); the **difflib fallback's noise
 floor**, where the honest fix is entangled with `_name_score`'s mean over query tokens and so is
