@@ -10,12 +10,13 @@
 
 ## Spec index
 
-What each of the 23 specs in `docs/specs/` actually covers, and the code it's
+What each of the 24 indexed specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
 a lookup from now on rather than a re-derivation. `codebase-health-P.md` itself isn't in the
-22 — it's the standing approach doc for this step, not an audited spec (see its own §0).
+24 — it's the standing approach doc for this step, not an audited spec (see its own §0), which
+is why `docs/specs/` holds 25 files against 24 rows.
 
 **Every new spec gets a row here as it is written**, with `no` in the P1 column — that step
 postdates the audit. `mutation-sweep-S.md` was missed when it landed and is added back below;
@@ -50,6 +51,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `small-fixes-T.md` | Four papercuts: the `localhost`/`127.0.0.1` OAuth state mismatch, combined request estimates on `/dev/roundtrip`, the review queue's chip palette, the done screen's exit | `app.py` (OAuth), `config.py`, `backfill.py`, `roundtrip.py`, `canonical_review.js` | T | no |
 | `better-search-L.md` | Two-stage fuzzy matcher (trigram prefilter → token coverage), cross-type ranking, the navbar dropdown | `search.py`, `app.py` (`/search`, `/api/search*`), `templates/search.html`, `static/js/search.js` | L | no |
 | `better-search-L2.md` | The matcher's relevance formula: the `FUZZY_FLOOR` gate, per-query-token coverage, and album search-result dedupe. **Supersedes L §4.4/§4.6/§10.1.** Its spec says "no template change"; Verify added three on request — the page's own search box removed, artist credits in Most Relevant, and `cover_cell` | `search.py`, `templates/_macros.html` + the five `_search_*` fragments, `templates/base.html`, `static/css/style.css` | L2 | no |
+| `ui-framework-W.md` | Bootstrap 5.3.8 as the design system: vendoring, the three-state theme, the per-page conversion briefs (§9), and the site copy pass absorbed from **V**. Written page-by-page as the work lands, so §9 is a record rather than a plan | `templates/` (all of them), `static/css/style.css`, `static/js/theme.js`, `static/{css,js}/vendor/` | W | no |
 
 ---
 
@@ -177,7 +179,8 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► L (search) ──► L2 (search ranking, round two) ──► F/G
       DONE               DONE
 
-  ──► W (UI clean-up: adopt a CSS framework) ──► V (site writing clean-up)
+  ──► W (UI clean-up: adopt a CSS framework — V's site writing clean-up folded in)
+      IN PROGRESS
 
   ──► U (extras: songdoku)
 ```
@@ -1215,11 +1218,21 @@ Albums also gain a search-result dedupe (name + artists + overlapping release gr
 equality was measured collapsing **0 of 294** duplicate name+artist groups — Spotify issues every
 duplicate album id its own artwork URL.
 
-## W — UI clean-up: adopt a CSS framework
+## W — UI clean-up: adopt a CSS framework · IN PROGRESS
 
-**Not specced.** Own `/symr-plan` session. Placed third-last by decision, 2026-08-24, immediately
-before **V**: re-laying the pages out changes where copy sits and how much of it a page needs, so
-rewriting the words first would mean revisiting them.
+**Specced and being built**, on `feat/ui-framework-W`, against
+`docs/specs/ui-framework-W.md` — read that spec, never this entry, for what has actually been
+decided. **Step V is folded into it** (see V below), so W is the copy pass too.
+
+**Built live, not spec-then-implement.** Finn reviews each page in the browser and signs it off
+before the next one starts, so §9 of the spec grows a per-page brief as the work lands rather than
+predicting one up front. Ten of twenty-one pages are done as of 2026-09-01; the two immersive
+queues convert last and are knowingly broken in dark mode until they do.
+
+Placed third-last by decision, 2026-08-24, immediately before **V**: re-laying the pages out
+changes where copy sits and how much of it a page needs, so rewriting the words first would mean
+revisiting them. Folding V in followed from that same reasoning once the walkthrough was already
+visiting every page.
 
 **Deliberately not a custom design.** Finn's ask, verbatim: *"i dont want a super fancy custom ui,
 just maybe wrap it all with bootstrap or something."* This is the explicit request that `CLAUDE.md`'s
@@ -1248,17 +1261,27 @@ at most, the framework's own optional JS — nothing that needs a build step.
   Convert these last, and check them against `grouping.py`'s coordinate maths rather than by eye.
 - **What happens to `style.css`** — how much survives as genuinely Symr-specific (the canvas, the
   scoring banner, the review queue) versus dissolving into framework classes.
-- **`docs/style_guide.md`**, named in `CLAUDE.md` as the thing to follow "once it exists", is
-  plausibly answered by this step rather than written by it — if the framework *is* the design
-  system, the guide may be a short page pointing at it plus the handful of local rules.
+- **`docs/style_guide.md`** — *settled: it will never exist.* The framework is the design system,
+  and this step's own spec is the record of the local rules on top of it. `CLAUDE.md`'s Frontend
+  section now says so instead of promising a guide.
 
 ---
 
-## V — Site writing clean-up
+## V — Site writing clean-up · ABSORBED INTO W
 
-**Not specced.** Own `/symr-plan` session. Placed second-last by decision, 2026-08-24 — it depends
-on nothing, but it wants the pages to have stopped moving, and every step above it adds or reworks
-copy. Doing it before T and L would mean writing some of it twice.
+**No longer its own step.** Folded into **W** on 2026-08-30, at Finn's call: W's walkthrough visits
+every page and rewrites its layout, which is when the copy on that page is cheapest to fix and when
+its faults are most visible. Splitting them would have meant two passes over the same twenty-one
+pages, the second one re-reading what the first had just moved.
+
+**The material below stays as reference** — it is the brief W's copy work is executed against, and
+the three faults it names are still the three faults being fixed. What is settled from it so far
+lives in `docs/specs/ui-framework-W.md`: counts in prose are rendered or dropped, em dashes get a
+structural fix rather than a substitution, and a warning uses the warning colour while only a
+failure is red.
+
+Placed second-last by decision, 2026-08-24 — it depended on nothing, but it wanted the pages to
+have stopped moving, and every step above it adds or reworks copy.
 
 The site is full of small explanatory notes — 70 `class="meta"` paragraphs across the templates as
 of 2026-08-24, plus button captions, empty states and list descriptions. They are genuinely load-
@@ -1283,9 +1306,10 @@ person using the page, and the spec reference in particular will outlive the sec
 **Too conversational.** `canonical_cross.html`: *"Usually the answer is no — just hit Enter."*
 Chatty, and it also asserts something about the data that nothing keeps true.
 
-Open for the planning session: whether there's a house voice worth writing down (terse and
-declarative is the obvious candidate, and `docs/style_guide.md` is already the named home for it —
-still TBD); whether the fix is per-page or a pass over all of them at once; and how much of the
+Open questions, carried into W: whether there's a house voice worth writing down (terse and
+declarative is the obvious candidate; `docs/style_guide.md` is *not* its home, since that guide is
+now settled as never being written); whether the fix is per-page or a pass over all of them at once
+(**answered in practice: per-page, alongside the layout work**); and how much of the
 detail currently in UI prose belongs in the specs instead, with the page saying only what someone
 needs to act. Note `feedback-canonical-ui-terminology` — "membership(s)", not "Live#", and no
 negative framing like "non-singleton" — is an existing decision this step should absorb rather than
