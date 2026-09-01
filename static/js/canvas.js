@@ -121,7 +121,7 @@
     trayEl.innerHTML = "";
     for (const card of state.cards.filter((c) => c.placement === "tray")) {
       const el = document.createElement("div");
-      el.className = "card tray-card";
+      el.className = "canvas-card tray-card";
       el.dataset.key = cardKey(card);
       el.style.width = `${CARD_W}px`;
       el.style.height = `${CARD_H}px`;
@@ -148,7 +148,7 @@
 
     for (const card of state.cards.filter((c) => c.placement === "placed")) {
       const el = document.createElement("div");
-      el.className = "card";
+      el.className = "canvas-card";
       if (selection.has(cardKey(card))) el.classList.add("selected");
       el.dataset.key = cardKey(card);
       el.style.left = `${card.x - w / 2}px`;
@@ -472,7 +472,7 @@
     const ghostH = CARD_H * intrinsicScale * view.zoom;
 
     const ghost = document.createElement("div");
-    ghost.className = "card";
+    ghost.className = "canvas-card";
     ghost.style.position = "fixed";
     ghost.style.width = `${ghostW}px`;
     ghost.style.height = `${ghostH}px`;
@@ -583,7 +583,7 @@
   });
 
   viewportEl.addEventListener("dblclick", (e) => {
-    const cardEl = e.target.closest(".card");
+    const cardEl = e.target.closest(".canvas-card");
     if (cardEl && worldEl.contains(cardEl)) {
       const card = findItem(cardEl.dataset.key);
       if (card) editCardNote(cardEl, card);

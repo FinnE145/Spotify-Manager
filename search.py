@@ -621,6 +621,16 @@ _HYDRATORS = {
 # playlist has none, so for those two `artists` is absent and the row renders
 # without one; only songs and albums carry the key at all.
 _COMBINED_KIND = {"songs": "version", "albums": "album", "artists": "artist", "playlists": "playlist"}
+# Deliberately separate from _COMBINED_KIND above, which is the *link* kind and
+# builds the href. The two disagree on songs, whose link tier is "version" while
+# its placeholder is a song's -- so one value feeding both entity_link and
+# cover_cell was a trap waiting to be stepped on (ui-framework-W.md).
+_COMBINED_COVER_KIND = {
+    "songs": "song",
+    "albums": "album",
+    "artists": "artist",
+    "playlists": "playlist",
+}
 _COMBINED_IMAGE_KEY = {
     "songs": "album_image_url",
     "albums": "image_url",
@@ -649,6 +659,7 @@ def _hydrate_combined(conn, combined_slice):
                 "type": r["type"],
                 "type_label": _TYPE_LABELS[r["type"]],
                 "kind": _COMBINED_KIND[r["type"]],
+                "cover_kind": _COMBINED_COVER_KIND[r["type"]],
                 "id": r["id"],
                 "name": h["name"],
                 "artists": h.get("artists") or None,

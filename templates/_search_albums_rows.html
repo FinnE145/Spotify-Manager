@@ -2,7 +2,7 @@
 {% from "_macros.html" import entity_link, score_display, cover_cell %}
 {% for a in rows %}
 <tr>
-  {{ cover_cell(a.image_url) }}
+  {{ cover_cell(a.image_url, 'album') }}
   <td>{{ entity_link('album', a.album_id, a.name) }}</td>
   <td>{{ score_display(a.score) }}</td>
 </tr>

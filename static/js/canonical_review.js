@@ -585,7 +585,15 @@
       }
       tr.appendChild(coverTd);
 
-      const titleTd = textCell(t.title + (tid === pinnedTrackId ? " ★" : ""));
+      const titleTd = textCell(t.title);
+      if (tid === pinnedTrackId) {
+        // An icon is an element, not a character -- it cannot be concatenated
+        // onto the title string the way the ★ glyph was.
+        const star = document.createElement("i");
+        star.className = "bi bi-star-fill";
+        star.title = "Pinned representative";
+        titleTd.append(" ", star);
+      }
       if (t.explicit) {
         titleTd.appendChild(document.createTextNode(" "));
         titleTd.appendChild(explicitBadge());

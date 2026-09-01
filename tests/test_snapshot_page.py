@@ -27,36 +27,57 @@ def test_index_data_selects_every_snapshot_column_and_no_others(conn):
     # might read fails here rather than as a Jinja UndefinedError.
     builders.make_playlist(conn, "p-columns", name="Columns")
 
-    data = snapshot.index_data(conn, "")
+    data = snapshot.index_data(conn)
 
-    assert set(data["playlists"][0].keys()) == {
+    # `is_liked` is derived in the SELECT, not a column on the table, so it is
+    # excluded before the two comparisons -- and asserted separately, or the
+    # exclusion would hide its removal.
+    derived = {"is_liked"}
+    keys = set(data["playlists"][0].keys())
+    assert derived <= keys
+    assert keys - derived == {
         "playlist_id", "name", "image_url", "owner", "track_count", "pulled_at",
         "snapshot_id", "last_changed_at", "tracks_pulled_at", "unfollowed_at",
         "description", "last_pull_error", "excluded", "generation_declined",
         "tracks_pulled_snapshot_id",
     }
-    assert set(data["playlists"][0].keys()) == {
+    assert keys - derived == {
         r["name"] for r in conn.execute("PRAGMA table_info(snapshot)")
     }
 
 
-def test_playlists_rank_by_score_and_fall_back_to_name(conn):
-    # source: docs/specs/scoring-H.md §11.1 -- "/dev/snapshot playlist list"
-    # moves from name to score. Both rules are exercised at once and they
-    # disagree: the scored playlist is last alphabetically, so a name-only
-    # implementation puts it third, while the two unscored ones are inserted
-    # in reverse alphabetical order, so an insertion-order implementation
-    # gets those two backwards.
-    scored = builders.make_playlist(conn, "p-zebra", name="Zebra")
+def test_playlists_are_ordered_by_last_changed_newest_first(conn):
+    # source: docs/specs/ui-framework-W.md §9.3 -- the playlist list moves from
+    # score-descending (scoring-H.md §11.1, which this REPLACES) to
+    # last_changed_at descending, name ascending within a date, and a playlist
+    # that has never changed sorted last.
+    #
+    # The fixture makes four implementations fail. Alphabetical order is
+    # deliberately the exact reverse of the wanted order, so a name-only sort
+    # is caught. "Delta" carries a high score and the newest date is on
+    # "Alpha", so a surviving score sort is caught. "Charlie" and "Bravo"
+    # share a date, so a missing name tiebreak is unstable. "Echo" has a NULL
+    # last_changed_at, so a sort that leaves NULLs first is caught.
+    builders.make_playlist(conn, "p-a", name="Alpha", last_changed_at=builders.days_ago(1))
+    builders.make_playlist(conn, "p-c", name="Charlie", last_changed_at=builders.days_ago(5))
+    builders.make_playlist(conn, "p-b", name="Bravo", last_changed_at=builders.days_ago(5))
+    scored = builders.make_playlist(
+        conn, "p-d", name="Delta", last_changed_at=builders.days_ago(9)
+    )
     group = builders.make_group(conn, ["ta", "tb"])
     builders.make_score(conn, "version", group["version"], all_time=90.0)
     builders.make_membership(conn, playlist_id=scored, track_id="ta")
-    builders.make_playlist(conn, "p-beta", name="Beta")
-    builders.make_playlist(conn, "p-alpha", name="Alpha")
+    builders.make_playlist(conn, "p-e", name="Echo", last_changed_at=None)
 
-    data = snapshot.index_data(conn, "")
+    data = snapshot.index_data(conn)
 
-    assert [p["name"] for p in data["playlists"]] == ["Zebra", "Alpha", "Beta"]
+    assert [p["name"] for p in data["playlists"]] == [
+        "Alpha",
+        "Bravo",
+        "Charlie",
+        "Delta",
+        "Echo",
+    ]
 
 
 def test_every_playlist_is_listed_including_excluded_and_unfollowed_ones(conn):
@@ -68,7 +89,7 @@ def test_every_playlist_is_listed_including_excluded_and_unfollowed_ones(conn):
     builders.make_playlist(conn, "p-excluded", name="Excluded", excluded=1)
     builders.make_playlist(conn, "p-gone", name="Gone", unfollowed_at=builders.days_ago(2))
 
-    data = snapshot.index_data(conn, "")
+    data = snapshot.index_data(conn)
 
     assert sorted(p["name"] for p in data["playlists"]) == ["Excluded", "Gone", "Live"]
 
@@ -92,7 +113,7 @@ def test_changes_are_the_newest_membership_events_first_and_carry_their_kind(con
         conn, playlist_id="p-3", track_id="tc", added_at=builders.days_ago(5)
     )
 
-    changes = snapshot.index_data(conn, "")["changes"]
+    changes = snapshot.index_data(conn)["changes"]
 
     assert [(c["track_id"], c["kind"]) for c in changes] == [
         ("tb", "removed"),

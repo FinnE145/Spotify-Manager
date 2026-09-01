@@ -89,7 +89,7 @@
    two ways in two templates is exactly the drift entity_link exists to prevent. #}
 
 {% macro edit_link(track_ids) -%}
-<a class="edit-link" href="{{ url_for('canonical_review', tracks=track_ids|join(',')) }}">Edit in queue</a>
+<a class="edit-link" href="{{ url_for('canonical_review', tracks=track_ids|join(',')) }}">Edit in queue <i class="bi bi-arrow-right"></i></a>
 {%- endmacro %}
 
 {% macro explicit_badge(explicit) -%}
@@ -118,8 +118,20 @@
 {% macro cover_cell(url, kind='') -%}
 <td class="cover-cell">
   {%- if url %}<img class="cover" src="{{ url }}" alt="">
-  {%- elif kind == 'artist' %}<span class="cover cover-placeholder cover-person" aria-hidden="true">
-    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1H3Zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>
+  {%- elif kind == 'artist' %}<span class="cover cover-placeholder cover-glyph" aria-hidden="true">
+    <i class="bi bi-person-fill"></i>
+  </span>
+  {%- elif kind == 'liked' %}<span class="cover cover-placeholder cover-glyph" aria-hidden="true">
+    <i class="bi bi-heart-fill"></i>
+  </span>
+  {%- elif kind == 'album' %}<span class="cover cover-placeholder cover-glyph" aria-hidden="true">
+    <i class="bi bi-vinyl"></i>
+  </span>
+  {%- elif kind == 'playlist' %}<span class="cover cover-placeholder cover-glyph" aria-hidden="true">
+    <i class="bi bi-music-note-beamed"></i>
+  </span>
+  {%- elif kind == 'song' %}<span class="cover cover-placeholder cover-glyph" aria-hidden="true">
+    <i class="bi bi-music-note"></i>
   </span>
   {%- else %}<span class="cover cover-placeholder"></span>{% endif -%}
 </td>

@@ -12,17 +12,25 @@
     <p><a href="{{ url_for('audit') }}">Go to Audit →</a></p>
   </section>
 
-  <p><a href="{{ url_for('search_page') }}">Search your library →</a> — songs, albums, artists and playlists.</p>
-
   <section class="quick-links">
     <h2>Jump to</h2>
-    <ul>
-      <li><a href="{{ url_for('canvas') }}">Org Canvas</a></li>
-      <li><a href="{{ url_for('audit') }}">Audit</a></li>
-      <li><a href="{{ url_for('covers') }}">Cover Library</a></li>
-      <li><a href="{{ url_for('folders') }}">Folder Structure</a></li>
-      <li><a href="{{ url_for('analytics') }}">Analytics</a></li>
-    </ul>
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 g-3">
+      {% for link in [
+        ('canvas', 'Org Canvas'),
+        ('audit', 'Audit'),
+        ('covers', 'Cover Library'),
+        ('folders', 'Folder Structure'),
+        ('analytics', 'Analytics'),
+      ] %}
+      <div class="col">
+        <a class="card h-100 text-decoration-none" href="{{ url_for(link[0]) }}">
+          <div class="card-body">
+            <span class="card-title">{{ link[1] }}</span>
+          </div>
+        </a>
+      </div>
+      {% endfor %}
+    </div>
   </section>
 </main>
 {% endblock %}

@@ -99,50 +99,39 @@ def backfill_pending(conn):
     return conn.execute("SELECT COUNT(*) FROM track WHERE raw_json IS NULL").fetchone()[0]
 
 
-def index_data(conn, q):
+def index_data(conn):
     """Everything /dev/snapshot renders, as the template's kwargs
     (docs/codebase-health/P3_refactor.md §4.1).
 
-    `q` is the already-stripped ?q= track search -- the route owns parsing
-    it, and no Flask reaches in here. The page's pending-generation prompt
-    stays in the route too: it belongs to generations.py, and pulling it in
-    would give this module its first dependency on that one, which is
-    §4.1.1's reasoning for leaving last_auto_run / auto_grouped behind."""
+    The page's pending-generation prompt stays in the route: it belongs to
+    generations.py, and pulling it in would give this module its first
+    dependency on that one, which is §4.1.1's reasoning for leaving
+    last_auto_run / auto_grouped behind.
+
+    The ?q= track finder this used to serve was removed in ui-framework-W.md
+    §9.3 -- /search supersedes it, and it was the page's only reason to take
+    a query argument at all."""
     # Named columns, not `SELECT *` (P3_refactor.md §4.5). See the matching
     # list on /playlist/<id> for why the two are not shared.
+    # is_liked is computed here rather than compared in the template: a page
+    # should be told what kind of row it is rendering, not handed an id to
+    # recognise. The constant lives in this module, so the comparison does too.
     playlists = conn.execute(
         "SELECT playlist_id, name, image_url, owner, track_count, pulled_at, "
         "snapshot_id, last_changed_at, tracks_pulled_at, unfollowed_at, description, "
-        "last_pull_error, excluded, generation_declined, tracks_pulled_snapshot_id "
-        "FROM snapshot"
+        "last_pull_error, excluded, generation_declined, tracks_pulled_snapshot_id, "
+        "playlist_id = ? AS is_liked "
+        "FROM snapshot",
+        (LIKED_PLAYLIST_ID,),
     ).fetchall()
-    playlist_score_map = scoring.playlist_scores(conn, [p["playlist_id"] for p in playlists])
-    playlists = sorted(
-        playlists,
-        key=lambda p: (
-            -playlist_score_map.get(p["playlist_id"], {}).get("all_time", 0.0),
-            (p["name"] or "").casefold(),
-        ),
-    )
-
-    track_matches = []
-    if q:
-        like = f"%{q}%"
-        track_matches = conn.execute(
-            """
-            SELECT t.track_id, t.name, COALESCE(ta.artists, '') AS artists, COUNT(m.id) AS appearances
-            FROM track t
-            JOIN membership m ON m.track_id = t.track_id AND m.removed_at IS NULL
-            LEFT JOIN track_artists ta ON ta.track_id = t.track_id
-            WHERE t.name LIKE ?
-               OR EXISTS (SELECT 1 FROM track_artist x JOIN artist ar USING(artist_id)
-                          WHERE x.track_id = t.track_id AND ar.name LIKE ?)
-            GROUP BY t.track_id
-            ORDER BY t.name COLLATE NOCASE
-            LIMIT 50
-            """,
-            (like, like),
-        ).fetchall()
+    # Newest change first (ui-framework-W.md §9.3), which replaces the
+    # score-descending order the page used to carry. Two stable passes rather
+    # than one key, because the two halves run in opposite directions: name
+    # ascending within a date, dates descending overall. A NULL last_changed_at
+    # becomes "", which reverse=True puts last -- where a playlist that has
+    # never changed belongs.
+    playlists = sorted(playlists, key=lambda p: (p["name"] or "").casefold())
+    playlists.sort(key=lambda p: p["last_changed_at"] or "", reverse=True)
 
     changes = conn.execute(
         """
@@ -162,8 +151,6 @@ def index_data(conn, q):
     return {
         "playlists": playlists,
         "summary": summary_counts(conn),
-        "query": q,
-        "track_matches": track_matches,
         "changes": changes,
     }
 

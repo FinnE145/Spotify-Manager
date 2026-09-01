@@ -18,6 +18,7 @@ being run twice safely and about not trusting the zip:
 """
 
 import io
+import re
 import json
 import os
 import zipfile
@@ -620,18 +621,30 @@ def test_tracks_never_played_only_counts_a_tracks_own_absence_of_plays(conn):
 # -- app.py: /dev/import and its two POST routes -----------------------------
 
 
+def _reimport_button_tag(response):
+    """The Re-import button's opening tag.
+
+    Matched by id rather than as a fixed substring: the original assertion
+    pinned `type="button" disabled` as *adjacent* text, so adding a class
+    attribute between them broke a test about behaviour (ui-framework-W.md).
+    Asserting the tag was found matters -- without it, a page that stopped
+    rendering the button at all would satisfy the "not disabled" case.
+    """
+    tag = re.search(r'<button[^>]*id="reimport-btn"[^>]*>', response.get_data(as_text=True))
+    assert tag, "the Re-import button is not on the page at all"
+    return tag.group(0)
+
+
 def test_the_import_page_toggles_the_reimport_button_on_has_upload(client, conn):
     """`has_upload` decides whether the Re-import button is disabled. Without
     a usable upload it must be disabled; with one, it must not be."""
     # source: S_sweep.md §3 -- isnot at app.py:322
-    without = client.get("/dev/import")
-    assert b'id="reimport-btn" type="button" disabled' in without.data
+    assert "disabled" in _reimport_button_tag(client.get("/dev/import"))
 
     upload_row(conn, files_parsed=3)
     conn.commit()
 
-    with_upload = client.get("/dev/import")
-    assert b'id="reimport-btn" type="button" disabled' not in with_upload.data
+    assert "disabled" not in _reimport_button_tag(client.get("/dev/import"))
 
 
 def _real_zip_upload():

@@ -43,6 +43,23 @@ def _cap_listing(rows, query):
     return rows if query else rows[:_LISTING_CAP]
 
 
+def _scrobble_payload(conn):
+    """What both /api/scrobble endpoints return: index_data plus the plays
+    table's rows, server-rendered.
+
+    The rows come back as HTML rather than as JSON for the reason
+    /api/canonical/cross/listing does -- it is the same fragment scrobble.html
+    includes on page load, so a poll cannot render a row differently from the
+    page that spawned it, and the entity links in it stay entity_link.
+
+    Both endpoints get it, not just the poll: the two returning one identical
+    shape is what lets scrobble.js re-render the whole status block from
+    either, and 50 rows of already-fetched data is not worth a second shape."""
+    data = scrobble.index_data(conn)
+    data["plays_html"] = render_template("_scrobble_plays_rows.html", **data)
+    return data
+
+
 def create_app():
     app = Flask(__name__)
     app.secret_key = SECRET_KEY
@@ -103,6 +120,28 @@ def create_app():
             "scoring_failed": status["outcome"] == "error",
             "scoring_error": status["error"],
         }
+
+    # The dev tool list, in one place because it is rendered twice: /dev's own
+    # list-group and the navbar gear's hover menu (ui-framework-W.md §9). Two
+    # copies would drift the first time a dev page was added.
+    _DEV_PAGES = [
+        # Every blurb is an instruction, not a description: this is an index of
+        # tools, so the useful thing is what you would go there to do.
+        ("dev_snapshot", "Snapshot", "Pull and browse the library snapshot."),
+        ("dev_canonical", "Canonical Tracks", "Review the four-tier track grouping."),
+        ("dev_artists", "Artists", "Merge Spotify's duplicate artist ids."),
+        ("dev_import", "Play History", "Import a streaming-history export and check its coverage."),
+        ("dev_roundtrip", "Round-trip",
+         "Resolve played-but-unknown URIs. Writes to Spotify."),
+        ("dev_generations", "Generations", "Browse the current-favs playlists and their tenure."),
+        ("dev_scoring", "Scoring", "Inspect materialized scores and recompute them."),
+        ("dev_scrobble", "Scrobble", "Check polling status and the last 50 plays."),
+    ]
+
+    @app.context_processor
+    def inject_dev_pages():
+        return {"dev_pages": _DEV_PAGES}
+
 
     # -- Error handling -------------------------------------------------
 
@@ -394,7 +433,7 @@ def create_app():
         # nothing is authenticated to scrobble against yet.
         conn = db.get_db()
         scrobble.poll(conn)
-        return jsonify(scrobble.index_data(conn))
+        return jsonify(_scrobble_payload(conn))
 
     @app.route("/api/scrobble/toggle", methods=["POST"])
     def api_scrobble_toggle():
@@ -404,7 +443,7 @@ def create_app():
         # The same payload /api/scrobble/poll returns, so the page's whole
         # status block re-renders from one shape -- pausing changes the
         # next-poll line too, not just which button is showing.
-        return jsonify(scrobble.index_data(conn))
+        return jsonify(_scrobble_payload(conn))
 
     @app.route("/dev/canonical", endpoint="dev_canonical")
     def canonical_index():
@@ -695,14 +734,13 @@ def create_app():
     @app.route("/dev/snapshot", endpoint="dev_snapshot")
     def snapshot_index():
         conn = db.get_db()
-        q = request.args.get("q", "").strip()
         return render_template(
             "snapshot.html",
             active="dev_snapshot",
             # generations.py's, not snapshot.py's -- see index_data's
             # docstring for why it is fetched here rather than in there.
             pending_generation=generations.pending_new_generation(conn),
-            **snapshot.index_data(conn, q),
+            **snapshot.index_data(conn),
         )
 
     # -- Generations & tenure -------------------------------------------

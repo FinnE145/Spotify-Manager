@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, generation_confirm_banner, entity_link %}
+{% from "_macros.html" import datetime_span, generation_confirm_banner, entity_link, cover_cell %}
 
 {% block title %}Symr — Snapshot{% endblock %}
 
@@ -9,8 +9,9 @@
 
   {{ generation_confirm_banner(pending_generation, "dev_snapshot") }}
 
-  <section class="panel" id="snapshot-status">
-    <h2>Status</h2>
+  {# Status and Controls carry no panel and no heading (ui-framework-W.md §9.3):
+     the status *is* the top of the page, and a row of buttons announces itself. #}
+  <div id="snapshot-status">
     <p>
       <span data-field="playlists_pulled">{{ summary.playlists_pulled }}</span> /
       <span data-field="playlists_total">{{ summary.playlists_total }}</span> pulled
@@ -31,105 +32,97 @@
       &middot; Last refresh:
       <span data-field="last_refresh_at" {% if summary.last_refresh_at %}data-datetime="{{ summary.last_refresh_at }}"{% endif %}>{{ summary.last_refresh_at or "never" }}</span>
     </p>
-    <div id="snapshot-progress" class="progress-bar" hidden>
-      <div id="snapshot-progress-fill" class="progress-bar-fill"></div>
+    <div id="snapshot-progress" class="progress" hidden>
+      <div id="snapshot-progress-fill" class="progress-bar"></div>
     </div>
     <div class="progress-meta">
       <p id="snapshot-progress-label" class="meta" hidden></p>
       <p id="snapshot-requests" class="meta" hidden><span data-field="requests">0</span> requests</p>
     </div>
-  </section>
+  </div>
 
-  <section class="panel">
-    <h2>Controls</h2>
-    <button id="pull-btn" type="button">Full pull</button>
-    <button id="refresh-btn" type="button">Refresh</button>
-    <button id="backfill-btn" type="button" {{ 'disabled' if not summary.backfill_pending }}>
+  <div class="button-row">
+    <button id="pull-btn" type="button" class="btn btn-sm btn-outline-emphasis">Full pull</button>
+    <button id="refresh-btn" type="button" class="btn btn-sm btn-primary">Refresh</button>
+    <button id="backfill-btn" type="button" class="btn btn-sm btn-outline-secondary" {{ 'disabled' if not summary.backfill_pending }}>
       Backfill (<span data-field="backfill_pending">{{ summary.backfill_pending }}</span>
       request<span data-plural-for="backfill_pending">{{ "" if summary.backfill_pending == 1 else "s" }}</span>)
     </button>
-    <button id="snapshot-stop-btn" type="button" disabled>Stop</button>
-    <p id="snapshot-error" class="error" hidden></p>
-  </section>
+    <button id="snapshot-stop-btn" type="button" class="btn btn-sm btn-outline-danger" disabled>Stop</button>
+  </div>
+  <p id="snapshot-error" class="error" hidden></p>
 
-  <section class="panel">
-    <h2>Playlists</h2>
-    {% if playlists %}
-    <label class="checkbox-label">
-      <input type="checkbox" id="hide-uncapturable-toggle">
-      Hide uncapturable playlists
-    </label>
-    <table class="data-table" id="playlist-table">
-      <thead>
-        <tr>
-          <th></th>
-          <th>Name</th>
-          <th>Owner</th>
-          <th>Tracks</th>
-          <th>Last changed</th>
-          <th>Captured</th>
-          <th>Excluded</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in playlists %}
-        <tr class="{{ 'unfollowed' if p.unfollowed_at }}" {% if p.last_pull_error %}data-uncapturable="1"{% endif %}>
-          <td>{% if p.image_url %}<img class="cover" src="{{ p.image_url }}" alt="">{% endif %}</td>
-          <td>{{ entity_link('playlist', p.playlist_id, p.name) }}</td>
-          <td>{{ p.owner or "" }}</td>
-          <td>{{ p.track_count if p.track_count is not none else "" }}</td>
-          <td>{{ datetime_span(p.last_changed_at) }}</td>
-          <td>{% if p.tracks_pulled_at %}yes{% elif p.last_pull_error %}<span title="{{ p.last_pull_error }}">blocked</span>{% else %}no{% endif %}</td>
-          <td><input type="checkbox" data-exclude-toggle data-playlist-id="{{ p.playlist_id }}" {{ 'checked' if p.excluded }}></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="empty">Nothing captured yet — run a full pull.</p>
-    {% endif %}
-  </section>
-
-  <section class="panel">
-    <h2>Find a track</h2>
-    <form method="get" action="{{ url_for('dev_snapshot') }}">
-      <input type="text" name="q" value="{{ query }}" placeholder="Track or artist name">
-      <button type="submit">Search</button>
-    </form>
-    {% if query %}
-      {% if track_matches %}
-      <ul>
-        {% for t in track_matches %}
-        <li>
-          {{ entity_link('track', t.track_id, t.name) }}
-          — {{ t.artists }} ({{ t.appearances }} playlist{{ "s" if t.appearances != 1 else "" }})
-        </li>
-        {% endfor %}
-      </ul>
+  <section>
+    {# Collapsed by default: 154 rows made this the whole page. A collapse rather
+       than an inner scroll region, which traps the wheel on the way down the
+       page (ui-framework-W.md §9.3). #}
+    <h2 class="collapse-heading">
+      <button type="button" class="btn" data-bs-toggle="collapse"
+              data-bs-target="#playlists-body" aria-expanded="false"
+              aria-controls="playlists-body">
+        Playlists ({{ "{:,}".format(playlists|length) }})
+      </button>
+    </h2>
+    <div class="collapse" id="playlists-body">
+      {% if playlists %}
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="hide-uncapturable-toggle" checked>
+        <label class="form-check-label" for="hide-uncapturable-toggle">Hide uncapturable playlists</label>
+      </div>
+      <table class="table table-sm table-hover align-middle" id="playlist-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Name</th>
+            <th>Owner</th>
+            <th>Tracks</th>
+            <th>Last changed</th>
+            <th>Captured</th>
+            <th>Excluded</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in playlists %}
+          <tr class="{{ 'unfollowed' if p.unfollowed_at }}" {% if p.last_pull_error or p.unfollowed_at %}data-uncapturable="1" hidden{% endif %}>
+            {{ cover_cell(p.image_url, 'liked' if p.is_liked else 'playlist') }}
+            <td>{{ entity_link('playlist', p.playlist_id, p.name) }}</td>
+            <td class="muted">{{ p.owner or "" }}</td>
+            <td>{{ p.track_count if p.track_count is not none else "" }}</td>
+            <td class="muted">{{ datetime_span(p.last_changed_at) }}</td>
+            <td class="muted">{% if p.tracks_pulled_at %}yes{% elif p.last_pull_error %}<span title="{{ p.last_pull_error }}">blocked</span>{% else %}no{% endif %}</td>
+            <td><input class="form-check-input" type="checkbox" data-exclude-toggle data-playlist-id="{{ p.playlist_id }}" {{ 'checked' if p.excluded }}></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
       {% else %}
-      <p class="empty">No tracks match "{{ query }}".</p>
+      <p class="empty">Nothing captured yet — run a full pull.</p>
       {% endif %}
-    {% endif %}
+    </div>
   </section>
 
-  <section class="panel">
+  <hr>
+
+  <section>
     <h2>Recent changes</h2>
     {% if changes %}
-    <table class="data-table">
+    <table class="table table-sm table-hover align-middle">
       <thead>
         <tr>
           <th>When</th>
           <th>Change</th>
           <th>Track</th>
+          <th>Artist</th>
           <th>Playlist</th>
         </tr>
       </thead>
       <tbody>
         {% for c in changes %}
         <tr>
-          <td>{{ datetime_span(c.event_at) }}</td>
-          <td>{{ c.kind }}</td>
-          <td>{{ entity_link('track', c.track_id, c.track_name) }} — {{ c.artists }}</td>
+          <td class="muted">{{ datetime_span(c.event_at) }}</td>
+          <td class="muted">{{ c.kind }}</td>
+          <td>{{ entity_link('track', c.track_id, c.track_name) }}</td>
+          <td class="muted">{{ c.artists }}</td>
           <td>{{ entity_link('playlist', c.playlist_id, c.playlist_name) }}</td>
         </tr>
         {% endfor %}

@@ -1,0 +1,24 @@
+{# One play per row, with no <table>/<tbody> wrapper: scrobble.html includes
+   this directly and /api/scrobble/* renders the same fragment standalone for
+   scrobble.js to swap in, so a page load and a poll can never disagree about
+   a row's markup (the _search_*_rows.html convention). #}
+{% from "_macros.html" import datetime_span, entity_link, spotify_track_link, cover_cell %}
+{% set ns = namespace(divider_shown=false) %}
+{% for p in recent_plays %}
+{% if export_cutover and not ns.divider_shown and p.ts <= export_cutover %}
+<tr class="divider-row"><td colspan="4" class="meta">Export data begins here</td></tr>
+{% set ns.divider_shown = true %}
+{% endif %}
+<tr>
+  {{ cover_cell(p.album_image_url, 'song') }}
+  <td>
+    {% if p.track_id %}
+    {{ entity_link('track', p.track_id, p.track_name) }}
+    {% else %}
+    {{ spotify_track_link(p.spotify_track_uri, p.reported_track_name) }}
+    {% endif %}
+  </td>
+  <td class="muted">{{ p.source }}</td>
+  <td class="muted">{{ datetime_span(p.ts) }}</td>
+</tr>
+{% endfor %}

@@ -21,7 +21,6 @@
     "in_library_uris",
     "in_library_plays",
     "in_library_pct",
-    "tracks_total",
     "library_tracks_total",
     "tracks_never_played",
   ];

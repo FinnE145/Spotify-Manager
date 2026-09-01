@@ -41,7 +41,7 @@
     <div>
       <h1>
         {{ rep.name if rep else "Group " ~ group_id }}
-        {% if pinned %}<span class="rep-marker pinned" title="Pinned representative">★</span>{% endif %}
+        {% if pinned %}<span class="rep-marker pinned" title="Pinned representative"><i class="bi bi-star-fill"></i></span>{% endif %}
       </h1>
       <p class="meta">
         {{ artist_names(artist_credits.get(rep.track_id, [])) if rep else "" }}

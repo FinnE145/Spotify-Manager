@@ -353,10 +353,11 @@ def _last_poll_row(conn):
 def _recent_plays(conn, limit=50):
     rows = conn.execute(
         "SELECT p.ts, p.source, p.spotify_track_uri, p.reported_track_name, "
-        "t.track_id, t.name AS track_name "
+        "t.track_id, t.name AS track_name, al.image_url AS album_image_url "
         "FROM play p "
         "LEFT JOIN played_uri_track x ON x.uri = p.spotify_track_uri "
         "LEFT JOIN track t ON t.track_id = x.track_id "
+        "LEFT JOIN album al ON al.album_id = t.album_id "
         "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
         (limit,),
     ).fetchall()

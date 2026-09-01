@@ -7,12 +7,21 @@
   const clearBtn = document.getElementById("roundtrip-clear-failures-btn");
   const busyNote = document.getElementById("roundtrip-busy-note");
   const errorEl = document.getElementById("roundtrip-error");
-  const progressEl = document.getElementById("roundtrip-progress");
   const progressFill = document.getElementById("roundtrip-progress-fill");
-  const progressLabel = document.getElementById("roundtrip-progress-label");
-  const requestsEl = document.getElementById("roundtrip-requests");
   const logEl = document.getElementById("roundtrip-log");
   const logEmptyEl = document.getElementById("roundtrip-log-empty");
+
+  // ---------- sticky action bar (ui-framework-W.md §9.9) ----------
+  // Three states: idle (counts + start buttons), live (progress + newest feed
+  // line + Stop), done (that line + Reload). Both jobs drive the one bar.
+  const barIdle = document.getElementById("rt-bar-idle");
+  const barLive = document.getElementById("rt-bar-live");
+  const liveLine = document.getElementById("rt-live-line");
+  const reloadBtn = document.getElementById("rt-reload-btn");
+
+  // Which job the bar is currently showing, so the single Stop button knows
+  // which endpoint to hit.
+  let liveJob = null;
 
   // ---------- round-trip queue box (spec M §4.6) ----------
   const listeningExcludedNote = document.getElementById("listening-excluded-note");
@@ -20,15 +29,9 @@
   const listeningReaddBtn = document.getElementById("listening-readd-btn");
   const incompleteIsrcClearBtn = document.getElementById("incomplete-isrc-clear-btn");
 
-  // ---------- album backfill ----------
-  const backfillStopBtn = document.getElementById("backfill-stop-btn");
-  const backfillBusyNote = document.getElementById("backfill-busy-note");
-  const backfillError = document.getElementById("backfill-error");
-  const backfillProgressEl = document.getElementById("backfill-progress");
-  const backfillProgressFill = document.getElementById("backfill-progress-fill");
-  const backfillProgressLabel = document.getElementById("backfill-progress-label");
-  const backfillLogEl = document.getElementById("backfill-log");
-  const backfillLogEmptyEl = document.getElementById("backfill-log-empty");
+  // The backfill has no controls of its own beyond its Add buttons: its
+  // progress, its feed, its Stop and its errors are all the shared ones above.
+  const backfillError = errorEl;
 
   const COUNT_FIELDS = [
     "remaining_uris",
@@ -43,7 +46,6 @@
     "incomplete_isrc_uris",
     "reconcilable",
     "review_uris",
-    "requests",
   ];
 
   const JOB_NAMES = {
@@ -80,19 +82,25 @@
     // Tracked off the live count, not just `running`, so it disables itself
     // once a run leaves nothing to reconcile.
     reconcileBtn.disabled = Boolean(status.active_job) || !status.reconcilable;
-    stopBtn.disabled = !status.running || status.stopping;
-    stopBtn.textContent = status.stopping ? "Stopping…" : "Stop";
     busyNote.hidden = !otherJob;
     if (otherJob) {
       busyNote.textContent = `${JOB_NAMES[status.active_job] || status.active_job} is running — one job at a time.`;
     }
-    progressEl.hidden = !status.running;
-    requestsEl.hidden = !status.running;
+  }
+
+  function setBarState(state) {
+    barIdle.hidden = state !== "idle";
+    barLive.hidden = state === "idle";
+    stopBtn.hidden = state !== "live";
+    reloadBtn.hidden = state !== "done";
   }
 
   function setQueueControls(status) {
     listeningExcludedNote.hidden = !status.listening_muted;
     listeningClearBtn.hidden = status.listening_muted;
+    // Muting a row with nothing in it does nothing -- the other three rows
+    // always had this and the listening one never did.
+    listeningClearBtn.disabled = !status.listening_uris;
     listeningReaddBtn.hidden = !status.listening_muted;
     document.querySelectorAll("[data-wanted-clear]").forEach((btn) => {
       const field = btn.dataset.wantedClear === "album" ? "album_page_uris" : "album_backfill_uris";
@@ -118,6 +126,17 @@
     );
   }
 
+  function renderFeed(rtEntries, backfillEntries) {
+    // One feed for both jobs. Each entry keeps its source so a backfill run and
+    // a round-trip run are distinguishable in the same list; they are merged by
+    // timestamp rather than concatenated.
+    const entries = [
+      ...rtEntries.map((e) => ({ ...e, source: "round-trip" })),
+      ...backfillEntries.map((e) => ({ ...e, source: "backfill" })),
+    ].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+    renderLog(entries);
+  }
+
   function renderLog(entries) {
     // Follow the tail only when the reader is already at it, so scrolling up
     // to read an earlier batch doesn't get yanked back down every poll.
@@ -132,6 +151,13 @@
       const ts = makeDateSpan(entry.ts);
       ts.className = "event-log-ts";
       li.appendChild(ts);
+      if (entry.source) {
+        const tag = document.createElement("span");
+        tag.className = "badge";
+        tag.textContent = entry.source;
+        li.appendChild(tag);
+        li.appendChild(document.createTextNode(" "));
+      }
       li.appendChild(document.createTextNode(entry.message));
       logEl.appendChild(li);
     });
@@ -140,8 +166,7 @@
   }
 
   function showDone(status) {
-    progressLabel.hidden = false;
-    progressLabel.textContent = "";
+    liveLine.textContent = "";
     errorEl.hidden = true; // the terminal state is fully described here
 
     const totals =
@@ -152,27 +177,27 @@
     const summary = document.createElement("span");
     if (status.outcome === "rate_limited") {
       summary.textContent = `Rate limited after ${totals} — retry `;
-      progressLabel.appendChild(summary);
-      if (status.retry_at) progressLabel.appendChild(makeDateSpan(status.retry_at));
+      liveLine.appendChild(summary);
+      if (status.retry_at) liveLine.appendChild(makeDateSpan(status.retry_at));
     } else if (status.outcome === "error") {
       summary.textContent = `Run failed after ${totals}: ${status.error}`;
-      progressLabel.appendChild(summary);
+      liveLine.appendChild(summary);
     } else if (status.outcome === "stopped") {
       // A deliberate stop is not a fault and must not render as one.
       summary.textContent = `Stopped — ${totals}.`;
-      progressLabel.appendChild(summary);
+      liveLine.appendChild(summary);
     } else if (status.outcome === "breaker") {
       summary.textContent = `Stopped by the circuit breaker (three consecutive failed batches) — ${totals}.`;
-      progressLabel.appendChild(summary);
+      liveLine.appendChild(summary);
     } else {
       summary.textContent = `Run finished — ${totals}.`;
-      progressLabel.appendChild(summary);
+      liveLine.appendChild(summary);
     }
 
     if (status.left_in_playlist) {
       const left = document.createElement("span");
       left.textContent = ` ${status.left_in_playlist} item(s) were left in the loader playlist — clear them by hand in Spotify if you want to.`;
-      progressLabel.appendChild(left);
+      liveLine.appendChild(left);
     }
 
     if (status.failures && status.failures.length) {
@@ -189,17 +214,9 @@
         li.appendChild(document.createTextNode(` — ${f.reason}`));
         list.appendChild(li);
       });
-      progressLabel.appendChild(list);
+      liveLine.appendChild(list);
     }
 
-    const reloadLink = document.createElement("a");
-    reloadLink.href = "#";
-    reloadLink.textContent = "Reload to see results";
-    reloadLink.addEventListener("click", (e) => {
-      e.preventDefault();
-      window.location.reload();
-    });
-    progressLabel.appendChild(reloadLink);
   }
 
   // ---------- album backfill status (spec M §4.5/§4.6) ----------
@@ -213,25 +230,8 @@
     return `${label} · ${status.uris_queued} uri(s) queued, ${status.requests} requests spent`;
   }
 
-  function renderBackfillLog(entries) {
-    const following =
-      backfillLogEl.scrollHeight - backfillLogEl.scrollTop - backfillLogEl.clientHeight < 24;
-    backfillLogEl.textContent = "";
-    entries.forEach((entry) => {
-      const li = document.createElement("li");
-      const ts = makeDateSpan(entry.ts);
-      ts.className = "event-log-ts";
-      li.appendChild(ts);
-      li.appendChild(document.createTextNode(entry.message));
-      backfillLogEl.appendChild(li);
-    });
-    backfillLogEmptyEl.hidden = entries.length > 0;
-    if (following) backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
-  }
-
   function showBackfillDone(status) {
-    backfillProgressLabel.hidden = false;
-    backfillProgressLabel.textContent = "";
+    liveLine.textContent = "";
     backfillError.hidden = true;
     const totals =
       `${status.albums_done}/${status.albums_total} album(s), ` +
@@ -240,58 +240,28 @@
     const summary = document.createElement("span");
     if (status.outcome === "rate_limited") {
       summary.textContent = `Rate limited after ${totals} — retry `;
-      backfillProgressLabel.appendChild(summary);
-      if (status.retry_at) backfillProgressLabel.appendChild(makeDateSpan(status.retry_at));
+      liveLine.appendChild(summary);
+      if (status.retry_at) liveLine.appendChild(makeDateSpan(status.retry_at));
     } else if (status.outcome === "error") {
       summary.textContent = `Run failed after ${totals}: ${status.error}`;
-      backfillProgressLabel.appendChild(summary);
+      liveLine.appendChild(summary);
     } else if (status.outcome === "stopped") {
       summary.textContent = `Stopped — ${totals}.`;
-      backfillProgressLabel.appendChild(summary);
+      liveLine.appendChild(summary);
     } else {
       summary.textContent = `Finished — ${totals}.`;
-      backfillProgressLabel.appendChild(summary);
+      liveLine.appendChild(summary);
     }
 
-    const reloadLink = document.createElement("a");
-    reloadLink.href = "#";
-    reloadLink.textContent = " Reload to see the fresh queue and Add-button estimates";
-    reloadLink.addEventListener("click", (e) => {
-      e.preventDefault();
-      window.location.reload();
-    });
-    backfillProgressLabel.appendChild(reloadLink);
   }
 
   function handleBackfillStatus(status) {
-    const otherJob = status.active_job && status.active_job !== "backfill";
     document.querySelectorAll("[data-backfill-add]").forEach((btn) => {
       // dataset.empty is the server-rendered "0 albums in scope" fact, which
       // stays true until a reload re-derives it -- active_job is the only
       // part of this that's meant to change live.
       btn.disabled = Boolean(status.active_job) || btn.dataset.empty === "1";
     });
-    backfillStopBtn.disabled = !status.running || status.stopping;
-    backfillStopBtn.textContent = status.stopping ? "Stopping…" : "Stop";
-    backfillBusyNote.hidden = !otherJob;
-    if (otherJob) {
-      backfillBusyNote.textContent = `${JOB_NAMES[status.active_job] || status.active_job} is running — one job at a time.`;
-    }
-    backfillProgressEl.hidden = !status.running;
-    renderBackfillLog(status.log || []);
-
-    if (status.running) {
-      sawBackfillRunning = true;
-      backfillProgressLabel.hidden = false;
-      backfillProgressLabel.textContent = backfillPhaseLabel(status);
-      const pct = status.albums_total
-        ? Math.round((status.albums_done / status.albums_total) * 100)
-        : 0;
-      backfillProgressFill.style.width = `${pct}%`;
-    } else if (status.finished_at && sawBackfillRunning) {
-      showBackfillDone(status);
-      sawBackfillRunning = false;
-    }
   }
 
   function poll() {
@@ -301,29 +271,48 @@
     Promise.all([api("/api/roundtrip/status"), api("/api/backfill/status")])
       .then(([status, backfillStatus]) => {
         COUNT_FIELDS.forEach((name) => setField(name, status[name]));
-        renderLog(status.log || []);
+        renderFeed(status.log || [], backfillStatus.log || []);
 
         if (status.running) sawRunning = true;
+        if (backfillStatus.running) sawBackfillRunning = true;
         setControls(status);
         setQueueControls(status);
-
-        if (status.running) {
-          progressLabel.hidden = false;
-          progressLabel.textContent = phaseLabel(status);
-          const pct = status.batch_total
-            ? Math.round((status.batch_done / status.batch_total) * 100)
-            : 0;
-          progressFill.style.width = `${pct}%`;
-        } else if (status.finished_at && sawRunning) {
-          showDone(status);
-          sawRunning = false;
-        }
-
         handleBackfillStatus(backfillStatus);
 
-        // Keep polling while another job holds the slot, so buttons come
-        // back on their own once it finishes.
-        if (status.active_job) setTimeout(poll, 1000);
+        const live = status.running ? status : backfillStatus.running ? backfillStatus : null;
+        if (live) {
+          liveJob = status.running ? "roundtrip" : "backfill";
+          setBarState("live");
+          liveLine.textContent = status.running
+            ? phaseLabel(status)
+            : backfillPhaseLabel(backfillStatus);
+          const pct = status.running
+            ? (status.batch_total ? Math.round((status.batch_done / status.batch_total) * 100) : 0)
+            : (backfillStatus.albums_total
+                ? Math.round((backfillStatus.albums_done / backfillStatus.albums_total) * 100)
+                : 0);
+          progressFill.style.width = `${pct}%`;
+          stopBtn.disabled = live.stopping;
+          stopBtn.textContent = live.stopping ? "Stopping…" : "Stop";
+        } else if (sawRunning && status.finished_at) {
+          showDone(status);
+          setBarState("done");
+          sawRunning = false;
+        } else if (sawBackfillRunning && backfillStatus.finished_at) {
+          showBackfillDone(backfillStatus);
+          setBarState("done");
+          sawBackfillRunning = false;
+        }
+
+        // Reschedule on evidence from EITHER payload. `active_job` is stamped
+        // onto each response as it is served, and these are two concurrent
+        // requests -- so a job that released the slot between them came back as
+        // `active_job: null` here while the backfill payload still read
+        // "running". The loop then painted that stale frame and stopped
+        // forever, leaving the bar frozen mid-run with Stop still live.
+        if (status.active_job || status.running || backfillStatus.running) {
+          setTimeout(poll, 1000);
+        }
       })
       .catch(() => {
         // Transient failure (e.g. dev server restart mid-run) — keep going.
@@ -431,12 +420,6 @@
     });
   });
 
-  backfillStopBtn.addEventListener("click", () => {
-    backfillStopBtn.disabled = true;
-    backfillStopBtn.textContent = "Stopping…";
-    api("/api/backfill/stop", { method: "POST" }).catch(() => {});
-  });
-
   // ---------- manual aliases ----------
 
   const reviewError = document.getElementById("review-error");
@@ -487,11 +470,15 @@
 
   stopBtn.addEventListener("click", () => {
     // Switched immediately so it's obvious the request landed — the actual
-    // stop waits for the current batch to finish and commit.
+    // stop waits for the current batch to finish and commit. One button for
+    // both jobs, so it has to ask which one it is stopping.
     stopBtn.disabled = true;
     stopBtn.textContent = "Stopping…";
-    api("/api/roundtrip/stop", { method: "POST" }).catch(() => {});
+    const path = liveJob === "backfill" ? "/api/backfill/stop" : "/api/roundtrip/stop";
+    api(path, { method: "POST" }).catch(() => {});
   });
+
+  reloadBtn.addEventListener("click", () => window.location.reload());
 
   clearBtn.addEventListener("click", () => {
     clearBtn.disabled = true;

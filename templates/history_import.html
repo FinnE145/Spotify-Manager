@@ -6,32 +6,41 @@
 {% block content %}
 <main class="page">
   <h1>Play History</h1>
+
+  {# Re-import sits outside the form deliberately: it is type="button" and bound
+     by id, so nothing depended on it being inside, and pulling it out is what
+     lets it right-align opposite the upload group. #}
+  <div class="button-row justify-content-between align-items-start">
+    <form id="upload-form" class="mb-0">
+      <div class="input-group input-group-sm">
+        <input type="file" class="form-control" id="history-file" name="file" accept=".zip,application/zip">
+        <button id="upload-btn" type="submit" class="btn btn-primary">Upload &amp; import</button>
+      </div>
+    </form>
+    <button id="reimport-btn" type="button" class="btn btn-sm btn-outline-emphasis" {{ 'disabled' if not has_upload }}>
+      Re-import newest upload
+    </button>
+  </div>
+
   <p class="meta">
-    Imports a Spotify GDPR &ldquo;Extended Streaming History&rdquo; export. Local file only —
-    no Spotify requests, no writes to the library.
-    &middot; <a href="{{ url_for('dev_roundtrip') }}">Add new imports to db</a>
+    <a href="{{ url_for('dev_roundtrip') }}">Add new imports to db <i class="bi bi-arrow-right"></i></a>
   </p>
 
-  <section class="panel">
-    <h2>Upload</h2>
-    <form id="upload-form">
-      <input type="file" id="history-file" name="file" accept=".zip,application/zip">
-      <button id="upload-btn" type="submit">Upload &amp; import</button>
-      <button id="reimport-btn" type="button" {{ 'disabled' if not has_upload }}>
-        Re-import newest upload
-      </button>
-    </form>
     <p id="snapshot-busy-note" class="meta" hidden></p>
-    <div id="import-progress" class="progress-bar" hidden>
-      <div id="import-progress-fill" class="progress-bar-fill"></div>
+    <div id="import-progress" class="progress" hidden>
+      <div id="import-progress-fill" class="progress-bar"></div>
     </div>
     <p id="import-progress-label" class="meta" hidden></p>
-    <p id="import-error" class="error" hidden></p>
-  </section>
+  <p id="import-error" class="error" hidden></p>
 
-  <section class="panel">
-    <h2>Coverage</h2>
-    <table class="data-table">
+  <hr>
+
+  <h2>Coverage</h2>
+  {# The one card left on the site, kept as a trial: a stats table reads as a
+     bounded object in a way a listing does not (ui-framework-W.md §9.8). #}
+  <div class="card">
+    <div class="card-body">
+      <table class="table table-sm align-middle mb-0">
       <tbody>
         <tr>
           <th>Total plays</th>
@@ -42,18 +51,16 @@
           <td><span data-field="distinct_uris">{{ "{:,}".format(coverage.distinct_uris) }}</span></td>
         </tr>
         <tr>
-          <th>Known to Symr / foreign</th>
+          <th>Known to Symr / foreign <i class="bi bi-info-circle info-hint" title="Symr holds a track row for it, whether or not it is in a playlist."></i></th>
           <td>
             <span data-field="known_uris">{{ "{:,}".format(coverage.known_uris) }}</span> /
             <span data-field="foreign_uris">{{ "{:,}".format(coverage.foreign_uris) }}</span>
-            <span class="muted">— Symr holds a track row for it, in a playlist or not</span>
           </td>
         </tr>
         <tr>
-          <th>In your library</th>
+          <th>In your library <i class="bi bi-info-circle info-hint" title="Resolves to a track that is in at least one playlist."></i></th>
           <td>
             <span data-field="in_library_uris">{{ "{:,}".format(coverage.in_library_uris) }}</span>
-            <span class="muted">— resolves to a track that's in at least one playlist</span>
           </td>
         </tr>
         <tr>
@@ -83,17 +90,23 @@
           <td>
             <span data-field="tracks_never_played">{{ "{:,}".format(coverage.tracks_never_played) }}</span>
             of <span data-field="library_tracks_total">{{ "{:,}".format(coverage.library_tracks_total) }}</span>
-            <span class="muted">(<span data-field="tracks_total">{{ "{:,}".format(coverage.tracks_total) }}</span> track rows in total)</span>
           </td>
         </tr>
-      </tbody>
-    </table>
-  </section>
+        </tbody>
+      </table>
+    </div>
+  </div>
 
-  <section class="panel">
-    <h2>Import history</h2>
+  <section>
+    <h2 class="collapse-heading">
+      <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#imports-body"
+              aria-expanded="false" aria-controls="imports-body">
+        Import history ({{ "{:,}".format(imports|length) }})
+      </button>
+    </h2>
+    <div class="collapse" id="imports-body">
     {% if imports %}
-    <table class="data-table">
+    <table class="table table-sm table-hover align-middle">
       <thead>
         <tr>
           <th>When</th>
@@ -126,12 +139,13 @@
       </tbody>
     </table>
     <p class="meta">
-      A re-import reading rows but inserting none is the expected result — it means nothing
-      in the export changed.
+      A re-import that reads rows but inserts none is the expected result. Nothing in the
+      export changed.
     </p>
     {% else %}
-    <p class="empty">Nothing imported yet — upload an export zip.</p>
+    <p class="empty">Nothing imported yet. Upload an export zip.</p>
     {% endif %}
+    </div>
   </section>
 </main>
 <script src="{{ url_for('static', filename='js/history_import.js') }}"></script>

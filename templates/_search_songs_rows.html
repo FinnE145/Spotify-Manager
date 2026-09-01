@@ -4,7 +4,7 @@
 {% from "_macros.html" import entity_link, score_display, cover_cell %}
 {% for t in rows %}
 <tr>
-  {{ cover_cell(t.album_image_url) }}
+  {{ cover_cell(t.album_image_url, 'song') }}
   <td>{{ entity_link('version', t.version_id, t.name) }}</td>
   <td>{{ t.artists }}</td>
   <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>

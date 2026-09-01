@@ -6,12 +6,8 @@
 {% block content %}
 <main class="page">
   <h1>Artists</h1>
-  <p class="meta">
-    Spotify issues more than one artist id for the same artist. Merging them here
-    is what keeps detection and every artist-level total from splitting one artist in two.
-  </p>
 
-  <section class="panel">
+  <section>
     <h2>Duplicate candidates</h2>
     {% if pairs %}
     <p class="meta">
@@ -19,7 +15,7 @@
     </p>
     {% for pair in pairs %}
     <div class="artist-pair" data-artist-a="{{ pair.a.artist_id }}" data-artist-b="{{ pair.b.artist_id }}">
-      <table class="data-table">
+      <table class="table table-sm table-hover align-middle">
         <thead>
           <tr><th>Artist id</th><th>Name</th><th>Tracks</th><th>Albums</th><th>Sample tracks</th></tr>
         </thead>
@@ -35,39 +31,53 @@
           {% endfor %}
         </tbody>
       </table>
-      <button type="button" data-artist-same>Same artist</button>
-      <button type="button" data-artist-not-same>Not the same</button>
-      <span class="meta" data-artist-pair-status></span>
+      <div class="button-row align-items-center">
+        <button type="button" class="btn btn-sm btn-primary" data-artist-same>Same artist</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-artist-not-same>Not the same</button>
+        <span class="meta" data-artist-pair-status></span>
+      </div>
     </div>
     {% endfor %}
     {% else %}
-    <p class="meta">Nothing to review.</p>
+    <p class="empty">Nothing to review.</p>
     {% endif %}
   </section>
 
-  <section class="panel">
-    <h2>Merged</h2>
-    {% if merged %}
-    <table class="data-table">
-      <thead>
-        <tr><th>Canonical</th><th>Merged in</th><th>Decided</th><th></th></tr>
-      </thead>
-      <tbody>
-        {% for group in merged %}
-        {% for alias in group.aliases %}
-        <tr data-artist-merged="{{ alias.artist_id }}">
-          <td>{{ entity_link('artist', group.canonical.artist_id, group.canonical.name) }} <code>{{ group.canonical.artist_id }}</code></td>
-          <td>{{ entity_link('artist', alias.artist_id, alias.name) }} <code>{{ alias.artist_id }}</code></td>
-          <td>{{ datetime_span(alias.decided_at) }}</td>
-          <td><button type="button" data-artist-unmerge>Unmerge</button></td>
-        </tr>
-        {% endfor %}
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="meta">No merges yet.</p>
-    {% endif %}
+  <hr>
+
+  <section>
+    {# Collapsed by default against future length -- 14 rows today, but this
+       only ever grows (ui-framework-W.md §9.7). #}
+    {% set alias_count = merged|map(attribute='aliases')|map('length')|sum %}
+    <h2 class="collapse-heading">
+      <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#merged-body"
+              aria-expanded="false" aria-controls="merged-body">
+        Merged ({{ "{:,}".format(alias_count) }})
+      </button>
+    </h2>
+    <div class="collapse" id="merged-body">
+      {% if merged %}
+      <table class="table table-sm table-hover align-middle">
+        <thead>
+          <tr><th>Canonical</th><th>Merged in</th><th>Decided</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for group in merged %}
+          {% for alias in group.aliases %}
+          <tr data-artist-merged="{{ alias.artist_id }}">
+            <td>{{ entity_link('artist', group.canonical.artist_id, group.canonical.name) }} <code>{{ group.canonical.artist_id }}</code></td>
+            <td>{{ entity_link('artist', alias.artist_id, alias.name) }} <code>{{ alias.artist_id }}</code></td>
+            <td class="muted">{{ datetime_span(alias.decided_at) }}</td>
+            <td><button type="button" class="btn btn-sm btn-outline-emphasis" data-artist-unmerge>Unmerge</button></td>
+          </tr>
+          {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No merges yet.</p>
+      {% endif %}
+    </div>
   </section>
 
   <p id="artists-error" class="error" hidden></p>

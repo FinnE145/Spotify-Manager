@@ -306,7 +306,6 @@ CASES = (
         "/api/canonical/cross/listing?cross=zzz",
         variant="cross",
     ),
-    Case("dev_snapshot", "GET", "/dev/snapshot?q=zzz", variant="q"),
     Case("dev_generations", "GET", "/dev/generations?tier=song", variant="song"),
     Case("dev_generations_tenure", "GET", "/dev/generations/tenure?tier=song", variant="song"),
     Case(

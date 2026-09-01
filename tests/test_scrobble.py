@@ -794,6 +794,70 @@ def test_the_page_shows_plays_of_every_source(conn):
     assert sources == {"export", "scrobble"}
 
 
+def test_the_export_divider_is_rendered_once_between_the_two_sources(client, conn):
+    # source: scrobbling-R.md §7 -- the "explicit divider at the export
+    # cutover". index_data only hands the template a cutover timestamp; which
+    # row the divider lands *above*, and that it lands there once rather than
+    # above every export row, is decided entirely in the template's namespace
+    # flag, so only a render can see it. Live it is invisible on the real
+    # library, where all 50 recent plays are scrobbles.
+    scrobbled = builders.make_track(conn, name="Newer Scrobble")
+    exported = builders.make_track(conn, name="Older Export")
+    older_still = builders.make_track(conn, name="Oldest Export")
+    builders.make_play(conn, track_id=scrobbled, ts="2026-06-15T00:00:00Z", source="scrobble")
+    builders.make_play(conn, track_id=exported, ts="2026-06-14T00:00:00Z", source="export")
+    builders.make_play(conn, track_id=older_still, ts="2026-06-13T00:00:00Z", source="export")
+    conn.commit()
+
+    body = client.get("/dev/scrobble").get_data(as_text=True)
+
+    assert body.count('class="divider-row"') == 1
+    assert body.index("Newer Scrobble") < body.index('class="divider-row"') < body.index(
+        "Older Export"
+    )
+    # Spans the whole table, or it would draw a rule under one column only.
+    assert body.count('colspan="4"') == 1
+
+
+def test_a_play_renders_its_album_cover_and_falls_back_to_the_song_glyph(client, conn):
+    # source: ui-framework-W.md §9.10 -- the plays table takes a cover cell.
+    # Nothing else reads the album_image_url join _recent_plays does, so
+    # dropping it would leave every row on the glyph and still look plausible.
+    with_art = builders.make_track(conn, album_id=builders.make_album(conn))
+    without = builders.make_track(
+        conn, album_id=builders.make_album(conn, image_url=None)
+    )
+    art_url = conn.execute(
+        "SELECT al.image_url FROM track t JOIN album al ON al.album_id = t.album_id "
+        "WHERE t.track_id = ?",
+        (with_art,),
+    ).fetchone()["image_url"]
+    builders.make_play(conn, track_id=with_art, ts="2026-06-15T00:00:00Z")
+    builders.make_play(conn, track_id=without, ts="2026-06-14T00:00:00Z")
+    conn.commit()
+
+    body = client.get("/dev/scrobble").get_data(as_text=True)
+
+    assert f'src="{art_url}"' in body
+    assert body.count("bi-music-note") == 1
+
+
+def test_a_poll_hands_back_the_rendered_plays_rows(client, conn):
+    # source: ui-framework-W.md §9.10 -- scrobble.js swaps the table in place
+    # and opens it, so the payload has to carry real rows. An empty string
+    # would satisfy the shape test beside it while blanking the table on every
+    # poll. poll() needs no network: with no cached token it records its row
+    # and returns.
+    played = builders.make_track(conn, name="A Played Song")
+    builders.make_play(conn, track_id=played, ts="2026-06-15T00:00:00Z")
+    conn.commit()
+
+    payload = client.post("/api/scrobble/poll").get_json()
+
+    assert "A Played Song" in payload["plays_html"]
+    assert f'/track/{played}' in payload["plays_html"]
+
+
 def test_an_absent_enabled_key_reads_as_enabled(conn):
     # source: scrobbling-R.md §3.5 -- "Absent means on -- a fresh deploy
     # scrobbles with no manual step." poll() honours this (a paused-poller
@@ -1086,10 +1150,18 @@ def test_the_toggle_returns_the_full_status_payload(client, conn):
     # page in place". Pausing changes the next-poll line as well as the
     # buttons, so the toggle has to hand back the same shape the poll does or
     # the line goes stale until a reload.
-    resp = client.post("/api/scrobble/toggle", json={"enabled": False})
+    toggled = client.post("/api/scrobble/toggle", json={"enabled": False})
+    # Compared against the *poll* endpoint rather than against index_data,
+    # because the shared shape is now index_data plus the server-rendered
+    # plays fragment (ui-framework-W.md): asserting against index_data alone
+    # would pass while only one of the two endpoints carried the fragment,
+    # which is precisely the drift this test exists to catch. poll() needs no
+    # network here -- with no cached token it records its row and returns.
+    polled = client.post("/api/scrobble/poll")
 
-    assert resp.get_json()["enabled"] is False
-    assert set(resp.get_json()) == set(scrobble.index_data(conn))
+    assert toggled.get_json()["enabled"] is False
+    assert set(toggled.get_json()) == set(polled.get_json())
+    assert set(toggled.get_json()) == set(scrobble.index_data(conn)) | {"plays_html"}
 
 
 # -- Mutation-sweep S survivors (docs/codebase-health/S_survivors.md) --------

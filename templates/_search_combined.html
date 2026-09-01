@@ -12,7 +12,7 @@
   <tbody>
   {% for r in rows %}
     <tr>
-      {{ cover_cell(r.image_url, r.kind) }}
+      {{ cover_cell(r.image_url, r.cover_kind) }}
       <td class="search-type-label">{{ r.type_label }}</td>
       <td>{{ entity_link(r.kind, r.id, r.name) }}
         {%- if r.artists %}<div class="search-combined-artists">{{ r.artists }}</div>{% endif %}</td>

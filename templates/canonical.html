@@ -11,7 +11,7 @@
 {% macro pin_star(track_id, is_current, pinned) %}
 <button type="button" class="pin-star{{ ' filled' if (is_current and pinned) }}{{ ' current' if (is_current and not pinned) }}"
         data-track-id="{{ track_id }}"
-        title="{{ 'Pinned representative' if (is_current and pinned) else ('Current representative (computed)' if is_current else 'Set as representative') }}">{{ "★" if (is_current and pinned) else "☆" }}</button>
+        title="{{ 'Pinned representative' if (is_current and pinned) else ('Current representative (computed)' if is_current else 'Set as representative') }}"><i class="bi {{ 'bi-star-fill' if (is_current and pinned) else 'bi-star' }}"></i></button>
 {% endmacro %}
 
 {% macro auto_badge(group_id, auto_grouped) %}{% if group_id in auto_grouped %}<span class="badge auto" title="Created by an auto-group run">auto</span>{% endif %}{% endmacro %}
@@ -36,199 +36,232 @@
   <h1>Canonical Tracks</h1>
   <p id="viewer-error" class="error" hidden></p>
 
-  <section class="panel">
-    <h2>Stats</h2>
-    <p>{{ "{:,}".format(total_tracks) }} tracks</p>
-    <table class="data-table">
-      <thead><tr><th>Tier</th><th>Groups</th><th>Grouped</th></tr></thead>
+  {# Queues, then their stat line; auto-group, then its stat line. Same shape
+     twice, and no card around either (ui-framework-W.md §9.4). #}
+  <div class="button-row">
+    <a href="{{ url_for('canonical_review') }}" class="btn btn-sm btn-primary">
+      Main queue (<span id="unreviewed-main">…</span>)
+    </a>
+    <a href="{{ url_for('canonical_cross') }}" class="btn btn-sm btn-primary">
+      Cross-artist queue (<span id="unreviewed-cross">…</span>)
+    </a>
+    {% if pending_tier_count %}
+    <a href="{{ url_for('canonical_review', queue='pending') }}" class="btn btn-sm btn-outline-secondary">
+      {{ pending_tier_count }} group{{ "s" if pending_tier_count != 1 }} awaiting tier review
+    </a>
+    {% endif %}
+  </div>
+  <p class="meta">
+    Reviewed: {{ "{:,}".format(reviewed_count) }} pair{{ "s" if reviewed_count != 1 }}
+    {%- if reviewed_latest %} &middot; most recent {{ datetime_span(reviewed_latest) }}{% endif %}
+  </p>
+
+  <div id="autogroup">
+    <div class="button-row justify-content-between">
+      <span class="d-flex flex-wrap align-items-center gap-2">
+        <button id="autogroup-preview-btn" type="button" class="btn btn-sm btn-primary">Auto-group&hellip;</button>
+        <span id="autogroup-status" class="meta"></span>
+        <span id="autogroup-confirm" class="d-flex gap-2" hidden>
+          <button id="autogroup-run-btn" type="button" class="btn btn-sm btn-primary">Confirm</button>
+          <button id="autogroup-cancel-btn" type="button" class="btn btn-sm btn-outline-secondary">Cancel</button>
+        </span>
+      </span>
+      {% if last_auto_run and last_auto_run.undoable %}
+      <span class="d-flex align-items-center gap-2">
+        <button id="autogroup-undo-btn" type="button" class="btn btn-sm btn-outline-danger">Undo</button>
+        <span id="autogroup-undo-confirm" class="d-flex gap-2" hidden>
+          <button id="autogroup-undo-yes" type="button" class="btn btn-sm btn-danger">Yes, restore</button>
+          <button id="autogroup-undo-cancel" type="button" class="btn btn-sm btn-outline-secondary">Cancel</button>
+        </span>
+      </span>
+      {% endif %}
+    </div>
+    {% if last_auto_run %}
+    <p class="meta">
+      Last run {{ datetime_span(last_auto_run.finished_at or last_auto_run.started_at) }} &middot;
+      {{ "{:,}".format(last_auto_run.groups_closed or 0) }} group{{ "s" if last_auto_run.groups_closed != 1 }},
+      {{ "{:,}".format(last_auto_run.tracks_affected or 0) }} track{{ "s" if last_auto_run.tracks_affected != 1 }}
+      {%- if last_auto_run.undone_at %} &middot; undone {{ datetime_span(last_auto_run.undone_at) }}{% endif %}
+    </p>
+    {% if last_auto_run.undoable %}
+    <p class="warn small">Undo restores the whole grouping to how it was before that run — including
+      any review you have decided since. One level deep only.</p>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <hr>
+
+  <h2>Search &amp; group</h2>
+  <form method="get" class="filter-form">
+    <input type="hidden" name="q" value="{{ q }}">
+    <input type="hidden" name="singletons" value="{{ '1' if show_singletons }}">
+    <input type="hidden" name="cross" value="{{ cross_q }}">
+    <div class="input-group input-group-sm">
+      <input type="text" class="form-control" name="search" value="{{ search_q }}" placeholder="Track or artist name">
+      <button type="submit" class="btn btn-outline-secondary">Search</button>
+    </div>
+  </form>
+
+  <div class="button-row align-items-center">
+    <span class="meta">Selected: <span id="selected-count">0</span> track(s)</span>
+    <button id="group-selected-btn" type="button" class="btn btn-sm btn-primary" disabled>Group selected</button>
+    <button id="clear-selection-btn" type="button" class="btn btn-sm btn-outline-secondary">Clear selection</button>
+  </div>
+
+  {% if search_q %}
+    {% if search_results %}
+    <table class="table table-sm table-hover align-middle">
+      <thead>
+        <tr><th></th><th></th><th>Track</th><th>Artists</th><th>Album</th><th>ISRC</th>
+            <th>Playlists</th><th>Song</th><th>Version</th><th>Recording</th><th>Release</th></tr>
+      </thead>
       <tbody>
-        {% for tier in ('song', 'version', 'recording', 'release') %}
+        {% for t in search_results %}
         <tr>
-          <td>{{ tier|capitalize }}</td>
-          <td>{{ "{:,}".format(tier_counts[tier].total) }}</td>
-          <td>{{ "{:,}".format(tier_counts[tier].non_singleton) }}</td>
+          <td><input type="checkbox" class="form-check-input search-checkbox" data-track-id="{{ t.track_id }}"></td>
+          <td>{% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}</td>
+          <td>{{ entity_link('track', t.track_id, t.name) }}</td>
+          <td>{{ artist_links(t.track_id) }}</td>
+          <td>{% if t.album_id %}{{ entity_link('album', t.album_id, t.album_name) }}{% else %}{{ t.album_name or "" }}{% endif %}</td>
+          <td>{{ t.isrc or "—" }}</td>
+          <td>{{ t.live_count }}</td>
+          <td>{{ t.groups.song if t.groups else "" }}</td>
+          <td>{{ t.groups.version if t.groups else "" }}</td>
+          <td>{{ t.groups.recording if t.groups else "" }}</td>
+          <td>{{ t.groups.release if t.groups else "" }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-    {# The two unreviewed counts come from full detection, so they arrive with
-       the cross-artist pane rather than with the page. #}
-    <p>
-      Unreviewed: <a href="{{ url_for('canonical_review') }}"><span id="unreviewed-main">…</span> in the main queue</a>
-      &middot; <a href="{{ url_for('canonical_cross') }}"><span id="unreviewed-cross">…</span> in the cross-artist queue</a>
-      {% if pending_tier_count %}
-      &middot; <a href="{{ url_for('canonical_review', queue='pending') }}">{{ pending_tier_count }} group{{ "s" if pending_tier_count != 1 }} awaiting tier review</a>
-      {% endif %}
-    </p>
-    <p class="meta">
-      Reviewed: {{ reviewed_count }} pair{{ "s" if reviewed_count != 1 }}
-      {% if reviewed_latest %} &middot; most recent {{ datetime_span(reviewed_latest) }}{% endif %}
-    </p>
+    {% else %}
+    <p class="empty">No tracks match "{{ search_q }}".</p>
+    {% endif %}
+  {% endif %}
 
-    <div id="autogroup">
-      <button id="autogroup-preview-btn" type="button">Auto-group&hellip;</button>
-      <span id="autogroup-status" class="meta"></span>
-      <span id="autogroup-confirm" hidden>
-        <button id="autogroup-run-btn" type="button">Confirm</button>
-        <button id="autogroup-cancel-btn" type="button">Cancel</button>
-      </span>
-      <p class="meta">
-        Closes every queue item whose tracks share an ISRC, a duration, an explicit flag and a title.
-        Items whose tracks disagree on any of those stay in the queue.
-        {% if last_auto_run %}
-        Last run {{ datetime_span(last_auto_run.finished_at or last_auto_run.started_at) }} &middot;
-        {{ last_auto_run.groups_closed or 0 }} group{{ "s" if last_auto_run.groups_closed != 1 }},
-        {{ last_auto_run.tracks_affected or 0 }} track{{ "s" if last_auto_run.tracks_affected != 1 }}
-        {%- if last_auto_run.undone_at %} &middot; undone {{ datetime_span(last_auto_run.undone_at) }}{% endif %}
-        {% if last_auto_run.undoable %}
-        <button id="autogroup-undo-btn" type="button">Undo</button>
-        <span id="autogroup-undo-confirm" hidden>
-          <button id="autogroup-undo-yes" type="button">Yes, restore</button>
-          <button id="autogroup-undo-cancel" type="button">Cancel</button>
-        </span>
-        <span class="warn">Undo restores the whole grouping to how it was before that run — including
-          any review you have decided since. One level deep only.</span>
-        {% endif %}
-        {% endif %}
-      </p>
+  <hr>
+
+  <h2>Stats</h2>
+  <p class="meta">{{ "{:,}".format(total_tracks) }} tracks</p>
+  <div class="card">
+    <div class="card-body">
+      <table class="table table-sm align-middle w-auto mb-0">
+        <thead><tr><th>Tier</th><th>Groups</th><th>Grouped</th></tr></thead>
+        <tbody>
+          {% for tier in ('song', 'version', 'recording', 'release') %}
+          <tr>
+            <td>{{ tier|capitalize }}</td>
+            <td>{{ "{:,}".format(tier_counts[tier].total) }}</td>
+            <td>{{ "{:,}".format(tier_counts[tier].non_singleton) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-  </section>
+  </div>
 
-  <section class="panel">
-    <h2>Groups ({{ "{:,}".format(group_total) }})</h2>
-    <form method="get" class="inline-form">
-      <input type="hidden" name="cross" value="{{ cross_q }}">
-      <input type="text" name="q" value="{{ q }}" placeholder="Filter by title or artist">
-      <button type="submit">Filter</button>
-      <label class="checkbox-label">
-        <input type="checkbox" name="singletons" value="1" {{ "checked" if show_singletons }}
-               onchange="this.form.submit()">
-        Include singletons
-      </label>
-    </form>
-    {{ listing_cap_note(groups|length, group_total) }}
+  <section>
+    <h2 class="collapse-heading">
+      <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#groups-body"
+              aria-expanded="false" aria-controls="groups-body">
+        Groups ({{ "{:,}".format(group_total) }})
+      </button>
+    </h2>
+    <div class="collapse" id="groups-body">
+      <form method="get" class="filter-form">
+        <input type="hidden" name="cross" value="{{ cross_q }}">
+        <div class="input-group input-group-sm">
+          <input type="text" class="form-control" name="q" value="{{ q }}" placeholder="Filter by title or artist">
+          <button type="submit" class="btn btn-outline-secondary">Filter</button>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="include-singletons" name="singletons" value="1"
+                 {{ "checked" if show_singletons }} onchange="this.form.submit()">
+          <label class="form-check-label" for="include-singletons">Include singletons</label>
+        </div>
+      </form>
+      {{ listing_cap_note(groups|length, group_total) }}
 
-    {# Scrolls in place: at 797 groups the full four-tier tree runs to ~190,000px
-       and the filter box ends up a five-second scroll away from whatever you
-       were looking at. #}
-    <div class="group-scroll">
-    {% for g in groups %}
-    {% set tree = trees[g.song_id] %}
-    <details class="song-group" id="song-{{ g.song_id }}" {{ "open" if g.song_id == expand_song_id }}>
-      <summary>
-        {% if g.representative and g.representative.album_image_url %}
-        <img class="cover" src="{{ g.representative.album_image_url }}" alt="">
-        {% endif %}
-        <span class="song-title">
-          {% if g.representative %}{{ entity_link('track', g.representative.track_id, g.representative.name) }}
-          {% else %}?{% endif %}
-          {% if g.pinned %}<span class="rep-marker pinned" title="Pinned representative">★</span>{% endif %}
-          — {{ artist_links(g.representative.track_id) if g.representative else "" }}
-        </span>
-        <span class="leaf-meta">{{ g.track_count }} tracks &middot; {{ score_display(g.score) }} &middot; {{ entity_link('song', g.song_id, 'song ' ~ g.song_id) }}</span>
-        {{ auto_badge(g.song_id, auto_grouped) }}
-        {{ edit_link(tree.track_ids) }}
-      </summary>
+      {% for g in groups %}
+      {% set tree = trees[g.song_id] %}
+      <details class="song-group" id="song-{{ g.song_id }}" {{ "open" if g.song_id == expand_song_id }}>
+        <summary>
+          {% if g.representative and g.representative.album_image_url %}
+          <img class="cover" src="{{ g.representative.album_image_url }}" alt="">
+          {% endif %}
+          <span class="song-title">
+            {% if g.representative %}{{ entity_link('track', g.representative.track_id, g.representative.name) }}
+            {% else %}?{% endif %}
+            {% if g.pinned %}<span class="rep-marker pinned" title="Pinned representative"><i class="bi bi-star-fill"></i></span>{% endif %}
+            — {{ artist_links(g.representative.track_id) if g.representative else "" }}
+          </span>
+          <span class="leaf-meta">{{ g.track_count }} tracks &middot; {{ score_display(g.score) }} &middot; {{ entity_link('song', g.song_id, 'song ' ~ g.song_id) }}</span>
+          {{ auto_badge(g.song_id, auto_grouped) }}
+          {{ edit_link(tree.track_ids) }}
+        </summary>
 
-      <div class="tree" id="group-{{ g.song_id }}">
-        {% for v in tree.versions %}
-        <div class="tree-node tier-version" id="group-{{ v.version_id }}">
-          <div class="tree-node-head">
-            <span class="tier-chip version">{{ entity_link('version', v.version_id, 'Version ' ~ v.version_id) }}</span>
-            {{ auto_badge(v.version_id, auto_grouped) }}
-          </div>
-
-          {% for r in v.recordings %}
-          <div class="tree-node tier-recording" id="group-{{ r.recording_id }}">
+        <div class="tree" id="group-{{ g.song_id }}">
+          {% for v in tree.versions %}
+          <div class="tree-node tier-version" id="group-{{ v.version_id }}">
             <div class="tree-node-head">
-              <span class="tier-chip recording">{{ entity_link('recording', r.recording_id, 'Recording ' ~ r.recording_id) }}</span>
-              {{ auto_badge(r.recording_id, auto_grouped) }}
+              <span class="tree-tier">{{ entity_link('version', v.version_id, 'Version ' ~ v.version_id) }}</span>
+              {{ auto_badge(v.version_id, auto_grouped) }}
             </div>
 
-            {% for rel in r.releases %}
-            <div class="tree-node tier-release" id="group-{{ rel.release_id }}">
+            {% for r in v.recordings %}
+            <div class="tree-node tier-recording" id="group-{{ r.recording_id }}">
               <div class="tree-node-head">
-                <span class="tier-chip release">{{ entity_link('release', rel.release_id, 'Release ' ~ rel.release_id) }}</span>
-                {{ auto_badge(rel.release_id, auto_grouped) }}
+                <span class="tree-tier">{{ entity_link('recording', r.recording_id, 'Recording ' ~ r.recording_id) }}</span>
+                {{ auto_badge(r.recording_id, auto_grouped) }}
               </div>
-              {% for t in rel.tracks %}
-                {{ track_row(t, t.track_id == tree.representative_track_id, tree.pinned) }}
+
+              {% for rel in r.releases %}
+              <div class="tree-node tier-release" id="group-{{ rel.release_id }}">
+                <div class="tree-node-head">
+                  <span class="tree-tier">{{ entity_link('release', rel.release_id, 'Release ' ~ rel.release_id) }}</span>
+                  {{ auto_badge(rel.release_id, auto_grouped) }}
+                </div>
+                {% for t in rel.tracks %}
+                  {{ track_row(t, t.track_id == tree.representative_track_id, tree.pinned) }}
+                {% endfor %}
+              </div>
               {% endfor %}
             </div>
             {% endfor %}
           </div>
           {% endfor %}
         </div>
-        {% endfor %}
-      </div>
-    </details>
-    {% else %}
-    <p class="empty">No groups match.</p>
-    {% endfor %}
+      </details>
+      {% else %}
+      <p class="empty">No groups match.</p>
+      {% endfor %}
     </div>
   </section>
 
-  <section class="panel">
+  <hr>
+
+  <section>
     {# Body loaded from /api/canonical/cross/listing -- see _canonical_cross.html
        for why. Kept as a real <form> so Enter submits it and the field behaves
        like the Groups filter beside it, but the JS always intercepts: with no
        JS this pane stays empty, because nothing server-renders it any more. #}
-    <h2>Cross-artist (<span id="cross-total">…</span>)</h2>
-    <p><a href="{{ url_for('canonical_cross') }}">Review in queue &rarr;</a></p>
-    <form method="get" class="inline-form" id="cross-form">
-      <input type="hidden" name="q" value="{{ q }}">
-      <input type="hidden" name="singletons" value="{{ '1' if show_singletons }}">
-      <input type="text" name="cross" id="cross-input" value="{{ cross_q }}" placeholder="Filter by title or artist">
-      <button type="submit">Filter</button>
-    </form>
-    <div id="cross-body"><p class="meta">Loading cross-artist candidates…</p></div>
-  </section>
-
-  <section class="panel">
-    <h2>Search &amp; group</h2>
-    <form method="get" class="inline-form">
-      <input type="hidden" name="q" value="{{ q }}">
-      <input type="hidden" name="singletons" value="{{ '1' if show_singletons }}">
-      <input type="hidden" name="cross" value="{{ cross_q }}">
-      <input type="text" name="search" value="{{ search_q }}" placeholder="Track or artist name">
-      <button type="submit">Search</button>
-    </form>
-
-    <p class="meta">
-      Selected: <span id="selected-count">0</span> track(s)
-      <button id="group-selected-btn" type="button" disabled>Group selected</button>
-      <button id="clear-selection-btn" type="button">Clear selection</button>
-    </p>
-
-    {% if search_q %}
-      {% if search_results %}
-      <table class="data-table">
-        <thead>
-          <tr><th></th><th></th><th>Track</th><th>Artists</th><th>Album</th><th>ISRC</th>
-              <th>Playlists</th><th>Song</th><th>Version</th><th>Recording</th><th>Release</th></tr>
-        </thead>
-        <tbody>
-          {% for t in search_results %}
-          <tr>
-            <td><input type="checkbox" class="search-checkbox" data-track-id="{{ t.track_id }}"></td>
-            <td>{% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}</td>
-            <td>{{ entity_link('track', t.track_id, t.name) }}</td>
-            <td>{{ artist_links(t.track_id) }}</td>
-            <td>{% if t.album_id %}{{ entity_link('album', t.album_id, t.album_name) }}{% else %}{{ t.album_name or "" }}{% endif %}</td>
-            <td>{{ t.isrc or "—" }}</td>
-            <td>{{ t.live_count }}</td>
-            <td>{{ t.groups.song if t.groups else "" }}</td>
-            <td>{{ t.groups.version if t.groups else "" }}</td>
-            <td>{{ t.groups.recording if t.groups else "" }}</td>
-            <td>{{ t.groups.release if t.groups else "" }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p class="empty">No tracks match "{{ search_q }}".</p>
-      {% endif %}
-    {% endif %}
+    <h2 class="collapse-heading">
+      <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#cross-collapse"
+              aria-expanded="false" aria-controls="cross-collapse">
+        Cross-artist (<span id="cross-total">…</span>)
+      </button>
+    </h2>
+    <div class="collapse" id="cross-collapse">
+      <form method="get" class="filter-form" id="cross-form">
+        <input type="hidden" name="q" value="{{ q }}">
+        <input type="hidden" name="singletons" value="{{ '1' if show_singletons }}">
+        <div class="input-group input-group-sm">
+          <input type="text" class="form-control" name="cross" id="cross-input" value="{{ cross_q }}" placeholder="Filter by title or artist">
+          <button type="submit" class="btn btn-outline-secondary">Filter</button>
+        </div>
+      </form>
+      <div id="cross-body"><p class="meta">Loading cross-artist candidates…</p></div>
+    </div>
   </section>
 </main>
 <script src="{{ url_for('static', filename='js/canonical_viewer.js') }}"></script>

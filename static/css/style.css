@@ -1,11 +1,22 @@
 * { box-sizing: border-box; }
 
+/* A Bootstrap display utility (.d-flex, .progress, .d-block) outranks the UA
+   stylesheet's [hidden] { display: none }, so an element carrying both is
+   VISIBLE. Symr uses the hidden attribute everywhere -- every progress bar,
+   every inline error, every two-step confirm -- so this is a general guard,
+   not a local patch. Without it the four progress bars and both auto-group
+   confirm steps render open on page load. */
+[hidden] {
+  display: none !important;
+}
+
+/* Bootstrap's reboot owns the font, the background and the text colour, and
+   must keep owning them: hardcoding them here is what silently masked dark
+   mode -- the attribute was set, the theme was active, and the page still
+   painted white. Only the box-model bits Symr needs survive. */
 html, body {
   height: 100%;
   margin: 0;
-  font-family: system-ui, sans-serif;
-  background: #fff;
-  color: #1a1a1a;
 }
 
 /* Immersive pages (the canvas) fill the viewport and never scroll the
@@ -18,56 +29,123 @@ body.immersive {
 
 /* -- Navbar ------------------------------------------------------- */
 
+/* Bootstrap's .navbar owns the layout, background, border and link colours.
+   What survives is the fixed height the immersive pages' flex column is built
+   around, and the separator before the utility slot. */
 #navbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
   height: 45px;
   flex: none;
-  padding: 0 12px;
-  border-bottom: 1px solid #ccc;
-  background: #ececec;
 }
 
-.nav-primary,
-.nav-utility {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.nav-utility {
-  margin-left: auto; /* push the utility slot to the far right */
-  padding-left: 16px;
-  border-left: 1px solid #ccc;
-}
-
-#navbar a {
-  text-decoration: none;
-  color: #333;
+#navbar .nav-link {
   font-size: 14px;
 }
 
-#navbar a:hover {
-  color: #000;
-}
-
-#navbar a.active {
-  color: #000;
-  font-weight: 700;
-}
-
-.nav-wordmark {
-  font-weight: 700;
-  font-size: 16px;
-}
-
-#navbar a.nav-icon {
+/* Both navbar icons -- one an <a>, one a <button> -- need identical box metrics
+   or they sit at different heights. Measured 2px apart before this: an inline
+   <a> and a block <button> resolve their line boxes differently even at the
+   same font-size. inline-flex makes each an equal-height box that the utility
+   bar's own align-items centers, and it also neutralises Bootstrap Icons'
+   `vertical-align: -.125em`, which does not apply to a flex item. */
+#navbar a.nav-icon,
+#navbar .nav-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 22px;
   line-height: 1;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--bs-body-color);
+  cursor: pointer;
+}
+
+/* The gear is not a .nav-link, so Bootstrap's .active does nothing for it --
+   it needs its own rule or /dev pages lose their navbar indicator entirely. */
+#navbar a.nav-icon.active {
+  color: var(--bs-emphasis-color);
+}
+
+/* Bootstrap has no hover dropdown -- it was removed in v4 deliberately, and its
+   JS trigger would swallow the click that has to reach /dev. The menu's whole
+   appearance is still Bootstrap's .dropdown-menu; only the trigger is ours.
+   :focus-within is not optional garnish -- :hover alone leaves the menu
+   unreachable by keyboard. No margin above the menu, or the pointer crosses a
+   dead gap on its way down and the menu closes under it. */
+.nav-dev:hover > .dropdown-menu,
+.nav-dev:focus-within > .dropdown-menu {
+  display: block;
+}
+
+/* The dev icon is wrapped in .nav-dev for the hover menu, and a block wrapper
+   makes the utility bar centre the *wrapper* rather than the icon -- measured
+   1.6px off the toggle beside it. Making the wrapper a flex box of its own puts
+   the anchor back on the same centre line. */
+.nav-dev {
+  display: flex;
+  align-items: center;
+}
+
+.nav-dev > .dropdown-menu {
+  top: 100%;
+  right: 0;
+  left: auto;
+  margin-top: 0;
+}
+
+#navbar .nav-icon-button:hover,
+#navbar a.nav-icon:hover {
+  color: var(--bs-emphasis-color);
+}
+
+/* The icons fill in on hover. This has to go through the codepoint rather than
+   a .bi- class swap, because the class is set in markup (the dev icon) or by
+   theme.js (the toggle), and CSS cannot change a class from a hover state.
+   \f494 is bi-moon-fill, \f5a1 is bi-sun-fill. */
+#navbar .nav-icon-button:hover .bi-moon::before {
+  content: "\f494";
+}
+
+#navbar .nav-icon-button:hover .bi-sun::before {
+  content: "\f5a1";
+}
+
+/* \f5c2 is bi-terminal-fill. bi-code-slash was the first choice here and had to
+   be dropped: Bootstrap Icons ships no filled variant of it, so it could not
+   match the other two. */
+#navbar a.nav-icon:hover .bi-terminal::before {
+  content: "\f5c2";
+}
+
+/* Nav links take the same faint underline on hover as every other link. */
+#navbar .nav-link:hover,
+#navbar .navbar-brand:hover {
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--bs-emphasis-color-rgb), 0.35);
+  text-underline-offset: 0.2em;
 }
 
 /* -- Ordinary content pages -------------------------------------- */
+
+/* Links read as part of the text rather than as raw blue: Bootstrap's
+   .link-body-emphasis + .link-underline-opacity-25 pairing, applied once here
+   rather than as four utility classes on every anchor across thirty templates.
+   Anchors that are already something else -- buttons, list-group items,
+   dropdown items, home's cards -- carry their own colour and are excluded
+   rather than fought with. */
+.page a:not(.btn):not(.list-group-item):not(.dropdown-item):not(.card),
+.search-dropdown a {
+  color: var(--bs-emphasis-color);
+  text-decoration-color: rgba(var(--bs-emphasis-color-rgb), 0.35);
+  text-underline-offset: 0.2em;
+}
+
+.page a:not(.btn):not(.list-group-item):not(.dropdown-item):not(.card):hover,
+.search-dropdown a:hover {
+  color: var(--bs-link-hover-color);
+  text-decoration-color: currentColor;
+}
 
 .page {
   max-width: 900px;
@@ -76,15 +154,15 @@ body.immersive {
 }
 
 .page .panel {
-  border: 1px solid #ccc;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
   padding: 12px 16px;
   margin: 16px 0;
-  background: #fafafa;
+  background: var(--bs-tertiary-bg);
 }
 
 .page .empty {
-  color: #888;
+  color: var(--bs-secondary-color);
 }
 
 .page .quick-links ul {
@@ -92,12 +170,12 @@ body.immersive {
 }
 
 .page .meta {
-  color: #666;
+  color: var(--bs-secondary-color);
   font-size: 13px;
 }
 
 .page .error {
-  color: #b00020;
+  color: var(--bs-danger-text-emphasis);
   font-size: 13px;
 }
 
@@ -106,9 +184,211 @@ body.immersive {
    rather than .page .error -- same color, own placement. */
 .scoring-banner {
   padding: 6px 16px;
-  color: #b00020;
-  background: #fdecea;
+  color: var(--bs-danger-text-emphasis);
+  background: var(--bs-danger-bg-subtle);
   font-size: 13px;
+}
+
+/* Bootstrap's .table is 1rem; Symr's pages are dense data listings and read
+   better at the 13px .data-table always used. One rule, so every page keeps
+   the same density as it converts. */
+.page .table {
+  font-size: 13px;
+}
+
+/* Bootstrap's reboot sets every heading's top margin to 0, so an <h2> ends up
+   flush against whatever preceded it -- most visibly against the bottom edge of
+   a card, where the measured gap was exactly 0px. Sections need air above their
+   heading. A heading straight after an <hr> is the exception: the divider has
+   already done the separating, and stacking both reads as a gap twice the size
+   of every other one on the page. */
+.page h2 {
+  margin-top: 28px;
+}
+
+.page hr + h2,
+.page hr + section > h2:first-child {
+  margin-top: 0;
+}
+
+/* The last row's bottom border sits directly above whatever follows the table --
+   an <hr>, a card edge, a section break -- and reads as a doubled line every
+   time. Both table classes, since pages are still mid-conversion. */
+.table > tbody > tr:last-child > *,
+.data-table > tbody > tr:last-child > * {
+  border-bottom-width: 0;
+}
+
+/* Where a name is followed by its description on one line, the weight and
+   colour do the separating -- an em dash there is punctuation standing in for
+   structure that the type can carry on its own. */
+.item-name {
+  color: var(--bs-emphasis-color);
+  font-weight: 500;
+  margin-right: 10px;
+}
+
+/* A whole row is the click target, so the underline belongs on row hover rather
+   than on the name itself. Same faint rule the site-wide link treatment uses,
+   so the affordance reads identically wherever it appears. */
+.list-group-item-action:hover .item-name {
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--bs-emphasis-color-rgb), 0.35);
+  text-underline-offset: 0.2em;
+}
+
+/* Bootstrap styles <code> in a magenta accent, which made ids and URIs the
+   loudest thing in a row despite being pure metadata. Grey them like every
+   other supporting column. */
+.page code {
+  color: var(--bs-secondary-color);
+}
+
+/* Except in the generation banner, where the <code> is the playlist name -- the
+   subject of the sentence, not metadata beside it -- and the banner already
+   sets its own colour. */
+.generation-confirm code {
+  color: inherit;
+}
+
+/* An outline button whose text follows the theme's emphasis colour. Bootstrap
+   has no such variant: btn-outline-light is white in both modes and so vanishes
+   on a light background, and btn-outline-secondary reads as disabled on a dark
+   one. Driven entirely through Bootstrap's own --bs-btn-* variables, so hover,
+   active and disabled states stay consistent with every other button. */
+.btn-outline-emphasis {
+  --bs-btn-color: var(--bs-emphasis-color);
+  --bs-btn-border-color: var(--bs-border-color);
+  --bs-btn-hover-color: var(--bs-body-bg);
+  --bs-btn-hover-bg: var(--bs-emphasis-color);
+  --bs-btn-hover-border-color: var(--bs-emphasis-color);
+  --bs-btn-active-color: var(--bs-body-bg);
+  --bs-btn-active-bg: var(--bs-emphasis-color);
+  --bs-btn-active-border-color: var(--bs-emphasis-color);
+  --bs-btn-disabled-color: var(--bs-secondary-color);
+  --bs-btn-disabled-border-color: var(--bs-border-color);
+}
+
+/* An explanation that used to be glued to a value with an em dash. Sits after
+   the label, carries its text in `title`, and is quiet enough not to compete
+   with the label it annotates. */
+.info-hint {
+  margin-left: 4px;
+  font-size: 0.85em;
+  color: var(--bs-secondary-color);
+  cursor: help;
+}
+
+/* A collapse toggle that reads as its own heading. Bootstrap's .btn brings a
+   font-size, padding and border of its own, all of which would otherwise turn
+   an <h2> into a boxed control. */
+.collapse-heading {
+  margin-bottom: 8px;
+}
+
+.collapse-heading .btn {
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  border: 0;
+  text-decoration: none;
+}
+
+/* The chevron flips on aria-expanded, which only CSS can see -- so it uses
+   Bootstrap Icons' codepoints directly rather than a .bi- class, which
+   nothing could swap from here. \f282 is bi-chevron-down, \f286 is up. */
+.collapse-heading .btn::after {
+  font-family: bootstrap-icons;
+  content: "\f282";
+  margin-left: 6px;
+  font-size: 0.7em;
+  vertical-align: middle;
+  color: var(--bs-secondary-color);
+}
+
+.collapse-heading .btn[aria-expanded="true"]::after {
+  content: "\f286";
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+/* A filter row: the input-group plus whatever toggles sit beside it. Capped
+   width because a full-width search box over a 900px column reads as a form to
+   fill in rather than a filter to narrow with. */
+.filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.filter-form .input-group {
+  width: 280px;
+}
+
+.filter-form .form-check {
+  margin-bottom: 0;
+}
+
+/* The round-trip's sticky action bar (ui-framework-W.md §9.9). `top: 0` is the
+   right anchor because the navbar scrolls away rather than being fixed. The
+   background is opaque on purpose -- the page scrolls underneath it. */
+.action-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bs-body-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+  /* Break out of .page's 900px column so the rule under the bar spans the
+     window. The negative margin pulls each edge out to the viewport and the
+     matching padding puts the content back where the column had it, so the
+     bar's contents stay aligned with everything below them. */
+  margin-left: calc(-50vw + 50%);
+  margin-right: calc(-50vw + 50%);
+  padding: 12px calc(50vw - 50%);
+}
+
+.action-bar .button-row {
+  margin: 0;
+}
+
+.action-bar-live {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+/* The newest feed line takes the slack so Stop/Reload stay hard right. */
+.action-bar-live .meta {
+  flex: 1;
+  margin: 0;
+}
+
+/* Source tag on a merged feed row -- the feed now carries both jobs. */
+.event-log .badge {
+  margin-right: 6px;
+}
+
+/* A stats row flags itself when its value means there is work further down the
+   page -- a nonzero known-failed count is the cue to go and look at that
+   section. Set through --bs-table-color rather than a `color` declaration:
+   Bootstrap's own cell rule is `.table > :not(caption) > * > *`, which outranks
+   any selector short enough to be worth writing here, so a plain `color` on the
+   row would simply lose. Feeding its variable wins without a specificity
+   fight, and stays theme-aware. */
+.stat-row-warn {
+  --bs-table-color: var(--bs-warning-text-emphasis);
+}
+
+.stat-row-danger {
+  --bs-table-color: var(--bs-danger-text-emphasis);
 }
 
 /* -- Snapshot ------------------------------------------------------ */
@@ -130,13 +410,13 @@ body.immersive {
 .data-table th,
 .data-table td {
   padding: 4px 8px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--bs-border-color);
   text-align: left;
 }
 
 .data-table th {
   font-weight: 600;
-  color: #444;
+  color: var(--bs-emphasis-color);
 }
 
 .data-table.sortable th {
@@ -145,15 +425,32 @@ body.immersive {
 }
 
 .data-table.sortable th:hover {
-  color: #000;
+  color: var(--bs-link-hover-color);
 }
 
+/* An unfollowed or removed row reads quieter than a live one. This MUST go
+   through --bs-table-color inside a Bootstrap table: a `color` on the <tr> is
+   only inherited by the cells, and Bootstrap's `.table > :not(caption) > * > *`
+   rule *declares* a colour on them, which beats inheritance at any specificity.
+   The .data-table half stays until the last page converts. */
 .data-table tr.unfollowed,
 .data-table tr.removed {
-  color: #999;
+  color: var(--bs-secondary-color);
 }
 
-.data-table img.cover {
+.table tr.unfollowed,
+.table tr.removed {
+  --bs-table-color: var(--bs-secondary-color);
+  text-decoration: line-through;
+  /* The link in the row has to dim too, or the one cell that matters most stays
+     bright. Overriding the variable rather than the colour is deliberate: the
+     site-wide link rule carries four :not() clauses and scores (0,5,1), so a
+     selector specific enough to beat it would have to repeat them. Feeding
+     --bs-emphasis-color, which that rule already reads, wins with no fight. */
+  --bs-emphasis-color: var(--bs-secondary-color);
+}
+
+img.cover {
   width: 32px;
   height: 32px;
   object-fit: cover;
@@ -161,18 +458,18 @@ body.immersive {
   border-radius: 3px;
 }
 
-.progress-bar {
+.progress {
   height: 8px;
   border-radius: 4px;
-  background: #e0e0e0;
+  background: var(--bs-secondary-bg);
   overflow: hidden;
   margin: 8px 0 4px;
 }
 
-.progress-bar-fill {
+.progress-bar {
   height: 100%;
   width: 0%;
-  background: #3b82f6;
+  background: var(--bs-primary);
   transition: width 0.3s ease;
 }
 
@@ -212,34 +509,66 @@ body.immersive {
 
 .event-log li {
   padding: 2px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+/* Same rule as a table's last row: the trailing border has nothing under it and
+   reads as a stray line against the section boundary below. */
+.event-log li:last-child {
+  border-bottom: 0;
 }
 
 .event-log-ts {
   display: inline-block;
   min-width: 110px;
-  color: #888;
+  color: var(--bs-secondary-color);
 }
 
 .muted {
-  color: #888;
+  color: var(--bs-secondary-color);
+}
+
+/* Inside a table the bare .muted class loses: Bootstrap's cell rule is
+   `.table > :not(caption) > * > *`, which outranks a single class. Scoping to
+   the cell wins the specificity, and feeding --bs-table-color covers the
+   variable path the same rule reads from. Muting the supporting columns is
+   what makes a dense row scannable -- all-white text at this row height gives
+   the eye nothing to anchor on. */
+.table td.muted,
+.table th.muted {
+  --bs-table-color: var(--bs-secondary-color);
+  color: var(--bs-secondary-color);
 }
 
 .warn {
-  color: #b45309;
+  color: var(--bs-warning-text-emphasis);
+}
+
+/* /dev/scrobble's export cutover: the point below which the export, not the
+   scrobbler, is the source of truth. It used to say so with em dashes either
+   side of the text, which is decoration doing a border's job -- a heavier top
+   rule reads as a divider across the table at a glance. */
+.divider-row > td {
+  border-top: 2px solid var(--bs-border-color);
 }
 
 /* Small inline markers: "not in library", "auto", the cross queue's row
    states. Deliberately quieter than .tier-chip, which carries real colour
    meaning. */
+/* Loaded after Bootstrap, so this wins the .badge collision deliberately
+   (ui-framework-W.md §6.3): Bootstrap's badge is a bold filled pill, and these
+   are meant to stay quieter than .tier-chip, which carries real colour meaning.
+   A bare Bootstrap .badge also sets a light colour and no background, which
+   would have rendered "not in library" as near-invisible. */
 .badge {
   display: inline-block;
   font-size: 11px;
+  font-weight: 400;
   padding: 1px 5px;
   border-radius: 8px;
-  border: 1px solid #ddd;
-  background: #f6f6f6;
-  color: #777;
+  border: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-secondary-color);
   white-space: nowrap;
 }
 
@@ -255,46 +584,29 @@ body.immersive {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 8px;
-  border: 1px solid #e2e2e2;
-  background: #fafafa;
-  color: #555;
+  border: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-secondary-color);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 .badge.explicit {
   font-weight: 700;
-  border-color: #ccc;
-  background: #666;
-  color: #fff;
+  border-color: transparent;
+  background: var(--bs-secondary-color);
+  color: var(--bs-body-bg);
   padding: 1px 4px;
 }
 
 .badge.auto {
-  border-color: #c7d2fe;
-  background: #eef2ff;
-  color: #4338ca;
+  border-color: var(--bs-info-border-subtle);
+  background: var(--bs-info-bg-subtle);
+  color: var(--bs-info-text-emphasis);
 }
 
 #autogroup {
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #eee;
-}
-
-/* The canonical viewer's group listing. Every group renders its whole
-   four-tier tree, so at 797 groups the page is ~190,000px tall and the filter
-   box scrolls away entirely. Capping it keeps the page a page; the DOM is
-   unchanged, so load cost is the same. */
-.group-scroll {
-  /* min-height guards the case where 70vh resolves to 0 (a hidden or
-     zero-height viewport), which would otherwise collapse the panel to
-     nothing rather than merely shortening it. */
-  max-height: 70vh;
-  min-height: 240px;
-  overflow-y: auto;
-  border-top: 1px solid #eee;
-  padding-top: 8px;
 }
 
 /* A select sizes itself to its longest option, and a candidate label carries
@@ -306,7 +618,7 @@ body.immersive {
 
 .artist-pair {
   padding: 12px 0;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid var(--bs-border-color);
 }
 
 .artist-pair [data-artist-pair-status] {
@@ -366,7 +678,7 @@ body.immersive {
   transform-origin: 0 0;
 }
 
-.card {
+.canvas-card {
   position: absolute;
   border: 1px solid #999;
   border-radius: 6px;
@@ -377,12 +689,12 @@ body.immersive {
   user-select: none;
 }
 
-.card.tray-card {
+.canvas-card.tray-card {
   position: static;
   margin: 0 auto 10px;
 }
 
-.card img {
+.canvas-card img {
   width: 100%;
   aspect-ratio: 1 / 1; /* square cover, matching Spotify's square art */
   object-fit: cover;
@@ -390,7 +702,7 @@ body.immersive {
   pointer-events: none;
 }
 
-.card .name {
+.canvas-card .name {
   padding: 2px 4px;
   font-size: 12px;
   font-weight: 600;
@@ -399,7 +711,7 @@ body.immersive {
   pointer-events: none;
 }
 
-.card .note {
+.canvas-card .note {
   padding: 1px 6px;
   font-size: 11px;
   line-height: 1.2;
@@ -409,12 +721,12 @@ body.immersive {
   color: #333;
 }
 
-.card .note:focus {
+.canvas-card .note:focus {
   outline: none;
   background: #fffef2;
 }
 
-.card.selected {
+.canvas-card.selected {
   outline: 3px solid #3b82f6;
 }
 
@@ -497,7 +809,7 @@ body.immersive {
 }
 
 .tier-btn:hover {
-  background: #eee;
+  background: var(--bs-secondary-bg);
 }
 
 #action-buttons {
@@ -516,7 +828,7 @@ body.immersive {
 }
 
 #action-buttons button:hover {
-  background: #eee;
+  background: var(--bs-secondary-bg);
 }
 
 #save-btn {
@@ -747,7 +1059,7 @@ body.immersive {
 }
 
 .rep-marker.computed {
-  color: #ccc;
+  color: var(--bs-secondary-color);
 }
 
 .pin-star {
@@ -757,7 +1069,7 @@ body.immersive {
   border: none;
   background: none;
   cursor: pointer;
-  color: #ddd;
+  color: var(--bs-border-color);
 }
 
 .pin-star:hover {
@@ -765,7 +1077,7 @@ body.immersive {
 }
 
 .pin-star.current {
-  color: #ccc;
+  color: var(--bs-secondary-color);
 }
 
 .pin-star.filled {
@@ -774,11 +1086,12 @@ body.immersive {
 
 .edit-link {
   font-size: 12px;
-  margin-left: 8px;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .song-group {
-  border: 1px solid #ddd;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
   padding: 8px 10px;
   margin-bottom: 8px;
@@ -799,13 +1112,13 @@ body.immersive {
 .tree {
   margin: 10px 0 0 16px;
   padding-left: 12px;
-  border-left: 2px solid #eee;
+  border-left: 2px solid var(--bs-border-color);
 }
 
 .tree-node {
   margin: 8px 0;
   padding-left: 12px;
-  border-left: 2px solid #eee;
+  border-left: 2px solid var(--bs-border-color);
 }
 
 .tree-node-head {
@@ -813,6 +1126,14 @@ body.immersive {
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
+}
+
+/* The grouping tree names its tiers in plain text -- the colour carried no
+   information the label did not already give, and four pills per row made the
+   tree harder to read than the tree structure itself. */
+.tree-tier {
+  font-size: 12px;
+  color: var(--bs-secondary-color);
 }
 
 .tier-chip.version {
@@ -843,7 +1164,7 @@ body.immersive {
 }
 
 .leaf-meta {
-  color: #888;
+  color: var(--bs-secondary-color);
   font-size: 12px;
 }
 
@@ -855,8 +1176,9 @@ body.immersive {
 
 .generation-confirm {
   font-size: 13px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  background: var(--bs-warning-bg-subtle);
+  border: 1px solid var(--bs-warning-border-subtle);
+  color: var(--bs-warning-text-emphasis);
   border-radius: 4px;
   padding: 8px 10px;
   margin: 16px 0;
@@ -872,7 +1194,7 @@ body.immersive {
 
 .toggle-links a.active {
   font-weight: 700;
-  color: #000;
+  color: var(--bs-emphasis-color);
   text-decoration: none;
 }
 
@@ -888,12 +1210,12 @@ body.immersive {
   padding: 0;
   width: 9px;
   min-width: 9px;
-  border-left: 1px solid #fff;
-  background: #eee;
+  border-left: 1px solid var(--bs-body-bg);
+  background: var(--bs-secondary-bg);
 }
 
 .data-table td.gen-cell.filled {
-  background: #3b82f6;
+  background: var(--bs-primary);
 }
 
 /* -- Entity pages (docs/specs/entity-pages-K.md) -------------------- */
@@ -918,31 +1240,13 @@ body.immersive {
 }
 
 .breadcrumb {
-  color: #666;
+  color: var(--bs-secondary-color);
   font-size: 13px;
 }
 
 .nav-search {
-  display: flex;
-  gap: 4px;
   position: relative; /* anchors .search-dropdown, better-search-L.md §7 */
-}
-
-.nav-search input {
-  font-size: 13px;
-  padding: 3px 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  width: 160px;
-}
-
-.nav-search button {
-  font-size: 13px;
-  padding: 3px 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
+  width: 220px;
 }
 
 /* The navbar search dropdown (better-search-L.md §7) -- same positioning
@@ -955,8 +1259,8 @@ body.immersive {
   width: 360px;
   max-height: 60vh;
   overflow-y: auto;
-  background: #fff;
-  border: 1px solid #ccc;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   z-index: 10;
@@ -967,11 +1271,11 @@ body.immersive {
 }
 
 .search-dropdown tr.highlighted {
-  background: #eef4ff;
+  background: var(--bs-secondary-bg);
 }
 
 .search-type-label {
-  color: #888;
+  color: var(--bs-secondary-color);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -979,7 +1283,7 @@ body.immersive {
 /* The artist credit under a combined row's name -- a second line rather than
    a column, so it fits the navbar dropdown as well as the full-width page. */
 .search-combined-artists {
-  color: #888;
+  color: var(--bs-secondary-color);
   font-size: 12px;
 }
 
@@ -997,21 +1301,22 @@ body.immersive {
   display: block;
 }
 
-.cover-placeholder.cover-person {
+.cover-placeholder.cover-glyph {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f0f0f0;
-  color: #b4b4b4;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
 }
 
-.cover-placeholder.cover-person svg {
-  width: 17px;
-  height: 17px;
+/* Bootstrap Icons size by font-size; the hand-pasted <svg> this replaced was
+   sized by width/height, so that rule matched nothing after the swap. */
+.cover-placeholder.cover-glyph .bi {
+  font-size: 17px;
 }
 
 /* A See more'd section becomes scrollable rather than growing the page --
-   same shape as .group-scroll. */
+   the one inner scroll region left on the site. */
 .search-section.scrollable table {
   display: block;
   max-height: 420px;
@@ -1033,15 +1338,15 @@ body.immersive {
    object, not linked, and visually distinct from the rows Symr actually
    knows as tracks. */
 .data-table tr.unowned {
-  color: #999;
+  color: var(--bs-secondary-color);
 }
 
 /* Separates the tracklist page Spotify returned from the owned tracks that
    fell past it (docs/specs/entity-pages-K.md §5.2). */
 .data-table tr.tracklist-divider td {
   padding-top: 12px;
-  border-top: 2px solid #ddd;
-  color: #666;
+  border-top: 2px solid var(--bs-border-color);
+  color: var(--bs-secondary-color);
   font-size: 12px;
 }
 

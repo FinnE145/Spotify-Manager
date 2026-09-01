@@ -7,7 +7,7 @@
 
 {{ listing_cap_note(groups|length, total) }}
 
-<div class="group-scroll">
+<div>
 {% for g in groups %}
 <div class="panel cross-artist-entry">
   <h3>{{ g.base }} <span class="leaf-meta">{{ score_display(g.score) }} &middot; {{ "reviewed" if g.reviewed else "unreviewed" }}</span></h3>

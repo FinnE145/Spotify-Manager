@@ -225,11 +225,19 @@ def test_every_search_row_reserves_a_cover_cell_image_or_not(client, conn):
     # one without, and each appears twice (its Artists-section row and its
     # Most Relevant row).
     #
+    # Asserted on the *icon* class, not the placeholder's container class: the
+    # container is now shared by every glyph kind (ui-framework-W.md added a
+    # heart for Liked Songs), so counting it would no longer tell a person
+    # glyph from any other.
+    #
     # The `kind` half is the discriminating one and the reason the album is
-    # here: an implementation that drew the person glyph for every missing
-    # image would pass an artists-only assertion. Albums never lack an image
-    # in the real library (0 of 6,291), so the glyph would be silently wrong
-    # rather than visibly wrong.
+    # here: an implementation that drew one glyph for every missing image would
+    # pass an artists-only assertion. Albums never lack an image in the real
+    # library (0 of 6,291), so the glyph would be silently wrong rather than
+    # visibly wrong. Each type now has its OWN glyph, so the assertions pin
+    # person-for-artist and vinyl-for-album separately -- which also catches
+    # the two rendering paths disagreeing, as they did when the Albums section
+    # passed no kind while Most Relevant passed one.
     builders.make_artist(conn, name="Zzzcover Pictured", image_url="https://img/artist")
     builders.make_artist(conn, name="Zzzcover Bare")
     builders.make_album(conn, name="Zzzcover Record", image_url=None)
@@ -240,9 +248,11 @@ def test_every_search_row_reserves_a_cover_cell_image_or_not(client, conn):
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert body.count('<img class="cover" src="https://img/artist"') == 2
-    assert body.count("cover-person") == 2  # the imageless artist, twice
-    # The imageless album gets a cell too -- but a bare one, with no glyph.
-    assert body.count('class="cover cover-placeholder"') == 2
+    assert body.count("bi-person-fill") == 2  # the imageless artist, twice
+    # The imageless album gets its own glyph, not the artist's, in both the
+    # Albums section and Most Relevant.
+    assert body.count("bi-vinyl") == 2
+    assert body.count("bi-music-note-beamed") == 0  # no playlist matched
 
 
 def test_api_search_writes_nothing(client, conn):
@@ -1166,25 +1176,6 @@ def test_a_deep_linked_group_is_shown_even_when_the_cap_excludes_it(client, corp
     assert "Corpus Track One" in client.get(
         f"/dev/canonical?expand={song_id}"
     ).get_data(as_text=True)
-
-
-def test_the_snapshot_page_track_search_finds_a_library_track(client, corpus):
-    """`?q=` drives the "Find a track" panel.
-
-    **A track's name is not a usable assertion on this page** -- the Recent
-    changes panel renders member names too, so a search that ignored `q`
-    would still show one. The search block's own per-row suffix is what only
-    the search can produce, and the miss case pins that `q` reached the LIKE
-    rather than merely opening the panel.
-    """
-    # source: app.py's dev_snapshot -- `?q=` builds `track_matches`, a LIKE
-    # over tracks with a live membership, rendered with their playlist count.
-    hit = client.get("/dev/snapshot?q=Corpus Track One").get_data(as_text=True)
-    miss = client.get("/dev/snapshot?q=zzz-nothing-matches-this").get_data(as_text=True)
-
-    assert "— Corpus Artist (2 playlists)" in hit
-    assert "No tracks match" in miss
-    assert "(2 playlists)" not in miss
 
 
 def _one_generation_with_two_versions_of_one_song(conn):

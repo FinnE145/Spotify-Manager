@@ -5,43 +5,16 @@
 {% block content %}
 <main class="page">
   <h1>Dev</h1>
-  <p>Developer and inspection tools.</p>
 
   <p class="meta">Requests: {{ "{:,}".format(request_counts.last_24h) }} in 24h &middot; {{ "{:,}".format(request_counts.last_7d) }} in 7d</p>
 
-  <ul>
-    <li>
-      <a href="{{ url_for('dev_snapshot') }}">Snapshot</a>
-      — pull/refresh the library snapshot, browse playlists and tracks.
-    </li>
-    <li>
-      <a href="{{ url_for('dev_canonical') }}">Canonical Tracks</a>
-      — review and manage the four-tier track grouping.
-    </li>
-    <li>
-      <a href="{{ url_for('dev_artists') }}">Artists</a>
-      — merge Spotify's duplicate artist ids so detection and artist totals don't split.
-    </li>
-    <li>
-      <a href="{{ url_for('dev_import') }}">Play History</a>
-      — import a Spotify streaming-history export and check its coverage.
-    </li>
-    <li>
-      <a href="{{ url_for('dev_roundtrip') }}">Round-trip</a>
-      — resolve played-but-unknown URIs into real track rows. The one page that writes to Spotify.
-    </li>
-    <li>
-      <a href="{{ url_for('dev_generations') }}">Generations</a>
-      — the 36 current-favs playlists and the tenure derived from them.
-    </li>
-    <li>
-      <a href="{{ url_for('dev_scoring') }}">Scoring</a>
-      — materialized version/recording/release/track scores, and a manual recompute.
-    </li>
-    <li>
-      <a href="{{ url_for('dev_scrobble') }}">Scrobble</a>
-      — recently-played polling status, and the last 50 plays.
-    </li>
-  </ul>
+  <div class="list-group">
+    {% for endpoint, name, blurb in dev_pages %}
+    <a class="list-group-item list-group-item-action" href="{{ url_for(endpoint) }}">
+      <span class="item-name">{{ name }}</span>
+      <span class="meta">{{ blurb }}</span>
+    </a>
+    {% endfor %}
+  </div>
 </main>
 {% endblock %}

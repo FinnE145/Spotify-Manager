@@ -2,35 +2,74 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Symr{% endblock %}</title>
+  {# Inline, and before the stylesheets, so the theme attribute is on <html>
+     before anything paints. An external file -- even a synchronous one --
+     leaves a flash of light on every load for anyone who chose dark. The
+     absence of symr_theme means "follow the system"; see static/js/theme.js. #}
+  <script>
+    (function () {
+      var stored = null;
+      try { stored = localStorage.getItem("symr_theme"); } catch (e) {}
+      var dark = stored
+        ? stored === "dark"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-bs-theme", dark ? "dark" : "light");
+    })();
+  </script>
+  {# Bootstrap first, style.css second: Symr's own rules win every tie. #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/vendor/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/vendor/bootstrap-icons.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script defer src="{{ url_for('static', filename='js/vendor/bootstrap.bundle.min.js') }}"></script>
   <script src="{{ url_for('static', filename='js/format.js') }}"></script>
   <script src="{{ url_for('static', filename='js/generation_confirm.js') }}"></script>
   <script src="{{ url_for('static', filename='js/search.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
-  <nav id="navbar">
-    <div class="nav-primary">
-      <a href="{{ url_for('index') }}" class="nav-wordmark">Symr</a>
-      <a href="{{ url_for('index') }}" class="{{ 'active' if active == 'home' }}">Home</a>
-      <a href="{{ url_for('canvas') }}" class="{{ 'active' if active == 'canvas' }}">Canvas</a>
-      <a href="{{ url_for('audit') }}" class="{{ 'active' if active == 'audit' }}">Audit</a>
-      <a href="{{ url_for('covers') }}" class="{{ 'active' if active == 'covers' }}">Cover Library</a>
-      <a href="{{ url_for('folders') }}" class="{{ 'active' if active == 'folders' }}">Folder Structure</a>
-      <a href="{{ url_for('analytics') }}" class="{{ 'active' if active == 'analytics' }}">Analytics</a>
-    </div>
-    <div class="nav-utility">
-      <form method="get" action="{{ url_for('search_page') }}" class="nav-search" id="nav-search-form">
-        {# On /search this box IS the page's search box -- search.html has none of its own,
-           so the navbar one carries the current query. Keyed on the endpoint, not on `q`
-           simply being defined: /dev/canonical passes its own unrelated `q`. #}
-        <input type="text" name="q" placeholder="Search" aria-label="Search" id="nav-search-input"
-               autocomplete="off" value="{{ q if request.endpoint == 'search_page' else '' }}">
-        <button type="submit" aria-label="Search">&rarr;</button>
-        <div id="nav-search-dropdown" class="search-dropdown" hidden></div>
-      </form>
-      <a href="{{ url_for('dev_index') }}" class="nav-icon {{ 'active' if active and active.startswith('dev') }}"
-         title="Dev" aria-label="Dev">⚙</a>
+  <nav id="navbar" class="navbar navbar-expand bg-body-tertiary border-bottom py-0">
+    <div class="container-fluid">
+      <div class="d-flex align-items-center gap-3">
+        <a class="navbar-brand mb-0 fs-6 fw-bold" href="{{ url_for('index') }}">Symr</a>
+        <ul class="navbar-nav flex-row gap-3">
+          <li class="nav-item"><a class="nav-link p-0 {{ 'active' if active == 'home' }}" href="{{ url_for('index') }}">Home</a></li>
+          <li class="nav-item"><a class="nav-link p-0 {{ 'active' if active == 'canvas' }}" href="{{ url_for('canvas') }}">Canvas</a></li>
+          <li class="nav-item"><a class="nav-link p-0 {{ 'active' if active == 'audit' }}" href="{{ url_for('audit') }}">Audit</a></li>
+          <li class="nav-item"><a class="nav-link p-0 {{ 'active' if active == 'covers' }}" href="{{ url_for('covers') }}">Cover Library</a></li>
+          <li class="nav-item"><a class="nav-link p-0 {{ 'active' if active == 'folders' }}" href="{{ url_for('folders') }}">Folder Structure</a></li>
+          <li class="nav-item"><a class="nav-link p-0 {{ 'active' if active == 'analytics' }}" href="{{ url_for('analytics') }}">Analytics</a></li>
+        </ul>
+      </div>
+      <div class="nav-utility d-flex align-items-center gap-3">
+        <form method="get" action="{{ url_for('search_page') }}" class="nav-search" id="nav-search-form">
+          {# On /search this box IS the page's search box -- search.html has none of its own,
+             so the navbar one carries the current query. Keyed on the endpoint, not on `q`
+             simply being defined: /dev/canonical passes its own unrelated `q`. #}
+          <div class="input-group input-group-sm">
+            <input type="text" class="form-control" name="q" placeholder="Search" aria-label="Search"
+                   id="nav-search-input" autocomplete="off"
+                   value="{{ q if request.endpoint == 'search_page' else '' }}">
+            <button class="btn btn-outline-secondary" type="submit" aria-label="Search">&rarr;</button>
+          </div>
+          <div id="nav-search-dropdown" class="search-dropdown" hidden></div>
+        </form>
+        <button type="button" id="theme-toggle" class="nav-icon nav-icon-button"
+                aria-label="Toggle light and dark"><i id="theme-icon" class="bi bi-moon"></i></button>
+        {# Click still goes to /dev; hover reveals the tools. Bootstrap's own
+           dropdown JS cannot do this -- data-bs-toggle intercepts the click,
+           which is exactly the click that must reach /dev. See style.css. #}
+        <div class="nav-dev dropdown">
+          <a href="{{ url_for('dev_index') }}" class="nav-icon {{ 'active' if active and active.startswith('dev') }}"
+             title="Dev" aria-label="Dev"><i class="bi bi-terminal"></i></a>
+          <ul class="dropdown-menu dropdown-menu-end">
+            {% for endpoint, name, blurb in dev_pages %}
+            <li><a class="dropdown-item {{ 'active' if active == endpoint }}" href="{{ url_for(endpoint) }}">{{ name }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
     </div>
   </nav>
 
