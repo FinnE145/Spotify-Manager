@@ -180,6 +180,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
       DONE               DONE
 
   ──► W (UI clean-up: adopt a CSS framework — V's site writing clean-up folded in) ✅
+  ──► Y (entity browser — every entity type as one sortable, filterable, paginated list)
   ──► X (table standardisation — one way to render a table of entities)
 
   ──► U (extras: songdoku)
@@ -243,6 +244,15 @@ The block above had `F/G ──► L`. There is no dependency in either directio
 prerequisites for search, and search is not one for them. O in particular is still gated on data
 rather than work — it waits for the `api_request` log to catch a real lockout — so time spent on L
 is not time O is blocked by. Recorded here rather than silently reordering the diagram.
+
+**Y sits directly after W, ahead of X — Finn's call, 2026-09-15, when he added it.** X had been
+next; Y jumps it. The two are entangled either way: a browser whose whole point is sorting and
+column control is the biggest customer the one table renderer X builds would have, and it needs two
+things no current page does — a sort that survives pagination and a secondary sort key. Going first
+means Y builds the first such table and X generalises from it rather than the reverse, so Y should
+build it in the shape X will want to keep (see Y's section) and X's plan should read Y's spec
+before deciding how header clicks work anywhere. It goes ahead of O (still gated on data) and F/G
+(deferred) by the same logic L did.
 
 **U sits at the very end, on its own branch, by decision, 2026-08-24.** No dependency on
 anything above — it's a toy feature, not library management, and Finn asked for it to sit last
@@ -1322,6 +1332,90 @@ Two traps worth carrying into the spec, both found the hard way in W:
    strikethrough on removed and unfollowed rows was declared on the `<tr>` and did nothing at all
    until 2026-09-01, on every page that used it, while the dimming beside it worked — so the rule
    looked live.
+
+**Y lands before this and changes what "sorting" has to mean here** (added 2026-09-15). The
+click-to-sort owed back from `/playlist/<id>` reordered the rows already on the page — right for a
+table that is all there, wrong for Y's paginated lists, where reordering one page of a hundred is
+not a sort. Y will have settled its own answer (server-side, `?sort=`, an ordered list of keys) by
+the time X runs; X's job is to decide whether that is *the* answer for every table or whether a
+fully-present table keeps a client-side sort as well, and to make the renderer carry a secondary
+key either way rather than leaving it Y's private feature.
+
+---
+
+## Y — Entity browser: every entity type as one sortable, filterable list
+
+**Not specced.** Own `/symr-plan` session. Placed directly after **W**, ahead of X, on 2026-09-15,
+when Finn asked for it: *"a simple browser that is just a paginated list of each entity type, with resizable
+columns for all of the relevant data we store and sortable. this would be mainly relevant for
+sorting things by score, plays, memberships, tenure, etc, across entity types. there should be a
+minimal filter box included — like search but a simple exact spelling match on that entity type."*
+And the use that motivates it: *"see all songs by half alive, over 2 mins, and then sort them by
+memberships, tie broken by plays."*
+
+**What it is.** One page per entity type — song / version / recording / release / track / album /
+artist / playlist, the same eight `entity_link` knows — listing *every* row of that type, paginated,
+with a column for each thing Symr already stores or derives about it (what the entity page shows,
+plus the numbers H, B and C make cheap: score on both horizons, plays total / 30d / 7d, live
+memberships, tenure and generation count, duration, release year, member count for a group), each
+column sortable and resizable, and a filter on top. The entity pages answer "tell me about this
+one"; `/search` answers "which one did I mean"; nothing today answers "show me all of them, in
+this order", and the closest things — `/dev/generations/tenure`'s two sort links, `/dev/canonical`'s
+capped listing — are one-type, one-column corners of it.
+
+**The open design question Finn raised at the same time, recorded rather than decided:** should
+this be integrated into search — *"or add more queries?"* — instead of being its own page? The
+starting position for the plan session:
+
+- **They are different query shapes, and folding one into the other muddies both.** Search (L/L2)
+  is a *finder*: fuzzy, ranked by relevance × score, capped, tolerant of typos, and it must stay
+  that way to be as-you-type. The browser is a *filter*: exact criteria, the full set, ordered by a
+  column. A fuzzy match cannot be a filter you then sort the whole set by — every row is a "maybe".
+- **But the filter should borrow search's spelling.** "Exact match" ought to mean equality on
+  `normalize.base_string`, not on the raw string — Finn typed *half alive* for **half•alive** in
+  the very sentence that asked for exact matching, and L's accent/punctuation folding is what makes
+  that hit. Prefix on the normalised form is probably the right minimum, exact is too strict for
+  the thing he actually wants.
+- **"More queries" is the interesting half, and it is field filters, not more search.** The
+  motivating example is two filters (artist = X, duration > 2:00) and a two-key sort, none of which
+  is a search problem. A small typed filter set decided in plan — artist, duration, membership
+  count, generation, tenure, has-ISRC — is closer to what was asked for than a grammar; the
+  plan session should pick the handful and stop.
+- **Search and browser can point at each other cheaply.** A type section on `/search` can link to
+  "all *songs* matching this" in the browser; an artist page can link to its tracks in the browser
+  sorted by whatever. Neither needs the other rebuilt.
+
+**Constraints the plan session inherits, all measured elsewhere:**
+
+- **A view is a URL.** Type, filters, sort keys and page all live in the query string
+  (`?artist=…&min_ms=120000&sort=memberships,-plays&page=3`), the way `/dev/canonical`'s `?q=`
+  and `/playlist/<id>?generation=1` already work — bookmarkable, shareable across the two machines,
+  and it makes sorting server-side by construction, which is the only kind that is correct on a
+  paginated list. That is also what makes the two-key sort trivial: the parameter is an ordered
+  list. (A client-side stable sort — click plays, then click memberships — gets tie-breaking for
+  free on a table that is all present, and is worth X knowing about, but it is not this page.)
+- **Sorting a whole type by a derived number is the one place "work proportional to what's
+  rendered" is knowingly broken, exactly as `/dev/canonical`'s ranking already breaks it.** Song,
+  album, artist and playlist scores are never materialised (H); `song_scores()` combines every
+  song group at query time in ~160–280ms and is the precedent — measure before assuming album and
+  artist cost the same, and before assuming plays do (`entities.play_stats` is per-page and
+  per-track-set; sorting 13.6k tracks by 30-day plays wants one aggregate query, not 13.6k calls).
+  Filters cut the set before the sort and should be applied in SQL for that reason.
+- **Column widths are per-viewer state, not data**: `localStorage` is the right home (the theme
+  toggle set the pattern), and a plain `mousedown` on a header edge is enough — no grid library.
+  W §2.2's rule stands: a session that wants one measures the need first.
+- **Every row links through `entity_link` and every cover through `cover_cell`**, the same as
+  everywhere else; a browser that rendered its own row shape would be the drift X exists to end.
+  Deleted playlists and their memberships stay excluded (W §9.14b), the same as every other listing.
+- **Y runs before X, so its table is the one X will generalise from.** Build it as the reference,
+  not as a one-off: plain `.table`, the shared row-state vocabulary (`removed`, `unfollowed`,
+  `unowned`), sort and resize behaviour kept in a small separate JS file with no page-specific
+  assumptions, and the column definitions as data (name, key, formatter, sortable) rather than as
+  eight hand-written `<thead>`s — because X's first move will be to lift exactly that into the one
+  renderer, and anything Y hard-wires is what X has to unpick.
+- Where it lives in the navbar — a new top-level **Browse**, or under the Analytics stub — is the
+  plan session's, along with page size and whether the eight types are one route with `?type=` or
+  eight.
 
 ---
 
