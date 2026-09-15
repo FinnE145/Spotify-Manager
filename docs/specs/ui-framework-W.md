@@ -793,6 +793,652 @@ endpoint** rather than against `index_data`: the shared shape is no longer index
 comparing against it would have passed while only one of the two endpoints carried the fragment —
 exactly the drift that test exists to catch.
 
+## 9.11 `/dev/generations` (page 11)
+
+The intro paragraph is deleted. It claimed the generations were *"numbered 1–36 and counting"*
+while the table under it rendered **37 rows** — the same failure as `dev.html`'s "the 36
+current-favs playlists", still sitting on the page that the rule was written for. Deleting it was
+cheaper than rendering it, since nothing else in the sentence was load-bearing.
+
+### The tenure link is a button, not a `Name →` link
+**This is the only page in the site that reaches `/dev/generations/tenure`.** The `→` convention
+the other dev pages use is for one route among several; this is the page's single outbound action,
+so it sits beside the `<h1>` as a `btn-outline-emphasis` — page title left, action right.
+
+### Tabs for the tier
+`Version · Song` was a `.toggle-links` paragraph: body text with one word bolded, saying nothing
+about the two being alternatives. Now `nav nav-tabs`.
+
+**Real links, not Bootstrap's JS tab component** — the tier decides what the *server* counts, so
+each is a page load at its own `?tier=`. The tabs' own bottom rule is the divider above the table,
+so the page needs no `<hr>` (rule 6, the never-doubled half).
+
+`.nav-link` joins `.btn` / `.list-group-item` / `.dropdown-item` / `.card` in the site-wide link
+rule's `:not()` chain. **That is not a breach of standing rule 3**: narrowing a rule's own scope is
+not out-specifying it, and that chain is exactly where "Bootstrap already styles this component"
+gets said once.
+
+`.toggle-links` still has two users — `generations_tenure.html` (page 12) and
+`entity_playlist.html` (page 19). The same tabs go there when those pages come up; the CSS rule
+stays until they do.
+
+### The table
+- **Cover + name first, the ordinal second** and as a bare number, not `Generation N`. Both still
+  link: the name to the playlist, the number to the same playlist's `?generation=1` view.
+- **`Carried in / new` split into two numeric columns.** It was one cell holding the string
+  `"133 carried / 55 new"`, which is two numbers pretending to be prose.
+- **Newest first**, reversed in the template rather than in `generations()` — that function's
+  carried / new / survived figures are computed from each generation's *neighbours*, and its
+  docstring promises ordinal order.
+- `generation_spans` picks up `s.image_url` (it already joins `snapshot` for the name) and
+  `generations()` passes it through, for `cover_cell(g.image_url, 'playlist')`.
+- **No collapse here**, unlike `/dev/snapshot`'s playlist list: the table *is* the page, and
+  collapsing a page's only content by default hides everything behind a click.
+
+The empty state's em dash becomes a full stop.
+
+## 9.12 `/dev/generations/tenure` (page 12)
+
+Same tabs as page 11, top copy deleted, backlink left as the plain `← Generations` link it was.
+
+### The table lost three columns and gained a cover
+`Runs`, `First` and `Last` are gone — five columns of small integers where the strip beside them
+already shows first, last and every run visually. **`Tenure` and `Total` both stay**: they diverge
+whenever a group leaves and comes back (visible on the real page — *Hot Tea*, 6 and 7).
+
+The freed width goes to `Track`, which was the only column that wrapped, at three lines. The
+artist credit now sits on its own line: `.leaf-meta` is inline in its six other uses, so the rule
+is scoped `#tenure-table .leaf-meta`, not changed globally. Album covers via `cover_cell`.
+
+The page's total moved from the deleted intro copy into the **pager line**, where it belongs
+anyway — it is what the pager is paging through. Deleting it outright would have dropped a
+rendered count the page genuinely needs.
+
+### `score_display(…, label=false)`
+A new keyword, defaulting to `true`, so every other caller is untouched. H spells the word out
+because *"an unlabelled unbounded number beside a track name reads as a play count or a duration"* —
+that reasoning is about a chip sitting **in prose**. In a column under a `Score` header the header
+is the label and repeating it 50 times is noise.
+
+### `entities.format_span(days)`
+`598 days` is a number you divide in your head before it means anything. Now: days under a month,
+months above it, one decimal under ten months and none at or above.
+
+**The cut is made on the rounded value, not the raw one.** 303 days is 9.955 months, which
+`months < 10` would format as `10.0 mo.` — the two digits the decimal exists to avoid.
+
+It lives in `entities.py` rather than in a macro **because these edges are worth a unit test**, and
+a macro can only be tested through a page render, which would mean constructing a group with a
+tenure of exactly 303 days to observe one branch.
+
+### The strip went invisible, and this is standing rule 1
+Every `.gen-cell` rule was written `.data-table td.gen-cell`. Converting this table to `.table`
+orphaned all of them and **the entire 37-column strip rendered as blank space** — no background, no
+width, nothing. It is the page's whole point, and it was gone.
+
+That is the exact rule §9c lists first, broken on the very next page after it was written. Two
+lessons, and the second is the useful one:
+
+1. Sweeping means grepping `\.data-table` in `style.css` **before** converting, not after.
+2. The fix is not to re-prefix with `.table`. `generation_strip` renders into the tenure table
+   (`.table`) *and* into `entity_group.html` / `entity_artist.html` (still `.data-table`), so a rule
+   keyed on either one is silently blank on the other. **`td.gen-cell` with no table prefix** is
+   what is actually correct, and the plain `background` is what makes it work in both — inside a
+   `.table` it beats Bootstrap's own cell rule on source order at equal specificity, and inside a
+   `.data-table` there is no `--bs-table-bg` for a variable to feed.
+
+### Tests
+- Five on `format_span`, covering the day/month boundary at 29 and 30, both decimal branches, the
+  rounded-cut edge at 303 days, and `None` rendering as nothing rather than `0 days`.
+- **`tests/test_macros.py` is new**: `_macros.html` holds the site's display decisions and had no
+  direct tests at all, so `score_display` — "the whole design system for scores" — was observable
+  only through whatever arguments a page happened to pass. Both label directions are asserted, since
+  ignoring the flag and dropping the word for everyone are the two ways it goes wrong. A mutant of
+  each was checked; before this file existed, both survived the entire suite.
+- `test_the_tenure_tier_toggle_rolls_two_versions_into_one_song` follows the count into the pager
+  line, and now reads it back **by regex rather than substring** — `"1 group"` is a substring of
+  `"21 groups"`.
+
+### Numbering the strip cells
+Every cell carries its ordinal, and **the width for it was bought, not found.** At the original
+9px a two-digit number needed a 7px font, which is not readable.
+
+Finn's rule settled the shape: **number every cell, not just each run's ends** — numbering the ends
+would need those cells wider than the rest, and an uneven grid is harder to read across than small
+text is. So the cells had to grow uniformly, and the only source of width was the data columns:
+`Total` dropped (it and `Tenure` differ only when a group leaves and returns, which `Span` and the
+strip both already show), and `Track` narrowed from 320px to 196px.
+
+That funds **13px cells**: 10px of tabular digits at 8px, the 1px separator, and a hair either
+side. Measured on the real page — 37 cells, no horizontal scroll on the strip *or* the document,
+and `"37"` is not clipped in its box.
+
+- **Top-aligned**, so the number labels the column and the bar under it stays the thing you scan.
+- Filled cells take **`#fff`, not `var(--bs-body-bg)`** — `--bs-primary` is a mid blue in both
+  themes, so the contrasting colour is white in both; the body background would go light in light
+  mode and vanish into the bar. Verified in both themes.
+### The cell tooltip says when the generation began
+`Generation 37: v37.2.1` became `Aug 11, 2026 · v37.2.1` — the ordinal is already the cell's
+visible text, so repeating it in the tooltip said nothing the hover didn't already show.
+
+The date goes through **`format.js`, the site's one date formatter**, so it lands in the viewer's
+timezone and in the same phrasing as every other date on the site. That needs a new member of the
+`data-datetime` family: **`data-datetime-title`** formats into an element's `title` rather than its
+text, for an element whose visible content is something else, with `data-title-suffix` appended
+after a `·`.
+
+- **Built from the two attributes every pass, never appended to the existing title**, so a second
+  `applyRelativeTimes()` over the same element cannot double it up. Verified live.
+- Two named attributes rather than one packed string: at 3,700 cells the ISO dominates the weight
+  either way, so the packing bought nothing and cost legibility.
+- `s.started_at or ''` matters — `generation_spans` returns NULL for a generation with zero live
+  members (P1-015), and Jinja renders `None` as the string `"None"`, which `new Date()` would
+  happily title the cell with.
+
+### The page-weight investigation, and what it actually found
+The tooltip takes the page from 293KB → 442KB, since a ~20-char ISO replaces a shorter title on
+every one of 3,700 cells. The obvious fix — emit the 37 spans once as JSON and let JS apply them,
+taking the page to 167KB — **was measured before being built, and does not save time.**
+
+| | 442KB (per-cell attributes) | 167KB (no attributes) |
+|---|---|---|
+| server, curl, 12 runs | median **143ms** | median **146ms** |
+| DOM parse, 3 loads | 71 / 56 / 60ms | 33 / 60 / 26ms |
+| DOMContentLoaded | median 247ms | median 231ms |
+
+Server cost of the attributes is **zero within noise**, and the parse difference is ~25ms with
+samples that overlap. **An earlier reading of 212ms vs 134ms was contamination** — a parallel
+session on the same machine — which is exactly what `timings-contaminated-by-parallel-chats`
+warns about, and it was quoted to Finn as a 78ms saving before the twelve-run re-measurement
+withdrew it. One-shot `curl` timings are not evidence here.
+
+**The real cost was in the formatter, not the bytes.** `applyRelativeTimes` called
+`formatRelativeTime` once per cell — 3,700 calls for **37 distinct dates**:
+
+| title pass over 3,700 cells | |
+|---|---|
+| recomputing per cell (what it did) | ~130ms |
+| DOM assignment alone, no formatting | 0.5ms |
+| 37 strings precomputed into an array, then assigned | 1.7ms |
+| **shipped: per-pass cache keyed on the ISO** | **~7ms** |
+
+The middle two rows are the diagnostic benchmark, not the implementation — they isolate the cost
+to `formatRelativeTime` rather than to touching the DOM. **What ships is the last row**: a `Map`
+in `applyRelativeTimes`, which still walks the document, reads two dataset properties per cell and
+builds each string, and so lands at ~7ms rather than the array's 1.7ms.
+
+Measured over three cold loads: title pass **~133ms → ~7ms** (5.1–11.4ms), DOMContentLoaded
+**~383ms → ~216ms** (209 / 216 / 262), parse ~53ms, server ~143ms. This is a site-wide win, not a
+tenure one — any page rendering the same timestamp repeatedly gets it.
+
+**Per-pass, not module-level, and this is the load-bearing part**: relative phrasing goes stale —
+"just now" does not stay true — and a long-lived page re-runs this after a fragment swap
+(`/dev/scrobble` polls). Within a single pass there is nothing to go stale against.
+`formatRelativeTime` itself stays pure, since `makeDateSpan` and the job progress labels call it
+directly.
+
+Verified on `/dev/scrobble` as well as the strip: 51 distinct timestamps, all rendered, none left
+as raw ISO — a cache keyed wrongly would have shown one date 51 times.
+
+**Conclusion: the JSON-blob rewrite is not worth doing.** It would trade a shared macro, a new
+JSON emitter and changes to two unreviewed templates for ~25ms of parse, in noise.
+
+
+**This changes two pages that have not been reviewed yet**: `entity_group.html` and
+`entity_artist.html` render the same macro, and their single-row strips are now numbered too. That
+follows from the macro being shared on purpose, and it reads as an improvement — an unlabelled
+lone strip is worse than a labelled one — but it is a change made outside the page being worked on.
+
+Also this pass: the sort line gets `mt-3` (it sat flush against the tabs), and the `Span` cell gets
+`white-space: nowrap`, since `"8.8 mo."` was the one value narrow enough to look like it fits and
+wide enough to wrap, making one row taller than its neighbours.
+
+## 9.13 `/dev/scoring` (page 13)
+
+The smallest page left, and the one **V's brief named** for implementation vocabulary leaking into
+the UI. Both instances are gone.
+
+- The intro paragraph cited its own spec path — `(docs/specs/scoring-H.md)` — and then explained
+  the materialization model, which is a design note rather than something you act on. Deleted.
+- The never-run status said *"the read-time backstop (docs/specs/scoring-H.md §9.3) runs one on the
+  very next page load regardless."* A section number in the UI, which will outlive the section, and
+  an em dash. It is now *"No recompute has run in this process yet. One is queued automatically
+  when anything it depends on changes."*
+
+**That rewording is a correctness fix, not just a copy one.** `ensure_fresh()` enqueues *only when
+the fingerprint has actually moved*, so "runs one on the very next page load" was a promise the
+code does not make.
+
+Layout follows the settled pattern: controls to the top and de-carded (status line, then the
+button), a divider, then the counts table kept in a card — the `/dev/import` stats-card shape, with
+`<th>` labels and no `thead`, since `Tier | Scores` said nothing the rows didn't. `Recompute
+scores` is `btn-primary`, like `Poll now`: the page's one action.
+
+The `.data-table` → `.table` sweep was run **before** converting this time (§9.12's lesson). This
+table uses none of the special-case rules, so nothing was orphaned.
+
+### Tests
+`/dev/scoring` had **only the non-5xx route sweep** — neither branch of the page was asserted, and
+neither were the four counts. That is P2-010's shape exactly: a route case proves the page responds
+and nothing more. Both branches now have a test, checked against two mutants: inverting the
+finished/never-run condition, and dropping a tier from the loop. Both were caught; before, both
+would have passed the whole suite.
+
+## 9.14 `/search` (page 14)
+
+All five sections become collapses. **Most Relevant is `show` by default** — it is the answer to
+the query, and the four type sections are the drill-down. They render collapsed with their counts
+in the heading, which is most of what you wanted from them anyway.
+
+One Jinja `{% macro section(id, title, open) %}` with a `{% call %}` block per section, rather than
+the same fifteen lines of collapse scaffolding written out five times.
+
+### The four type tables take the bare score chip
+Same argument as §9.12: each has a `Score` header, so the word on every row is noise.
+**`_search_combined.html` keeps the label** — it is shared with the navbar dropdown, which has no
+header to carry it.
+
+### `See more` is borderless, but not blue
+`.btn-link` is Bootstrap's borderless button and its border really is transparent (verified). It
+also ships raw link blue and underlined, which would have been **the only blue text on the page**
+and exactly the treatment the site-wide link rule exists to avoid. `--bs-btn-color` is fed the
+emphasis colour, through the button's own variables so hover and focus still work.
+
+### The last inner scroll region is gone
+`See more` used to add `.scrollable` to its section — a 420px `overflow-y` box, described in the
+CSS as "the one inner scroll region left on the site". That is the thing §9.3 removed everywhere
+else, on Finn's note that scroll sections "get annoying when you scroll down the page and get stuck
+in each one". The collapse is now the bound, so the class, both its rules and the JS line that
+added it are deleted. Verified: 10 → 79 rows on See more, no sideways scroll.
+
+### The orphan this page nearly created, and it was in the navbar
+`_search_combined.html` is rendered by **both** this page and the navbar dropdown, so converting it
+to `.table` reached outside the page being worked on. Two rules were keyed to the old class:
+
+- `.search-dropdown .data-table { font-size: 12px }` — renamed.
+- `.search-dropdown tr.highlighted { background: … }` — **the dropdown's keyboard-navigation
+  highlight**, and a plain `background` on a `<tr>`, which is standing rule 2.
+
+The second was **proven rather than assumed**: injecting the old rule's exact shape live paints the
+row red and leaves the cell `rgba(0,0,0,0)` — the cell's own declared background covers the row
+entirely, so the highlight would have been invisible while the class was still being applied
+correctly. Nothing on the page would have looked broken; Up/Down would just have stopped showing
+where you were. Fed as `--bs-table-bg`, it works: highlighted cell `rgb(52,58,64)` against
+`rgb(33,37,41)`, verified by driving the dropdown with synthetic key events.
+
+## 9.14b Deleted playlists, everywhere (folded in at page 14)
+
+`/search` surfaced it: `/dev/snapshot` hides unfollowed playlists, and **nothing else in the site
+knew they existed.** This is a data change, not a UI one, folded into W because the search page is
+where it became visible.
+
+**Finn's rule, and the reason the fix goes where it does:** *"the app already doesn't know about
+any deleted playlists that came before it, so we shouldn't treat new deleted playlists
+differently."* Membership and tenure must exclude them; every page except `/dev/snapshot` must not
+show them at all.
+
+### What was actually wrong
+`unfollowed_at` was read in **exactly two places** — `snapshot.html`'s row class and
+`entity_playlist.html`'s note. Unfollowing stamped the `snapshot` row and stopped, so every one of
+that playlist's membership rows still had `removed_at IS NULL`, which is what the whole codebase
+means by *live*.
+
+Measured on the real library before the fix:
+
+| | |
+|---|---|
+| unfollowed playlists | 1 (`Indie Rock Mix (test)`, deleted 2026-08-23) |
+| live memberships it still held | 50, of 12,709 |
+| tracks whose **only** live membership was that playlist | 32 |
+| generation playlists affected | 0 — tenure was clean |
+
+Live memberships are a **scoring input**, so those 50 were being scored as if the playlist existed;
+`live_count` counted them, and `playlists_for_tracks` listed a deleted playlist on 50 tracks' pages.
+
+### The fix is one write at the point the fact becomes true
+`snapshot.py` ends the memberships in the same loop that stamps `unfollowed_at`. The alternative —
+`AND s.unfollowed_at IS NULL` on every live-membership query — is **six queries across four
+modules** (`scoring`, `canonical`, `entities`, `generations`), each one a chance to forget, and
+every future query too. Ending the rows means every reader is correct without being touched,
+because they already agree on what `removed_at` means.
+
+- **Guarded on `removed_at IS NULL`.** Without it, a track taken out of the playlist months ago
+  would have its removal date rewritten to the day the playlist was deleted, quietly falsifying an
+  append-only log. Tested, and the mutant is caught.
+- **The rows themselves survive** — the log is append-only; only `removed_at` is stamped.
+- **Re-following still works**: `_diff_playlist_tracks` compares against live rows only, finds
+  none, and inserts fresh ones — a truthful gap rather than pretending the playlist never left.
+
+`search.py` needs its **own** filter, because it reads `snapshot` directly and never touches
+`membership` — ending memberships does not reach it.
+
+### The history tables needed the same rule, and this is the sharper half
+Ending the memberships fixed every *count*, but the membership **history** tables show removed rows
+on purpose, so the deleted playlist kept appearing on them — struck through, marked removed, and
+looking like an ordinary past membership.
+
+Finn's objection is the original argument turned back on itself: that table now *"shows the song
+present in some deleted playlists but doesn't show other deleted playlists."* Symr has no rows at
+all for the playlists deleted before it existed, so a table that lists the ones it happened to
+watch being deleted **reads as a complete history and is not one**. A partial history that looks
+complete is worse than a shorter honest one.
+
+So `entities.track_detail`'s memberships query and `entities.playlists_for_tracks` (the rollup the
+group, album and artist pages share) both exclude unfollowed playlists outright — removed rows
+included. They are two separate queries and can regress independently, so both have their own test
+and both mutants were checked.
+
+`/track/<id>` for one of the 32 now reads *"Not in any captured playlist"* — exactly what it would
+say for a track whose only playlist was deleted before Symr existed, which is the point.
+
+`/playlist/<id>` deliberately still renders for an unfollowed playlist: `playlist_detail` selects
+*all* memberships including removed ones, so the page stays a truthful record, and `/dev/snapshot`
+links to it. That is the one deliberate exception, and it is reachable only from the page that
+still lists deleted playlists.
+
+**Not changed:** `generations.py` still joins `snapshot` without the filter. No generation playlist
+is unfollowed (checked), and a generation is a numbered era that happened — deleting its playlist
+does not undo that. Flagged rather than decided.
+
+### Tests
+Three, each checked against its mutant: memberships not ended, the `removed_at IS NULL` guard
+dropped, and the search filter removed. All three caught; **the whole suite was green before any of
+them existed**, which is what let this sit unnoticed.
+
+### The existing rows
+`scripts/end_unfollowed_memberships.py` backfills playlists unfollowed before the change — the next
+pull will not, since a deleted playlist is no longer in the target list. It sets `removed_at` to
+that playlist's own `unfollowed_at` (when Symr observed it gone, which is what the new code path
+would have written), reports without writing unless `--apply`, and recomputes scores afterwards
+because it has just changed a scoring input.
+
+## 9.15 `entity_group.html` (page 15, four routes)
+
+De-carded throughout, `Playlists` / `Subtree` / `Member tracks` on collapses, the Edit link
+promoted to a `btn-outline-emphasis` at the top with the other controls, covers added to the
+Playlists table's Track column, and the **tier chip is now plain text** — settling §9c's open
+question the same way the canonical tree's chips were settled.
+
+**Section order (Finn, at page 17):** `Plays` → `Generations` → `Subtree` → `Member tracks` →
+`Playlists`. What the page *is* comes first — where this group sits in the library and what it
+contains — and the playlist rollup goes last as reference. `Playlists` had been second, which put
+a table of every membership between the score and the group's own structure.
+
+### The breadcrumb became a navigator
+It was five words, each linking to the one path through `track_group` that `track_ids[0]` happened
+to take. Now it carries **all five tiers including Track**, and:
+
+- A tier **above** the current one has exactly one group — every member track shares it — so it is
+  always a plain link.
+- A tier **below** can have several. **One is a link; several is a dropdown.**
+
+Each option shows a cover plus whatever actually tells that tier's members apart, which is the
+whole point — `Release 14757` identifies nothing:
+
+| tier | shown |
+|---|---|
+| release | album cover + **album name** |
+| recording | cover + track name + **length** |
+| version / song | cover + track name + **artists** |
+| track | cover + track name + **middle-truncated id** |
+
+The truncation earns its place on the real page: `/song/4296`'s three tracks are all called
+*Forgotten Souls*, and the id is the only thing separating them.
+
+**`_breadcrumb` costs no extra track queries.** Every descendant group's tracks are a subset of
+this group's, so its representative is already in `tracks_by_id`; only `canonical.representative`
+is called per descendant, which is the site's one rule for which track stands for a group.
+
+### `entity_link` gained a `{% call %}` body
+A dropdown option is a link with rich content — cover, name, second line. Building its `href`
+anywhere else would have duplicated the routing `entity_link` exists to centralize (CLAUDE.md: *no
+`url_for` to an entity route survives outside this file*). The macro now renders `caller()` when
+invoked with `{% call %}` and its `text` argument otherwise, so every existing call site is
+untouched.
+
+### We had been shadowing a Bootstrap component by accident
+The separators were written as `" › "` and rendered with **no spaces at all**. The HTML was
+correct; the cause was that `<p class="breadcrumb">` silently picked up **Bootstrap's own
+`.breadcrumb` component**, which is `display: flex` — and flex trims whitespace inside an anonymous
+text item, so no amount of rewriting the separator string would have fixed it.
+
+The fix is to stop shadowing and use the real component: `<ol class="breadcrumb">` with
+`breadcrumb-item`, and the divider fed through **`--bs-breadcrumb-divider`** rather than written
+between the crumbs at all. `.active` replaces the hand-rolled `<strong>`.
+
+**This is worth generalising**: Symr had a `.breadcrumb`, a `.card`, a `.badge` and a `.table`
+before Bootstrap arrived, and a class Bootstrap owns will silently apply its component's layout to
+markup that was never shaped for it. A collision does not error — it just quietly lays out wrong.
+
+### Tests
+Five, replacing the single old breadcrumb test (which asserted the retired `["version_id"]` shape).
+They cover: scoping to this group's own tracks, all five tiers present with exactly one marked
+current, a tier below with three groups offering three options, each tier's own display field, and
+`_short_id` keeping both ends while leaving a short id alone. Three mutants checked — building the
+breadcrumb from one track (the old behaviour), showing the id instead of the album, and never
+marking the current tier. All caught.
+
+## 9.16 `entity_track.html` (page 16)
+
+Built to match the tier template, which is what Finn asked for: same header shape, same breadcrumb,
+same Edit button at the top, same de-carded sections with a divider between each, same collapse on
+the listy ones.
+
+### `Canonical` becomes the breadcrumb
+That section was a four-row table reading `Song 4296 / Version 4295 / Recording 4294 / Release
+14757` — the same four links §9.15 had just turned into a named, covered breadcrumb, still rendered
+as bare ids. It is gone, replaced by `breadcrumb_nav`, with **Track** as the current tier.
+
+So `crumb` and `breadcrumb_nav` moved out of `entity_group.html` and into **`_macros.html`**, which
+is where "the one way to render X" lives on this site.
+
+**A track page's breadcrumb is all ancestors**, which exposed a gap in `_breadcrumb`: it looked
+representatives up in `tracks_by_id`, which on a group page covers every descendant for free (their
+tracks are a subset of this group's) but on a track page covers nothing above the track itself.
+Every crumb would have fallen back to rendering a bare group id — the exact thing this replaced. It
+now falls back to `canonical.track_display`, paying at most four lookups on the one page that needs
+them, and none on the group pages.
+
+The track page **never produces a dropdown** — a track has exactly one group per tier — but it goes
+through the same builder rather than a second, simpler one that would drift.
+
+### The rest
+- `Spotify identity` keeps its card, being the same label/value stats table as §9.8's, with `<th>`
+  labels now.
+- `Relink aliases` is conditional and absent on most tracks, so it was checked on a track that has
+  one (`/track/03auLpFLdCv4HozP4pQseu`) rather than assumed.
+- The Spotify link's `→` becomes `bi-box-arrow-up-right`, since it leaves the site.
+- The Edit button points at `groups.song`; the deep-link route resolves any group id to its song
+  anyway.
+
+Section order and dividers were verified from the DOM rather than the screenshot — the 1px `<hr>`
+at Bootstrap's 0.25 opacity is genuinely hard to see against the dark background at screenshot
+resolution, and "I cannot see it" is not the same finding as "it is not there".
+
+## 9.17 `entity_album.html` (page 17)
+
+De-carded, dividers, `Tracklist` and `Playlists` on collapses, `Plays` left open, external-link
+icon.
+
+**Section order:** `Plays` first, like every entity page, then
+**Tracklist → Playlists → Spotify identity**.
+
+Strict consistency would have put `Tracklist` last, where the group page puts `Member tracks` and
+the track page puts its extras — and it was built that way first. Finn moved it up, correctly: an
+album's tracklist is the thing you came to the page for, and burying it under an identity table to
+match a structural rule is the rule outranking the content. Identity stays last, which is also
+where it is most defensible: it is reference detail on every page that has one. **No cover column in the tracklist** — every row would show the same album art. No
+breadcrumb: an album is not in the canonical hierarchy.
+
+### The header now reads like the other entity pages
+It had drifted into its own order. Aligned to the track and group pages: **who and what** on the
+first line, **what this is in Symr** on the second.
+
+| | track page | album page |
+|---|---|---|
+| line 1 | artists · album · duration | artists · release date · **runtime** |
+| line 2 | `Track` · score | `Album` · N of M known · score |
+
+`album_type` takes the slot `Track` / `Song` / `Version` occupies, which is what it actually is.
+
+### Album runtime, or nothing
+New `entities.format_duration(ms)`, beside `format_span` and there for the same reason — the edges
+are worth a test, and a macro can only be tested through a render. It grows an hours field **only
+when there is one**: a fixed `h:mm:ss` puts `0:` in front of every track length, a fixed `m:ss`
+renders a long album as `97:14`.
+
+**The total is shown only when every track is accounted for.** A sum over the tracks that happen to
+be known reads as the album's runtime and is not one. `Hot Fuss` is complete at 11 of 11 even
+though Symr owns two, because the stored tracklist supplies the rest; the 460-track Vivaldi
+compilation Spotify paged past shows nothing rather than a third of its length. The guard is both
+`len == total_tracks` **and** `all(d is not None)` — the count check alone would happily sum a
+missing duration as zero.
+
+### The new Spotify identity section
+Finn's question, and yes: the `album` row carries fields the page never showed. `album_id`, type,
+release date **with its precision** (a year-precision date reads very differently from a day one),
+total tracks, **when the tracklist was last fetched**, and the Spotify link. `release_date_precision`
+had to be added to `album_detail`'s SELECT — it was not loaded before.
+
+No URI row, unlike the track page: `album` stores no `uri` column, and deriving
+`spotify:album:<id>` would be inventing a value rather than showing one.
+
+### Both standing traps, on one page
+This is the first page carrying rule 1 and rule 2 in the same rule:
+
+`.data-table tr.unowned` is the greying on tracks Symr does not own — 9 of the 11 here. Converting
+naively would have orphaned it *and*, once re-keyed, a plain `color` on a `<tr>` still loses to
+Bootstrap's declared cell colour. Either failure renders all 11 rows identically, which reads as
+owning the whole album. It is now `.table tr.unowned` fed `--bs-table-color`, verified live:
+`rgb(255,255,255)` against `rgba(222,226,230,0.75)`, 9 rows greyed.
+
+`.tracklist-divider` was re-keyed with it. Both classes are used only by this page, so unlike
+`.gen-cell` they need no unprefixed form.
+
+### Tests
+Four, three mutants checked (always sum, drop the `None` guard, never render hours) — all caught.
+The always-sum mutant also failed the complete-album case, which is the half that stops "return
+None forever" passing.
+
+## 9.18 `entity_artist.html` (page 18)
+
+Order, per Finn: **Plays → Generations → Albums → Tracks → Features → Playlists → Spotify
+identity**. Everything de-carded, the four lists on collapses with counts, covers throughout.
+
+### `Primary` / `Featured` become `Tracks` / `Features`
+They were two `<h3>` sub-tables inside one `Tracks` section, and the labels did not say what they
+meant. **`track_artist_role` decides it**: *primary* is an artist who is also credited on the
+album, *featured* is one credited on the track while somebody else holds the album. There is a
+fallback — when no credit on a track is an album artist, all of them count as primary — which
+exists so the 63 tracks on Various Artists compilations do not classify their real artist as a
+guest.
+
+Finn had never seen `Featured` populated, so it was measured rather than explained: **2,352
+featured credits against 14,639 primary, across 1,214 of 4,271 artists.** It fires, just not for
+the artists he visits — Travis Scott 51, Future 35, 21 Savage 29. half•alive has 103 primary and
+**0** featured, being a band that releases its own records and does not guest. The empty state
+now says so in words (*"Never credited on someone else's release"*) rather than `None.`
+
+### Spotify identity, at the bottom
+Thin but real: `artist_id`, **when the image was last fetched**, the Spotify link, and the
+**merged ids** — moved out of the header, where they had been a stray line of prose. That row also
+carries the `/dev/artists` link, so the whole alias story is in one place.
+
+Verified on an alias: `/artist/7sOR7gk6XUlGnxj3p9F54k` redirects to the canonical id and the
+identity table reports the requested id as the merged one.
+
+### Playlist covers, retroactively (Finn, at page 18)
+The playlist lists on the pages already converted had no covers. `playlists_for_tracks` and
+`track_detail`'s memberships query now both carry `s.image_url AS playlist_image_url`, and all four
+entity pages render `cover_cell(..., 'playlist')`.
+
+Verified live rather than assumed: artist page **61 covers + 1 `bi-music-note-beamed` glyph over 62
+rows** — the glyph is Liked Songs, which stores no image. Group page 8 rows × 2 covers, album page
+6, track page 6.
+
+**Liked Songs gets the generic playlist glyph here, not the heart it gets on `/dev/snapshot`.** The
+heart needs an `is_liked` flag, and `LIKED_PLAYLIST_ID` lives in `snapshot.py`, so entity pages
+would take a new `entities → snapshot` edge for one glyph. That edge is cycle-free (nothing
+`snapshot.py` imports reaches `entities.py`, checked) but it is an architectural change for a
+cosmetic detail, so it is flagged rather than taken. Only **2 of 153** playlists have no cover at
+all, and one of them is Liked Songs.
+
+## 9.19 `entity_playlist.html` (page 19)
+
+The last entity page and the one with the most render paths. `Totals` folded into the header meta
+(it was two facts), `Tracks` a collapse that is **open by default** — it is the point of the page —
+covers added, `Exclude from pulls` on Bootstrap's `.form-check`.
+
+### The generation view stops being a second page
+It was a whole `<section>` re-listing the same tracks as two `<h3>` lists, `Carried forward` and
+`New in this generation`, with a `.toggle-links` tier switch. Finn's reshape: **a control at the
+top that turns one column on in the tracklist that is already there.**
+
+So `generations.generation_view(conn, ordinal, tier, track_ids)` now returns **`label_by_track`**
+rather than two lists of group summaries, plus `carried_count` / `new_count` for the header line.
+That also removes real work: the old `_summaries` built a `representative()` + `track_display()`
+for every carried and new group — ~100 lookups per view — for rows nobody draws any more.
+
+The toggle and the tier tabs go through **`entity_link`**, not `url_for`. The first draft used
+`url_for` and `test_no_template_outside_macros_bypasses_entity_link` caught it, which is exactly
+what that test is for.
+
+### Sorting removed, and owed back
+`/playlist/<id>` had the site's only click-to-sort table. Finn's call: drop it here and do it
+properly site-wide. The markup, the ~35 lines in `snapshot.js` and both CSS rules are deleted, and
+**roadmap step X** now exists to reinstate it as part of one shared way to render an entity table.
+
+### The strikethrough had never worked
+Removed rows were meant to be greyed *and* struck through. Measured on the real page:
+`textDecorationLine` came back **`"none"`**.
+
+**`text-decoration` does not propagate from a table-row box into its cells.** The rule declared it
+on the `<tr>`, so the strike silently did nothing — on this page, and on `/dev/snapshot`'s
+unfollowed playlists, for as long as the rule has existed. The dimming beside it worked, which is
+what made the rule look live: a half-working rule reads as a working one.
+
+Now `.table tr.removed > td`. Verified: `line-through` on removed rows, `none` on live ones.
+
+### Also found
+`playlist_detail`'s row query never selected the album image, so every cover fell back to the
+music-note glyph the moment `cover_cell` was added. 131 covers, 0 glyphs after.
+
+### Tests
+The six `generation_view` tests were rewritten for the per-track shape. One was rewritten twice:
+the tier test used to compare group counts (2 versions vs 1 song), which per-track labels cannot
+express — both tiers label both tracks. My first rewrite asserted `new_count == 2` on both sides,
+**which no longer proved the tier did anything**. It now pins the real semantic difference: a new
+version of a song that was already there is `new` at version tier and `carried` at song tier —
+same track, same generation, opposite answers.
+
+The route test needed a second generation in its fixture for the same reason. Three mutants
+checked — tier ignored, previous generation ignored, out-of-generation tracks labelled — all caught
+at both unit and route level.
+
+## 9.20 `coming_soon.html` (page 20, four routes)
+
+One line. `Audit — coming soon` becomes the page name as the `<h1>` and *"Coming soon."* as the
+meta line under it — the structural fix for the em dash, and the shape every other page has: the
+name in the heading, the status beneath.
+
+## 9.21 `error.html` (page 21)
+
+`404 — Not Found` → `404 Not Found`. The two `.panel` boxes were the last cards on the site
+outside the stats tables, and they become **Bootstrap alerts**, the one component we had not yet
+used that actually fits: `detail` (*Album not found.*) is information and gets `alert-secondary`;
+`exc`, present only on a 500, is a failure and gets `alert-danger` with the text in `<code>`.
+
+### The 500 branch is tested through the real handler
+It cannot be reached from any route without breaking something, so the test registers a throwaway
+`/__boom` on the fixture app that raises. This works **only because `conftest.py`'s `app` fixture
+deliberately leaves `TESTING` off** — Flask would otherwise propagate the exception past the
+handler and into the test, and `app.py`'s whole centralised error path would be unreachable from
+the suite. The fixture is function-scoped, so the extra route does not leak into
+`test_catalog_covers_every_registered_route`.
+
+Two mutants checked: rendering the exception box unconditionally, and swapping the two alert
+classes. Both caught.
+
 ## 9c. Resume here
 
 **Done:** shell, navbar (twice), icons and cover placeholders, gear/terminal hover menu, and pages

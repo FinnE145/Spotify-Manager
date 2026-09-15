@@ -181,6 +181,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 
   ──► W (UI clean-up: adopt a CSS framework — V's site writing clean-up folded in)
       IN PROGRESS
+  ──► X (table standardisation — one way to render a table of entities)
 
   ──► U (extras: songdoku)
 ```
@@ -1264,6 +1265,45 @@ at most, the framework's own optional JS — nothing that needs a build step.
 - **`docs/style_guide.md`** — *settled: it will never exist.* The framework is the design system,
   and this step's own spec is the record of the local rules on top of it. `CLAUDE.md`'s Frontend
   section now says so instead of promising a guide.
+
+---
+
+## X — Table standardisation
+
+**Not specced.** Own `/symr-plan` session. Placed immediately after **W**, at Finn's call on
+2026-09-01, made while converting `/playlist/<id>`: *"we might need a library or macro or
+something, but i want sorting, i want the same fields and displays used for places that use the
+same data, etc, and we are getting closer but not quite there."*
+
+**W gets tables consistent by hand; X is meant to make them consistent by construction.** Every
+entity page now renders a track table, and they agree only because one session wrote them in a row
+— nothing stops the next one diverging, and W repeatedly found exactly that kind of drift after
+the fact.
+
+What the step inherits, all of it measured during W:
+
+- **Sorting was removed, deliberately, and is owed back.** `/playlist/<id>` had the site's only
+  click-to-sort table (`table.sortable`, `th[data-sort]`, ~35 lines in `snapshot.js` plus two CSS
+  rules). It was deleted in W rather than converted, on the grounds that one page's bespoke sort is
+  what X exists to replace. Recover it from git rather than rewriting from scratch.
+- **The same data is rendered differently in different places.** A track row is a cover, a name, a
+  credit, an album and a duration on five pages, each with its own column order and its own choice
+  about which columns are muted.
+- **`.data-table` and `.table` still coexist.** Nine templates were on the old class when W began;
+  the conversion is page-by-page, and every conversion risks orphaning a rule keyed on the old one
+  (§9.12's strip, §9.14's dropdown highlight, §9.17's unowned rows — three near-misses, one of
+  which shipped invisibly for a while).
+- **Row states are a shared vocabulary already**: `removed`, `unfollowed`, `unowned`,
+  `tracklist-divider`. They belong to whatever renders a table, not to individual pages.
+
+Two traps worth carrying into the spec, both found the hard way in W:
+
+1. A colour on a `<tr>` never reaches its cells inside a Bootstrap table — the framework
+   *declares* one on every cell. Row styling goes through `--bs-table-color`.
+2. **`text-decoration` does not propagate from a table-row box into its cells either.** The
+   strikethrough on removed and unfollowed rows was declared on the `<tr>` and did nothing at all
+   until 2026-09-01, on every page that used it, while the dimming beside it worked — so the rule
+   looked live.
 
 ---
 
