@@ -1499,9 +1499,14 @@ def test_a_breadcrumb_option_carries_what_tells_its_tier_apart(conn):
     # length, versions by credit, tracks by id. Rendering "Release 14757" in
     # the dropdown is the thing this replaces, so each tier's own field is
     # asserted rather than just "an option exists".
+    # A real-length id, on purpose: a fixture id like "t-opt" is under
+    # _short_id's threshold and comes back unchanged, so an option that showed
+    # the bare id would satisfy `sub == _short_id(id)` and the truncation's
+    # wiring would go untested (found by a surviving mutant at W verify).
+    tid = "0optWj59cSOfgohS2fK5B1"
     album = builders.make_album(conn, name="The Album", image_url="http://cover")
-    builders.make_track(conn, "t-opt", name="The Song", album_id=album)
-    groups = builders.make_group(conn, ["t-opt"])
+    builders.make_track(conn, tid, name="The Song", album_id=album)
+    groups = builders.make_group(conn, [tid])
 
     data = entities.group_detail(conn, "song", groups["song"])
 
@@ -1515,7 +1520,31 @@ def test_a_breadcrumb_option_carries_what_tells_its_tier_apart(conn):
 
     track = _crumb(data, "track")["options"][0]
     assert track["name"] == "The Song"
-    assert track["sub"] == entities._short_id("t-opt")
+    assert track["sub"] == "0optWj\u2026fK5B1"
+    assert track["sub"] != tid
+
+
+def test_a_track_pages_ancestor_crumbs_name_the_groups_representative(conn):
+    # source: ui-framework-W.md 9.16 -- "a track page's breadcrumb is all
+    # ancestors", and on a group page every descendant's representative is
+    # already in tracks_by_id, but on a track page nothing above the track is.
+    # Without the canonical.track_display fallback every crumb would render a
+    # bare group id, the exact thing the breadcrumb replaced. Two tracks share
+    # every tier; with no scores and no memberships the election falls to the
+    # lowest track id, so viewing the *other* track is what forces the lookup.
+    # Never executed by any test before W verify (coverage), so a mutant
+    # returning None there passed the whole suite.
+    builders.make_track(conn, "t-anc-a", name="Alpha Take")
+    builders.make_track(conn, "t-anc-b", name="Beta Take")
+    builders.make_group(conn, ["t-anc-a", "t-anc-b"])
+
+    data = entities.track_detail(conn, "t-anc-b")
+
+    for tier in ("song", "version", "recording"):
+        option = _crumb(data, tier)["options"][0]
+        assert option["name"] == "Alpha Take", tier
+    assert _crumb(data, "track")["options"][0]["name"] == "Beta Take"
+    assert _crumb(data, "track")["current"]
 
 
 def test_a_short_id_keeps_both_ends_and_is_left_alone_when_short(conn):

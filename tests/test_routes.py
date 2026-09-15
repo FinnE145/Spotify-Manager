@@ -25,6 +25,7 @@ import db
 import jobs
 import routes_catalog
 import scoring
+import snapshot
 
 
 @pytest.fixture
@@ -241,6 +242,13 @@ def test_every_search_row_reserves_a_cover_cell_image_or_not(client, conn):
     builders.make_artist(conn, name="Zzzcover Pictured", image_url="https://img/artist")
     builders.make_artist(conn, name="Zzzcover Bare")
     builders.make_album(conn, name="Zzzcover Record", image_url=None)
+    # A coverless song is the case that matters most: its *link* kind is
+    # "version" while its cover kind is "song", and one value feeding both was
+    # the trap search._COMBINED_COVER_KIND exists to remove. Without this row
+    # that dict could hand songs "version" again and nothing would fail.
+    builders.make_track(
+        conn, name="Zzzcover Tune", album_id=builders.make_album(conn, image_url=None)
+    )
     conn.commit()
 
     resp = client.get("/search?q=zzzcover")
@@ -252,6 +260,9 @@ def test_every_search_row_reserves_a_cover_cell_image_or_not(client, conn):
     # The imageless album gets its own glyph, not the artist's, in both the
     # Albums section and Most Relevant.
     assert body.count("bi-vinyl") == 2
+    # And the coverless song its own, in the Songs section and Most Relevant --
+    # counted with its closing quote so the playlist glyph's name can't match.
+    assert body.count('bi-music-note"') == 2
     assert body.count("bi-music-note-beamed") == 0  # no playlist matched
 
 
@@ -1426,6 +1437,24 @@ def test_the_snapshot_page_offers_an_undeclared_generation(client, corpus, conn)
     assert "v2.0.0" in body
 
 
+
+def test_liked_songs_is_the_one_row_that_draws_a_heart(client, conn):
+    # source: ui-framework-W.md 9d -- "Liked Songs is identified by a flag, not
+    # an id": index_data computes is_liked and the template picks 'liked' or
+    # 'playlist' on it. The column test beside index_data only asserts the key
+    # exists, so an is_liked that was always false rendered every coverless
+    # row with the playlist glyph and passed (surviving mutant, W verify).
+    # Both rows are coverless, since cover_cell only draws a glyph then.
+    builders.make_playlist(conn, snapshot.LIKED_PLAYLIST_ID, name="Liked Songs", image_url=None)
+    builders.make_playlist(conn, "p-plain", name="Plain", image_url=None)
+    conn.commit()
+
+    body = client.get("/dev/snapshot").get_data(as_text=True)
+
+    assert body.count("bi-heart-fill") == 1
+    assert body.count("bi-music-note-beamed") == 1
+
+
 # -- Scrobbling (docs/specs/scrobbling-R.md) ---------------------------------
 
 
@@ -1682,3 +1711,101 @@ def test_a_coming_soon_page_names_itself_and_says_so(client):
 
     assert "<h1>Audit</h1>" in body
     assert "Coming soon." in body
+
+
+# -- Cover cells and the dev index (ui-framework-W.md 9.11, 9.18, 9.19, gear) --
+#
+# Each of these pins a value the branch added that nothing else read: a
+# `LEFT JOIN` that feeds only a cover_cell, or a list that feeds only markup.
+# Every one survived a mutant that nulled it (W verify) -- the page rendered a
+# plausible glyph on every row, and the suite stayed green.
+
+
+def _one_with_and_one_without_playlist_cover(conn, track_id):
+    with_art = builders.make_playlist(conn, name="Pictured", image_url="https://img/pl")
+    without = builders.make_playlist(conn, name="Bare", image_url=None)
+    builders.make_membership(conn, with_art, track_id)
+    builders.make_membership(conn, without, track_id)
+    conn.commit()
+
+
+def test_a_tracks_membership_history_draws_each_playlists_cover(client, conn):
+    # source: ui-framework-W.md 9.18 -- track_detail's memberships query
+    # carries s.image_url as playlist_image_url for cover_cell(..., 'playlist').
+    track = builders.make_track(conn)
+    _one_with_and_one_without_playlist_cover(conn, track)
+
+    body = client.get(f"/track/{track}").get_data(as_text=True)
+
+    assert body.count('<img class="cover" src="https://img/pl"') == 1
+    assert body.count("bi-music-note-beamed") == 1
+
+
+def test_the_group_pages_playlist_rollup_draws_each_playlists_cover(client, conn):
+    # source: ui-framework-W.md 9.18 -- playlists_for_tracks is the rollup the
+    # group, album and artist pages share; the song page stands for all three.
+    track = builders.make_track(conn)
+    groups = builders.make_group(conn, [track])
+    _one_with_and_one_without_playlist_cover(conn, track)
+
+    body = client.get(f"/song/{groups['song']}").get_data(as_text=True)
+
+    assert body.count('<img class="cover" src="https://img/pl"') == 1
+    assert body.count("bi-music-note-beamed") == 1
+
+
+def test_the_playlist_page_draws_each_tracks_album_cover(client, conn):
+    # source: ui-framework-W.md 9.19 ("Also found") -- playlist_detail's row
+    # query never selected the album image, so every cover fell to the glyph
+    # the moment cover_cell was added. The playlist's own header cover is a
+    # 'playlist' glyph, so the song glyph is counted by its closing quote.
+    playlist = builders.make_playlist(conn, image_url=None)
+    pictured = builders.make_track(
+        conn, album_id=builders.make_album(conn, image_url="https://img/album")
+    )
+    bare = builders.make_track(conn, album_id=builders.make_album(conn, image_url=None))
+    builders.make_membership(conn, playlist, pictured)
+    builders.make_membership(conn, playlist, bare)
+    conn.commit()
+
+    body = client.get(f"/playlist/{playlist}").get_data(as_text=True)
+
+    assert body.count('<img class="cover" src="https://img/album"') == 1
+    assert body.count('bi-music-note"') == 1
+
+
+def test_the_generations_page_draws_each_playlists_cover(client, conn):
+    # source: ui-framework-W.md 9.11 -- generation_spans picks up s.image_url
+    # and generations() passes it through for cover_cell(g.image_url,
+    # 'playlist').
+    pictured = builders.make_playlist(conn, name="v1.0.0", image_url="https://img/gen")
+    bare = builders.make_playlist(conn, name="v2.0.0", image_url=None)
+    builders.make_generation(conn, ordinal=1, playlist_id=pictured)
+    builders.make_generation(conn, ordinal=2, playlist_id=bare)
+
+    body = client.get("/dev/generations").get_data(as_text=True)
+
+    assert body.count('<img class="cover" src="https://img/gen"') == 1
+    assert body.count("bi-music-note-beamed") == 1
+
+
+def test_the_dev_index_and_the_gear_menu_list_every_dev_page(client, app):
+    # source: ui-framework-W.md 9 (navbar gear) -- _DEV_PAGES is the one list
+    # both /dev's list-group and the gear's hover menu render from. Emptying it
+    # blanks both and fails nothing else; here every dev endpoint's href must
+    # appear twice, once per surface.
+    body = client.get("/dev").get_data(as_text=True)
+
+    with app.test_request_context():
+        from flask import url_for
+
+        hrefs = [
+            url_for(endpoint)
+            for endpoint in (
+                "dev_snapshot", "dev_canonical", "dev_artists", "dev_import",
+                "dev_roundtrip", "dev_generations", "dev_scoring", "dev_scrobble",
+            )
+        ]
+    for href in hrefs:
+        assert body.count(f'href="{href}"') == 2, href
+    assert body.count('class="dropdown-item') == 8
