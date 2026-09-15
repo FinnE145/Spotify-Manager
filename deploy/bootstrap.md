@@ -5,26 +5,37 @@ script: most of this is Finn's to do, and a repeatable script that silently re-d
 would be dangerous — step 6 in particular stops the laptop app and moves its database.
 
 Machine facts this assumes (measured 2026-08-23, don't re-derive): `fe-pro` is reachable
-over Tailscale at `fe-pro.tail78f5ec.ts.net`, `finne` is uid:gid `1000:1000`, `/srv` has
-864 G free and is where Symr lives, and port 45660 is free on the host.
+over Tailscale as `fe-pro.tail78f5ec.ts.net` / `100.64.132.111`, `finne` is uid:gid `1000:1000`,
+`/srv` has 864 G free and is where Symr lives, and port 45660 is free on the host.
 
-## 1. Enable Tailscale HTTPS certificates
+Steps 1, 2, 9 and 10 describe the Caddy front (2026-09-15). The original bootstrap on 2026-08-23
+used `tailscale serve` instead — `docs/specs/host-on-fe-pro-Q.md` §3.1 records both and why it
+changed; nothing in the Symr container differs between the two.
 
-In the Tailscale admin console, under **DNS → HTTPS Certificates**, enable certificates
-for the tailnet. Confirm it took:
+## 1. Point `symr.fmje.dev` at the tailnet IP
+
+In Cloudflare's DNS for `fmje.dev`, add an **A record** `symr` → `100.64.132.111`, **DNS-only**
+(grey cloud, not proxied). The name is public but the address is CGNAT space (`100.64.0.0/10`)
+that only routes inside the tailnet, so anyone off it resolves the name and then can't connect —
+which is the whole reachability story, and why proxying it through Cloudflare's edge would trip
+Q §12 on the spot. Confirm from a tailnet device:
 
 ```bash
-ssh fe-pro "tailscale status --json | grep -A2 CertDomains"
+dig +short symr.fmje.dev
 ```
 
-`fe-pro.tail78f5ec.ts.net` should appear instead of `None`. `tailscale serve` (step 9)
-cannot get a certificate until this is done.
+Exactly `100.64.132.111`, nothing else.
+
+Also create a Cloudflare **API token** scoped to *Zone → DNS → Edit* on the `fmje.dev` zone only.
+Caddy uses it for the DNS-01 challenge in step 9 — the machine isn't reachable from the internet,
+so the HTTP-01 challenge can never work here, and DNS-01 is what lets a tailnet-only host carry a
+real Let's Encrypt certificate.
 
 ## 2. Register the server's redirect URI with Spotify
 
-In the Spotify developer dashboard, add `https://fe-pro.tail78f5ec.ts.net/callback` as a
-second redirect URI on the app — **keep the existing loopback one**
-(`http://127.0.0.1:45660/callback`), which the laptop still uses.
+In the Spotify developer dashboard, add `https://symr.fmje.dev/callback` as a second redirect
+URI on the app — **keep the existing loopback one** (`http://127.0.0.1:45660/callback`), which
+the laptop still uses.
 
 ## 3. Create `/srv/stacks/symr`
 
@@ -144,23 +155,74 @@ Confirm with `systemctl list-timers symr-backup.timer` — it should show the ne
 ssh fe-pro "cd /srv/stacks/symr/repo/deploy && docker compose up -d --build"
 ```
 
-## 9. Start `tailscale serve`
+## 9. Start the `caddy` stack
 
-Persists across reboots, so this is a one-time command — but it needs root, and refuses with
-`Access denied: serve config denied` without it. Setting the operator once means this is the
-last `tailscale` command that needs `sudo`:
+Caddy is its own stack at `/srv/stacks/caddy/` — a machine-level service, not part of Symr's
+deployment, so its files live on the box (and are described in `~/SERVER.md`), not in this repo.
+They are small enough to reproduce from here. `finne`-owned like Symr's, so no `sudo`:
 
-```bash
-ssh -t fe-pro "sudo tailscale set --operator=finne && tailscale serve --bg 45660"
+`Dockerfile` — the stock image has no Cloudflare DNS module, so it is built in:
+
+```dockerfile
+FROM caddy:2-builder AS builder
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+FROM caddy:2
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 ```
 
-Confirm with `tailscale serve status`. It must say **`(tailnet only)`** — anything mentioning
-Funnel means Symr is exposed to the open internet, which trips the spec's §12 tripwire and
-makes app-level authentication a prerequisite rather than a follow-up.
+`Caddyfile` — **the `bind` line is the security boundary.** Caddy runs with `network_mode: host`
+so it can reach Symr's loopback-only port, which also means it could listen on every interface;
+binding to the tailnet IP is what keeps `symr.fmje.dev` tailnet-only. Never widen it to `0.0.0.0`
+without reading Q §12 first:
+
+```caddyfile
+symr.fmje.dev {
+	bind 100.64.132.111
+
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	reverse_proxy 127.0.0.1:45660
+}
+```
+
+`cloudflare.env` — one line, `CF_API_TOKEN=<the step 1 token>`, mode 600, never in git.
+
+`docker-compose.yml`:
+
+```yaml
+services:
+  caddy:
+    build: .
+    container_name: caddy
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./cloudflare.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data:/data
+      - ./config:/config
+```
+
+Then:
+
+```bash
+ssh fe-pro "cd /srv/stacks/caddy && docker compose up -d --build"
+```
+
+Confirm the bind took before anything else: `ss -ltn | grep -E ':443|:80 '` on the box must show
+`100.64.132.111:443` and `100.64.132.111:80` — **not** `0.0.0.0` or `*`. Then
+`curl -I https://symr.fmje.dev/` from a tailnet device should answer with a Let's Encrypt
+certificate (a `curl: (60)` means the DNS-01 challenge hasn't completed — `docker logs caddy`).
+
+`reverse_proxy` passes the browser's `Host` header through unchanged, which `/login`'s
+canonical-host check depends on (`docs/specs/small-fixes-T.md` §1) — step 10 proves it.
 
 ## 10. Verify
 
-From a tailnet device, browse to `https://fe-pro.tail78f5ec.ts.net/`. Confirm:
+From a tailnet device, browse to `https://symr.fmje.dev/`. Confirm:
 
 - it loads already authenticated (the copied token cache) — no redirect to `/login`;
 - `/dev/snapshot` shows the expected playlist counts, matching the laptop's before step 6;
@@ -168,7 +230,19 @@ From a tailnet device, browse to `https://fe-pro.tail78f5ec.ts.net/`. Confirm:
 
 The new redirect URI still has to be exercised once for future logins to work — click
 through `/login` manually to confirm it round-trips, even though the copied cache means
-today's session doesn't need it.
+today's session doesn't need it. If you're already signed in to Spotify the whole bounce is two
+invisible redirects; the proof is a fresh `.spotipy_cache` in `/srv/stacks/symr/data/` and a
+`POST accounts.spotify.com/api/token` row with context `callback` in `api_request`.
+
+Also check the proxy forwards `Host`, which nothing above exercises on its own:
+
+```bash
+curl -sI https://symr.fmje.dev/login | grep -i location
+```
+
+It must point straight at `accounts.spotify.com`. A `Location: https://symr.fmje.dev/login?canonical=1`
+means the proxy rewrote `Host` and the app never sees its canonical hostname — T §1.3 says what to
+do about that (trust the forwarded host; do not widen the comparison).
 
 ---
 

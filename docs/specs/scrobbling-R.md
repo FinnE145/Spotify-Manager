@@ -482,7 +482,8 @@ themselves. Two consents are owed, one per token cache:
 - **Laptop** — the next `venv/bin/python app.py` redirects to Spotify; consent at
   `http://127.0.0.1:45660/callback`.
 - **Server** — after the next `deploy/deploy.sh`, consent at
-  `https://fe-pro.tail78f5ec.ts.net/callback` from a device already on the tailnet. This is an
+  `https://fe-pro.tail78f5ec.ts.net/callback` (done 2026-09-15, by then at
+  `https://symr.fmje.dev/callback` — Q §3.1) from a device already on the tailnet. This is an
   interactive browser step on an otherwise headless box and it must be recorded in
   `deploy/deploy.sh`'s output or notes, because the app is simply logged out until it happens
   (§4.5 makes the poller wait rather than die).

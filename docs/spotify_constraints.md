@@ -17,7 +17,7 @@ Hard limits of the Spotify Web API that shape what Symr can and can't do. Check 
 - HTTPS is required for the OAuth redirect URI **unless** the address is loopback, where HTTP is permitted.
 - `localhost` is **not allowed at all** as a redirect host — loopback must be the literal `127.0.0.1` or `[::1]`.
 - Enforcement began 2025-04-09 for new apps; all apps had to migrate by 2025-11.
-- An app may register **several** redirect URIs; which one is used is decided per-environment by `SPOTIFY_REDIRECT_URI`. Symr's laptop dev loop uses the loopback form (`http://127.0.0.1:45660/callback`, already compliant); its `fe-pro` server deployment uses an HTTPS tailnet URI (`https://fe-pro.tail78f5ec.ts.net/callback`) since a `*.ts.net` name is not loopback.
+- An app may register **several** redirect URIs; which one is used is decided per-environment by `SPOTIFY_REDIRECT_URI`. Symr's laptop dev loop uses the loopback form (`http://127.0.0.1:45660/callback`, already compliant); its `fe-pro` server deployment uses an HTTPS URI (`https://symr.fmje.dev/callback` since 2026-09-15; `https://fe-pro.tail78f5ec.ts.net/callback` before that) since neither name is loopback.
 
 ## Auth / scopes (verified against developer.spotify.com/documentation/web-api/concepts/scopes)
 - Reading private playlists: `playlist-read-private` (and `playlist-read-collaborative` for collaborative ones).

@@ -45,7 +45,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `partial-pulls-J.md` | Resumable/partial playlist pulls (derived work list, no cursor); the API request log | `snapshot.py` (pull logic), `api_log.py` | J | partial — see P1-004, P1-005 |
 | `grouping-fixes-backfill-M.md` | Three review-UI bugs (M1/M1b/M1c) + the album-tracklist backfill job | `canonical.py`, `backfill.py`, `entities.py` | M | no |
 | `async-recompute-N.md` | Moves `scoring.recompute()` off the request path for queue-driven writes | `scoring.py` (worker/backstop) | N | no |
-| `host-on-fe-pro-Q.md` | Symr on `fe-pro`: Docker + waitress behind `tailscale serve`, graceful shutdown, nightly backups, bootstrap/deploy | `serve.py`, `deploy/`, `config.py`, `jobs.drain()` | Q | no |
+| `host-on-fe-pro-Q.md` | Symr on `fe-pro`: Docker + waitress behind a tailnet-only reverse proxy (`tailscale serve`; Caddy on `symr.fmje.dev` since 2026-09-15), graceful shutdown, nightly backups, bootstrap/deploy | `serve.py`, `deploy/`, `config.py`, `jobs.drain()` | Q | no |
 | `scrobbling-R.md` | Polls recently-played into `play` as non-authoritative scrobbles, superseded by the export; ISRC upgrade path | `scrobble.py`, `roundtrip.py`, `history_import.py`, `serve.py` | R | no |
 | `mutation-sweep-S.md` | Whole-codebase mutation sweep: the operator sets, the five-way classification, the delegated-triage gate. **`docs/codebase-health/S_sweep.md` is what actually happened** | `scripts/mutation/` | S | no |
 | `small-fixes-T.md` | Four papercuts: the `localhost`/`127.0.0.1` OAuth state mismatch, combined request estimates on `/dev/roundtrip`, the review queue's chip palette, the done screen's exit | `app.py` (OAuth), `config.py`, `backfill.py`, `roundtrip.py`, `canonical_review.js` | T | no |
@@ -822,7 +822,8 @@ Three things below were confirmed by measurement rather than assumed, and two we
 - **The redirect-URI warning was right, and stricter than guessed** (spec §3.2): HTTPS is mandatory
   for anything that isn't loopback, *and* `localhost` is not permitted at all — loopback must be the
   literal `127.0.0.1` or `[::1]`. The laptop's existing URI was already compliant; the server got a
-  second one, `https://fe-pro.tail78f5ec.ts.net/callback`, behind `tailscale serve`.
+  second one, `https://fe-pro.tail78f5ec.ts.net/callback`, behind `tailscale serve` (replaced by
+  `https://symr.fmje.dev/callback` behind Caddy on 2026-09-15 — spec §3.1).
 - **The shutdown gap was real** (spec §6) and is closed by `jobs.drain()` + `serve.py`'s SIGTERM
   handler. But it buys tidiness, not data safety: all four jobs were already interruption-safe by
   design, so an abrupt kill only ever cost re-work.
@@ -926,7 +927,8 @@ of them crediting a 3.6-second skip as a full 241-second play). §6.1 is the gua
 budget arithmetic below **held** — 14.4 requests/day, unchanged by the probe.
 
 **It is running on the laptop only by hand.** §8's scope change means the deployed server is logged
-out until someone consents once at `https://fe-pro.tail78f5ec.ts.net/callback`; the poller waits
+out until someone consents once at the server's callback (done 2026-09-15, at
+`https://symr.fmje.dev/callback` — the poller has run on `fe-pro` since); the poller waits
 rather than dying (§4.5), so nothing is lost, but scrobbling is not actually *always-on* until that
 happens and `fe-pro` is back.
 
@@ -1263,7 +1265,7 @@ at most, the framework's own optional JS — nothing that needs a build step.
   (and Popper) that Symr may want none of. A CSS-only option, or Bootstrap's CSS without its JS, is
   worth pricing against it first.
 - **Vendored file vs CDN.** Vendoring is the safer default here: the server sits behind
-  `tailscale serve`, and a vendored asset also keeps the page working with no outbound internet and
+  a tailnet-only reverse proxy, and a vendored asset also keeps the page working with no outbound internet and
   pins the version the way `deploy/Dockerfile` pins its interpreter.
 - **The three `immersive` pages are the risk** — `canvas.html`, `canonical_review.html` and
   `canonical_cross.html` opt out of the normal shell via `body_class`, and the canvas is

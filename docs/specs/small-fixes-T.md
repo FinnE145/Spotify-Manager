@@ -47,7 +47,7 @@ misread as user error for months.
 `config.py` gains two derived constants, parsed once at import from `SPOTIFY_REDIRECT_URI`:
 
 - `SPOTIFY_CANONICAL_HOST` — its `hostname`, lowercased (`127.0.0.1` on the laptop,
-  `fe-pro.tail78f5ec.ts.net` on the server).
+  `fe-pro.tail78f5ec.ts.net` on the server — `symr.fmje.dev` since 2026-09-15).
 - `SPOTIFY_CANONICAL_ORIGIN` — its `scheme` + `netloc`, i.e. everything before the path.
 
 They live in `config.py` rather than `app.py` because that file is where every setting lives, and
@@ -90,6 +90,15 @@ widen the comparison; see §1.2. Verify by browsing to
 lands carrying `?canonical=1`.
 
 The marker is read and never propagated — it is not forwarded to Spotify and nothing else reads it.
+
+**Resolved 2026-09-15, and not the way it was framed.** `tailscale serve` was never tested for
+this: by the time `fe-pro` was back it had been replaced by Caddy on `symr.fmje.dev`
+(`host-on-fe-pro-Q.md` §3.1), whose `reverse_proxy` passes `Host` through unchanged. Checked
+both ways on the first deploy: `curl -sI https://symr.fmje.dev/login` from a tailnet device
+returns a 302 straight to `accounts.spotify.com` with no marker, and the same request on the
+box with `Host: 127.0.0.1` returns the one-hop bounce to `https://symr.fmje.dev/login?canonical=1`.
+Step 3 matches on the server, T1 is fixed there, and no `ProxyFix` is needed. The marker stays —
+it costs nothing and still bounds a future proxy that rewrites.
 
 ### 1.4 `/callback`'s two refusals stop sharing one message
 

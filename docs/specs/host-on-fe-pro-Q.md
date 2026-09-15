@@ -11,8 +11,9 @@ one thing it does not mention was found and is treated as forced (§3.3).
 ## 0. What this is
 
 Symr moves off the laptop and onto `fe-pro`, Finn's home server, reachable over Tailscale. It
-runs as a Docker container behind `tailscale serve`, restarts on its own, backs itself up nightly,
-and stops its background jobs cleanly when the service goes down.
+runs as a Docker container behind a tailnet-only reverse proxy (`tailscale serve` as shipped;
+Caddy since 2026-09-15 — §3.1), restarts on its own, backs itself up nightly, and stops its
+background jobs cleanly when the service goes down.
 
 **The laptop stays the development machine.** It keeps its own `symr.db`, its own loopback OAuth
 redirect, and the existing `venv/bin/python app.py` loop on port 45660. Nothing about the Plan /
@@ -111,6 +112,32 @@ template, something has gone wrong.
 
 ### 3.1 The path
 
+**Superseded 2026-09-15.** The path below is what shipped on 2026-08-23. Three weeks later,
+while `fe-pro` was back from its move, Finn replaced `tailscale serve` with a Caddy stack on a
+domain of his own, and the path is now:
+
+```
+browser on the tailnet
+  └─ https://symr.fmje.dev                  (443, Let's Encrypt cert via Cloudflare DNS-01;
+      │                                      public DNS A record → 100.64.132.111, the tailnet IP)
+      └─ caddy (network_mode: host, bind 100.64.132.111 only)  →  http://127.0.0.1:45660
+          └─ Docker published port, loopback-only            (unchanged)
+              └─ waitress → Flask, port 45660 in the container (unchanged)
+```
+
+What this changes and what it doesn't: the name is public and resolves anywhere, but the address
+it resolves to is CGNAT space that only routes inside the tailnet, and Caddy binds that one
+interface rather than `0.0.0.0` — so **the reachability boundary is still Tailscale**, exactly as
+§12 requires, and §3.3's loopback-only publish is untouched. `tailscale serve` and the tailnet
+HTTPS certificate are no longer used (`tailscale serve status` reports no config). Caddy passes
+the browser's `Host` header through to the container unchanged, which is what T §1's
+canonical-host redirect needed and what `tailscale serve` was never tested for. The Caddy stack is
+the machine's (`/srv/stacks/caddy/`, described in `~/SERVER.md` there), not Symr's; the current
+`deploy/bootstrap.md` steps 1, 2, 9 and 10 carry enough to rebuild it. Nothing inside the
+container differs between the two fronts beyond `SPOTIFY_REDIRECT_URI` (§3.2).
+
+As shipped:
+
 ```
 browser on the tailnet
   └─ https://fe-pro.tail78f5ec.ts.net       (443, Tailscale-issued cert)
@@ -152,6 +179,8 @@ Two consequences:
    loopback with an IP literal. It needs no change and keeps working.
 2. **The server URI must be HTTPS**, because a `*.ts.net` name is not loopback. It is
    `https://fe-pro.tail78f5ec.ts.net/callback` — no port, since `tailscale serve` fronts it on 443.
+   (Since 2026-09-15: `https://symr.fmje.dev/callback`, for the same reason, registered alongside
+   and exercised the same day — see §3.1.)
 
 Finn adds the server URI to the Spotify dashboard **as a second entry, keeping the loopback one**.
 An app may register several; which is used is decided per-environment by `SPOTIFY_REDIRECT_URI`.
@@ -181,6 +210,10 @@ publish is never exposed regardless of firewall state.
 
 **A future session that widens this bind, adds a Funnel, or puts a reverse proxy in front has
 changed Symr's security model and must read §12 first.**
+
+(2026-09-15: a reverse proxy *is* now in front, and §12 was read. It passes because the proxy
+binds only the tailnet interface — the question §12 actually asks is who can reach the port, and
+the answer is unchanged. §3.1 has the detail.)
 
 ---
 
@@ -482,6 +515,9 @@ re-does it would be dangerous.
 Step 6 copies `.spotipy_cache`, so no re-login is needed; the new redirect URI still has to be
 registered for future logins and is verified by clicking through `/login` once.
 
+Steps 1, 2, 9 and 10 changed on 2026-09-15 with the move to Caddy (§3.1); `deploy/bootstrap.md`
+is the live checklist and carries the current versions.
+
 ---
 
 ## 9. Deploy — repeatable
@@ -547,6 +583,18 @@ laptop database is scratch and will eventually be overwritten.
 newest file from `~/Symr-backups/` when the dev copy has drifted far enough to stop being a
 useful test bed. There is no sync, no merge, and no way back — laptop → server is never a
 supported direction.
+
+**The one exception, so far: 2026-09-15.** `fe-pro` was unplugged and in transit from 2026-08-23
+to early September, and its database was frozen at the state it had that morning — which the
+laptop had been swapped to before the box moved. For three weeks the laptop was the only copy
+that could change, and it did: a full pull, three round-trip runs, an auto-group run, an export
+import, the first scrobbles and W's membership backfill. When the server came back the two copies
+were compared row-count for row-count and the server's was a strict subset, so the laptop's
+replaced it — bootstrap step 6's `VACUUM INTO` + rsync, with the old file archived at
+`/srv/archive/symr/pre-migration-2026-09-15/` and `play_import.folder` repointed. That was a
+straight replacement of a copy that had nothing to lose, not a merge, and it does not soften the
+rule: it was possible only because the server had been *off*. From that day the server is the
+truth again.
 
 ---
 
