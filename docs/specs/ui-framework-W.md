@@ -1439,6 +1439,158 @@ the suite. The fixture is function-scoped, so the extra route does not leak into
 Two mutants checked: rendering the exception box unconditionally, and swapping the two alert
 classes. Both caught.
 
+## 9.5 `canonical_review.html` (page 5, the review queue — converted last, as planned)
+
+The page that was unreadable in dark mode. **Two passes on purpose**, because this is the riskiest
+conversion on the site (a keyboard model, JS-built rows, the only bespoke palette): colours first
+with no markup change, verified, then components. If anything had broken, we would have known
+which pass did it.
+
+### Pass 1: colours
+Nothing structural was wrong. ~30 hardcoded hex values in a CSS block written before there was a
+theme: `#f5f5f5` header, `#fff` buttons, `#eff6ff` selected rows, `#444` / `#888` text. Every one
+became a Bootstrap variable.
+
+**The palette moved out of the JS and into CSS custom properties.** `canonical_review.js` painted
+every chip with inline `style.background` from a hex array — which is why the chips *survived*
+dark mode while everything around them broke, and also why §5's dark palette could not just be
+dropped in: the JS would have had to know the theme and re-render on toggle. Now `--chip-0-bg` …
+`--chip-11-fg` and `--isrc-0` … `--isrc-5` are defined under `:root` and `[data-bs-theme="dark"]`,
+verbatim from §5's two tables, and the JS assigns only an **index class** (`chip-3`, `isrc-1`).
+The theme toggle repaints every chip with no JS involved. Verified: dark chips resolve to the §5
+dark set, light is the original T §3.1 set unchanged, no inline styles remain.
+
+Four dead rules removed — `.tier-chip.song / .version / .recording / .release`, orphaned when
+§9.15 made the entity page's tier chip plain text.
+
+### Pass 2: components
+- The five tier buttons are a **`btn-group`** — five answers to one question, and the group says
+  so.
+- Clear / Back / Save were **trialled as a group and split back** (Finn): three different actions,
+  not three answers to one question. Save is `btn-primary`, the Enter action, and the only filled
+  one.
+- `?` is a real button opening **Bootstrap's popover**, fed the hidden `#help-popover`'s markup as
+  a string. Not the node: handed the element, the component *moves* it into the popover on first
+  show and the `[hidden]` on it comes along. The two inner `td` / `hr` rules are re-scoped from the
+  source's id to the popover's `customClass`, since an id-keyed rule would style only the
+  invisible original.
+- `#item-table` on `.table`, with `tr.selected` fed through `--bs-table-bg` (rule 2). Nothing else
+  in the block was keyed on `.data-table` (rule 1 sweep: the row rules are keyed on the id).
+
+### A load-order trap, and it is general
+The popover silently did not open at first. `base.html` **`defer`s the Bootstrap bundle**, but
+this page's script runs at parse time — so `window.bootstrap` does not exist when a top-level init
+runs, and an `if (window.bootstrap)` guard skips it without a sound. Now created on first click.
+**Any page script that touches `bootstrap.*` at load time has this trap**; `/dev/scrobble`'s
+collapse escaped it only because that call sits inside a click handler.
+
+### The one deliberate deviation from the shared table shape
+`.data-table` was 13px. At Bootstrap's 16px, thirteen columns took the rows from tight to **81px
+tall** with the artist credit wrapping to three lines. `#item-table` is pinned to **13px**, and its
+rows get 0.4rem of vertical padding against `table-sm`'s 0.25rem (Finn: the smaller text was right
+but the rows were cramped) — the only converted table not at the defaults, and the sort of
+exception roadmap step X should inherit knowingly rather than discover.
+
+**Cell padding is the one table property Bootstrap 5.3 does not expose as a variable.** I assumed a
+`--bs-table-cell-padding-y` existed and fed it twice before reading the vendored CSS: `.table` and
+`.table-sm` both write `padding` straight onto the cells, and there is no such variable. So the
+padding is a direct override on `#item-table > :not(caption) > * > *` — Bootstrap's own selector
+shape, winning on the id — and it is the documented exception to CLAUDE.md's feed-the-variable
+rule, because there is nothing to feed. Measured: 62px rows, 6.4px / 4px padding.
+
+Verified through the new markup: j / k / Space / Esc, a tier button click regrouping the chips, the
+popover opening and closing, both themes.
+
+## 9.6 `canonical_cross.html` (page 6, the cross-artist queue — the last page)
+
+Same two passes as §9.5. The header is shared with the review queue and was already fixed; the
+eleven hex values in this page's own block (`#fafafa` group boxes, `#fff` key badges, `#eff6ff`
+selected rows, four greys) became Bootstrap variables. **No JS colours to move** — this page never
+had a palette. The rows are flex rows, not table rows, so a plain `background` on a row is correct
+here: there is no cell underneath declaring its own (rule 2 does not apply).
+
+Pass 2: Reset / Back / Save as three separate `.btn`s with Save filled (the review queue's
+decision, carried over), `?` on Bootstrap's popover with the same lazy-init shape, and the copy.
+
+### Copy
+*"Same title, no shared artist. Usually the answer is no — just hit Enter."* was the line V's brief
+named as too conversational, and its second sentence asserted something about the data that
+nothing keeps true. It is now the first sentence alone: what a bucket is, and nothing more. The
+help table and the empty state each lose an em dash for a semicolon.
+
+### Popper placement, and it is arithmetic
+The popover opened to the **right** on this page while opening below on the review queue, same
+code. Popper centres a plain `bottom` placement on its button; this page's `?` sits **224px from
+the left edge** and the popover is 498px wide, so centred it starts at x = −12 and Popper flips
+through its fallbacks until `right` fits. The review queue's button is at x = 416, where centring
+fits.
+
+The fix is `bottom-start` — hanging off the button's left edge, as the hand-rolled popover's
+`left: 0` did. Two things about getting it there:
+
+1. **It cannot go in Bootstrap's `placement` option.** That option maps through a five-entry table
+   (`auto/top/right/bottom/left`) and passes anything else to Popper as `undefined`, which pins the
+   popover to the page corner. It goes through `popperConfig: (defaults) => ({ ...defaults,
+   placement: "bottom-start" })`.
+2. **On the review queue Popper still reports `bottom`**, because start-aligned from x = 416 a
+   640px popover overflows the *right* edge, and Bootstrap's fallbacks land on centred `bottom`,
+   which fits. So `data-popper-placement` differs between the two pages by design — start-aligned
+   where that fits, centred where it does not — and reading `bottom` on one is Popper fitting it,
+   not the config failing. Both verified on screen, below their button.
+
+Verified through the new markup: Space, `1` assigning to a group (row nests), `u` unassigning, the
+popover opening on both pages, both themes.
+
+`#cross-item` is 13px, like the review queue's table and for the same reason.
+
+### "Taylor Swift, Taylor Swift, Shawn Mendes" — fixed, and it was not aliasing
+I first flagged this as `artist_alias` territory. It was not. `_make_cross_item` built a group's
+artist list as **a set of each member track's pre-joined display string**: one member credited to
+"Taylor Swift", another to "Taylor Swift, Shawn Mendes" — two distinct strings, both kept, joined
+by the JS. The strings themselves were correct and already alias-resolved.
+
+Splitting them on `", "` would have been the obvious fix and the wrong one: *"Tyler, The Creator"*.
+So the list now comes from `canonical.artist_credits_for_tracks` — one batched lookup per item over
+every member of every group — deduped **by artist id** in first-seen credit order
+(`_distinct_artist_names`).
+
+The test carries both controls. A comma-named artist, so a string-split passes the first half and
+fails; and **a second artist with the same name and a different id**, who must appear twice —
+keyed on name he collapses to one, and that mutant survived the first version of the test. The
+docstring claimed id-keying; now the claim is pinned.
+
+## 9.22 The canvas — light-mode only, toolbar on Bootstrap
+
+§7 excluded the canvas from conversion, and this is the separate review it was owed. What it
+inherited from the theme was exactly the wrong half: every surface is pinned light hex (`#eee`
+viewport, `#fff` cards, `#f5f5f5` toolbar) but **no text colour was ever pinned**, so in dark mode
+the card names inherited the light body colour onto a white card and vanished. The `.card`
+collision §6.2 warned about had already been sidestepped — these are `.canvas-card`.
+
+Finn's call: **light mode only, for now.** The canvas is a drafting surface of real album art; it
+opts out of the toggle rather than being half-themed by inheritance. Theming it fully is the one
+answer that would need new design decisions (the yellow labels and the grid dots have no Bootstrap
+equivalent) and is left open.
+
+### The mechanism is Bootstrap's own
+`<div id="canvas-app" data-bs-theme="light">` wraps the toolbar and the workspace. That attribute
+is the framework's scoping for exactly this: every colour variable inside resolves to the light set
+whatever `<html>` says. **It redefines the variables but applies none of them** — Bootstrap's reboot
+puts `color` on `body` alone — so `#canvas-app { color: var(--bs-body-color) }` is what actually
+paints the text. Verified with `<html>` dark: the wrapper reports `light`, card names
+`rgb(33,37,41)` on `rgb(255,255,255)`. The wrapper takes `#review-app`'s flex-column shape so
+`#main` still fills the viewport.
+
+### The toolbar
+Bootstrap throughout, resolving light inside the scope: the three buttons `btn-sm
+btn-outline-emphasis`, both sliders `form-range` (width pinned — it is `100%` by design), the
+cutoff `form-control-sm`, the checkbox `form-check-inline`. The toolbar itself moves to variables
+and wraps **by item, never mid-label** at a narrow width. The zoom slider was checked still wired
+through the new markup (`scale(1)` → `scale(1.5)`); every control keeps its id, which is all
+`canvas.js` reads.
+
+The canvas's own hex — cards, grid, labels, marquee — is untouched. It is the design, not a gap.
+
 ## 9c. Resume here
 
 **Done:** shell, navbar (twice), icons and cover placeholders, gear/terminal hover menu, and pages
