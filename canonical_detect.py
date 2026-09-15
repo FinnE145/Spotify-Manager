@@ -735,6 +735,18 @@ def _row(tracks, tid, **extra):
     return {"track_id": tid, **_display_fields(tracks[tid]), **extra}
 
 
+def _distinct_artist_names(credits, track_ids):
+    """Every artist credited on any of track_ids, once each, in first-seen
+    credit order -- keyed on the alias-resolved artist id, never on the name,
+    so two ids for one artist still collapse and two artists who share a
+    name do not."""
+    seen = {}
+    for tid in track_ids:
+        for credit in credits.get(tid, []):
+            seen.setdefault(credit["artist_id"], credit["name"])
+    return list(seen.values())
+
+
 def _make_cross_item(conn, base, bucket, tracks, reviewed_pairs, song_members):
     bucket_set = set(bucket)
 
@@ -757,6 +769,15 @@ def _make_cross_item(conn, base, bucket, tracks, reviewed_pairs, song_members):
         real = tracks[tid]["real_groups"]
         if real and real["song"] not in song_ids:
             song_ids.append(real["song"])
+
+    # One batched credits lookup for every member of every group in this item,
+    # so the per-group artist list below can dedupe by artist *id*. The old
+    # list was a set of each track's pre-joined display string, so a group
+    # holding "Taylor Swift" on one track and "Taylor Swift, Shawn Mendes" on
+    # another rendered as "Taylor Swift, Taylor Swift, Shawn Mendes". Splitting
+    # the strings instead would break on "Tyler, The Creator".
+    all_members = sorted({tid for sid in song_ids for tid in song_members.get(sid, [])})
+    credits = canonical.artist_credits_for_tracks(conn, all_members) if all_members else {}
 
     groups = []
     nested_ids = set()
@@ -787,7 +808,7 @@ def _make_cross_item(conn, base, bucket, tracks, reviewed_pairs, song_members):
                 "song_id": song_id,
                 "representative": _row(tracks, rep_id) if rep_id in tracks else None,
                 "track_count": len(members),
-                "artists": sorted({tracks[t]["artists"] for t in members if tracks[t]["artists"]}),
+                "artists": _distinct_artist_names(credits, members),
                 "albums": sorted({tracks[t]["album_name"] for t in members if tracks[t]["album_name"]}),
                 "nested": nested,
             }

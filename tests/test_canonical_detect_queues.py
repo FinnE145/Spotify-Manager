@@ -758,3 +758,39 @@ def test_a_recording_group_the_rules_still_agree_with_is_not_stale(conn):
     builders.make_group(conn, ["ta", "tb"])
 
     assert detect.stale_recording_groups(conn) == []
+
+
+def test_an_existing_groups_artists_list_names_each_artist_once(conn):
+    """The group's artist list is built from credits by artist id, not from a
+    set of each track's pre-joined display string.
+
+    The fixture is the exact shape that rendered "Taylor Swift, Taylor Swift,
+    Shawn Mendes" on the real cross queue: one member credited to the main
+    artist alone, another to the main artist plus a guest. A set of display
+    strings holds two distinct strings and the page joins them; a set of ids
+    holds two artists. The comma in "Tyler, The Creator" is the control --
+    a fix that split the strings on ", " would pass the first half and
+    produce three names here.
+    """
+    # source: ui-framework-W.md 9.6 -- found on the real cross queue and
+    # fixed at the aggregation, since the strings themselves are correct.
+    #
+    # The second "Shawn Mendes" is a *different* artist id with the same name
+    # -- Spotify has those. Keyed on id he appears twice, which is correct:
+    # two artists were credited. Keyed on name he collapses to one, which is
+    # the mutant that otherwise survives this test.
+    builders.make_artist(conn, ARTIST, name="Tyler, The Creator")
+    builders.make_artist(conn, "ar-guest", name="Shawn Mendes")
+    builders.make_artist(conn, "ar-namesake", name="Shawn Mendes")
+    make(conn, "tb", "Willow")
+    make(conn, "tc", "Willow", artists=[ARTIST, "ar-guest"], album="Album Two")
+    make(conn, "te", "Willow", artists=[ARTIST, "ar-namesake"], album="Album Five")
+    make(conn, "td", "Willow", artists=[OTHER_ARTIST], album="Album Three")
+    builders.make_group(conn, ["tb", "tc", "te"])
+    canonical.mark_reviewed_pairs(conn, [("tb", "td"), ("tc", "td"), ("te", "td")])
+    conn.commit()
+
+    item = detect.cross_bucket_for(conn, ["tb", "tc", "te", "td"])
+
+    group = next(g for g in item["groups"] if g["track_count"] == 3)
+    assert group["artists"] == ["Tyler, The Creator", "Shawn Mendes", "Shawn Mendes"]
