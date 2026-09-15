@@ -71,6 +71,9 @@ Lives under the **Audit** page (`/audit`), not its own nav entry.
 - **ListenBrainz integration** — live play tracking/storage. Not an alternative to the export (which is the only source of back history) but a second writer into the same table; its listens carry `spotify_id`, so they join on the existing `track_id` with no MBID resolution needed.
 - **Dashboards** — Finn experiments in Power BI on Windows first (raw data export), then reproduce the views he likes natively in JS. No Power BI built into Symr.
 
+## Small loose ends
+- **`/dev/snapshot`'s counts include deleted playlists** — `Playlists (154)` and `146 / 154 pulled` still count a playlist that has been unfollowed/deleted (`snapshot.unfollowed_at` set), which can never be captured again. Left open at step W (ui-framework-W.md §9c, "leave for now"); the page is the one place that deliberately still lists them, so the fix is a decision about what the headline numbers mean, not a query change.
+
 ## Liked Songs re-think
 - Liked Songs is effectively frozen/unused. Idea: data-derived "classic" proposals (e.g. present across N consecutive major versions, or high long-run play count from history + ListenBrainz), batch-approved — removing the "is it good enough / did I remember" burden while keeping it meaningful.
 - Why this is safe where a third hand-curated list wasn't: **a derived set is not a record.** Finn All holds the history, so an auto-filled Liked Songs can be recomputed freely without violating append-only.

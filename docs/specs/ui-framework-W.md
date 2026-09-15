@@ -2,9 +2,12 @@
 
 **Step W of `docs/Planning/roadmap.md`.**
 
-> **DRAFT — incomplete.** §9, the per-page brief, is written from a live walkthrough with Finn and
-> is the section the implement session is actually driven by. Everything above it is decided and
-> settled. **Do not commit this file and do not start implementing until §9 is filled in.**
+> **How to read this spec.** §1–§8 were written before any page was touched and are the settled
+> framework decisions. §9 onward is the per-page brief, written *live* during the implement
+> sessions as each page was walked through with Finn in the browser — so it is both the brief and
+> the record of what actually shipped, including the rules that were only settled part-way through
+> (and which earlier pages were then re-checked against). Where a later section corrects an
+> earlier one, the later one is authoritative. Verified and shipped 2026-09-15.
 
 ---
 
@@ -61,8 +64,9 @@ modal and collapse the obvious choice at the moment one is first needed. It is e
 - `static/js/vendor/bootstrap.bundle.min.js`
 
 Both **vendored, never a CDN.** The reason is availability, not pinning (a CDN URL carries a version
-too): the server sits behind `tailscale serve` on `fe-pro`, and a CDN makes every page render depend
-on the box having outbound internet. Vendored always works, and costs ~230KB in the repo once.
+too): the server sits behind a reverse proxy on `fe-pro` (`tailscale serve` when this was written,
+Caddy on a tailnet-only domain since September 2026), and a CDN makes every page render depend on
+the box having outbound internet. Vendored always works, and costs ~230KB in the repo once.
 Secondary benefit: no third-party request per page load.
 
 `templates/base.html` loads them in this order, and the order is load-bearing:
@@ -233,9 +237,10 @@ introduced.
 
 ## 9. Per-page brief
 
-> **IN PROGRESS.** Written live, page by page, with Finn at the browser. Pages done so far: the
-> shell (`base.html`), the navbar, site-wide icons, the gear dropdown, and pages 1, 2, 3, 4, 7, 8
-> and 9 of §7's list. **Remaining: `/dev/scrobble` onward, with the two immersive queues last.**
+> Written live, page by page, with Finn at the browser, in the order the sections appear: the
+> shell, the navbar, site-wide icons, the gear dropdown, pages 1–4 and 7–9, a second review pass
+> over those (§9b, §9d), then pages 10–21 in §7's order, and the two immersive queues last
+> (§9.5, §9.6), with the canvas's separate review at §9.22.
 >
 > Note that §1–§8 were written *before* the walkthrough and one of their assumptions did not
 > survive it: §7 said panels would be decided case by case, and at page 7 Finn made it a site-wide
@@ -392,8 +397,8 @@ its count in the heading, a short fixed one does not.
 - **Coverage stays in a card** — the one card left on the site, kept deliberately as a trial:
   a stats table reads as a bounded object in a way a listing does not. **No divider after it.**
 - Import history becomes the usual collapse, count in the heading.
-- OPEN: whether to retrofit the card to `/dev/snapshot`'s status block and `/dev/canonical`'s
-  Stats table.
+- Settled later: `/dev/canonical`'s Stats table did take the card (page 4, second pass);
+  `/dev/snapshot`'s status block deliberately did not (§9b, "/dev/snapshot, second pass").
 
 ### Second test touched by W
 `test_the_import_page_toggles_the_reimport_button_on_has_upload` asserted
@@ -546,12 +551,20 @@ navbar is untouched because the rule is scoped to `.page` and `.search-dropdown`
 
 ## 10. Tests
 
-**None.** Finn's call, and it is defensible rather than a shortcut: this step changes templates, CSS
-and a small amount of JS, and the defects it can introduce are visual — a collision from §6, a
-mis-tuned scroll region, a colour that fails in dark mode. None of those are assertable without a
-rendering test, which this suite does not have and which this step does not justify building.
+**Planned as none; ended up with about forty.** The plan-phase call was that this step changes
+templates, CSS and a small amount of JS, and the defects it can introduce are visual — a collision
+from §6, a mis-tuned scroll region, a colour that fails in dark mode — none of which are assertable
+without a rendering test this suite does not have. That held for the CSS. It did not hold for the
+step as a whole, because the walkthrough kept turning up data and read-path changes (§9.10's
+fragment, §9.12's and §9.17's formatters, §9.14b's deleted-playlist rule, §9.15's breadcrumb,
+§9.19's per-track labels, §9.6's artist dedupe), and each of those got tests as it landed — see the
+per-page "Tests" subsections, every one of which names the mutant it was checked against. The
+verify pass added a further eight for values the branch produced that nothing read (four cover
+joins, the dev-page list, the Liked Songs flag, the song glyph in search, the track page's
+ancestor lookup), each confirmed to fail under the mutant that had survived. `tests/test_macros.py`
+is new and is the first direct coverage `_macros.html` has had.
 
-Two compensating controls already exist and are the real safety net:
+Two compensating controls exist for the visual half and are the real safety net there:
 
 - **`tests/routes_catalog.py`'s non-5xx sweep renders every route**, so any Jinja breakage during
   the conversion fails the suite with no new test written.
@@ -1591,16 +1604,12 @@ through the new markup (`scale(1)` → `scale(1.5)`); every control keeps its id
 
 The canvas's own hex — cards, grid, labels, marquee — is untouched. It is the design, not a gap.
 
-## 9c. Resume here
+## 9c. Standing rules, and what was left open
 
-**Done:** shell, navbar (twice), icons and cover placeholders, gear/terminal hover menu, and pages
-1, 2, 3, 4, 7, 8, 9. **The second review pass is complete** — pages 1, 2, 3, 7 and 8 have all been
-re-checked against the rules that were settled after they were first built.
+Written mid-way as the "resume here" note; kept because the rules below are the ones every later
+page was converted against, and step **X** inherits them.
 
-**Next: `/dev/scrobble`** (new territory, not a re-review), then generations, tenure, scoring,
-search, the five entity pages, `coming_soon`, `error`. **The two immersive queues convert last.**
-
-**Standing rules to apply to every remaining page**, learned the hard way above:
+**Standing rules**, learned the hard way above:
 1. Converting `.data-table` → `.table` **orphans any rule written against the old class**. Sweep
    for them before converting a page, rather than finding them by eye afterwards.
 2. `.muted` and any row colouring need `--bs-table-color` inside a `.table`, not a bare `color`.
@@ -1611,14 +1620,15 @@ search, the five entity pages, `coming_soon`, `error`. **The two immersive queue
 6. A divider separates content: never directly under a card or the sticky bar, but never omitted
    where two headings would otherwise collide.
 
-**Open decisions:**
-1. The two immersive queues are **broken in dark mode right now** — light surfaces, light text.
-   Converting them last is Finn's call; the state is known.
-2. The canvas is excluded from conversion but still inherits dark mode. To be reviewed separately.
-3. `entity_group.html`'s `.tier-chip` badge still carries tier colour, while the canonical tree's
-   chips were made plain text. A page-15 question.
-4. `/dev/snapshot`'s `Playlists (154)` and `146 / 154 pulled` still count the unfollowed playlist.
-   Finn: "leave for now."
+**Open decisions at the time, and where each landed:**
+1. The two immersive queues were broken in dark mode until they converted last — §9.5, §9.6.
+2. The canvas inherited dark mode — reviewed separately and scoped light-only, §9.22. The verify
+   pass also pinned the pre-Bootstrap body font metrics on `#canvas-app` (`system-ui`, 16px,
+   `line-height: normal`): the reboot's 1.5 line-height reached the labels, whose type had been
+   tuned by hand against `normal`.
+3. `entity_group.html`'s `.tier-chip` — settled as plain text, §9.15.
+4. `/dev/snapshot`'s `Playlists (154)` and `146 / 154 pulled` still count the unfollowed
+   playlist. Finn: "leave for now" — **still open**, carried to `docs/Planning/feature_ideas.md`.
 
 **Playlist deletion, verified session 2:** handled correctly. `_sync_playlists_and_get_targets`
 diffs stored playlists against the fully-paged `_fetch_all_playlists` and stamps `unfollowed_at`;

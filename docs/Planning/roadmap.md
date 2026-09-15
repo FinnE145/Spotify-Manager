@@ -179,8 +179,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
   ──► L (search) ──► L2 (search ranking, round two) ──► F/G
       DONE               DONE
 
-  ──► W (UI clean-up: adopt a CSS framework — V's site writing clean-up folded in)
-      IN PROGRESS
+  ──► W (UI clean-up: adopt a CSS framework — V's site writing clean-up folded in) ✅
   ──► X (table standardisation — one way to render a table of entities)
 
   ──► U (extras: songdoku)
@@ -190,11 +189,11 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S, T, L and L2 have landed** — P in all three of its
-parts, verified and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged
+**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S, T, L, L2 and W have landed** — P in all three of
+its parts, verified and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged
 2026-08-24; S verified and merged 2026-08-28; T verified and merged 2026-08-28; L verified and
 merged 2026-08-29; L2 verified and merged 2026-08-30, closing the `L2_handoff.md` follow-up L
-left. Their
+left; W (with V folded in) verified and merged 2026-09-15. Their
 sections below are marked, and each points at the spec that is authoritative for what actually
 shipped — read the spec, not the summary here, before touching any of them.
 
@@ -1219,16 +1218,26 @@ Albums also gain a search-result dedupe (name + artists + overlapping release gr
 equality was measured collapsing **0 of 294** duplicate name+artist groups — Spotify issues every
 duplicate album id its own artwork URL.
 
-## W — UI clean-up: adopt a CSS framework · IN PROGRESS
+## W — UI clean-up: adopt a CSS framework ✅ DONE
 
-**Specced and being built**, on `feat/ui-framework-W`, against
-`docs/specs/ui-framework-W.md` — read that spec, never this entry, for what has actually been
-decided. **Step V is folded into it** (see V below), so W is the copy pass too.
+**Verified and merged 2026-09-15 → `docs/specs/ui-framework-W.md` is authoritative for what
+shipped.** Read that spec, never this entry: its §9 is a per-page record written live at the
+browser, and it is where every layout, copy and data decision of this step actually lives.
+**Step V is folded into it** (see V below), so W was the copy pass too.
 
-**Built live, not spec-then-implement.** Finn reviews each page in the browser and signs it off
-before the next one starts, so §9 of the spec grows a per-page brief as the work lands rather than
-predicting one up front. Ten of twenty-one pages are done as of 2026-09-01; the two immersive
-queues convert last and are knowingly broken in dark mode until they do.
+**Built live, not spec-then-implement.** Finn reviewed each page in the browser and signed it off
+before the next one started, so §9 of the spec grew a per-page brief as the work landed rather than
+predicting one up front — specced 2026-08-31, built across several sessions from then to
+2026-09-15, all 21 pages plus the canvas's separate light-only review, the two immersive queues
+last as planned.
+
+**What the plan got wrong, corrected by the walkthrough:** it was planned as a templates-and-CSS
+step with no tests (spec §10). It turned into a step that also ended deleted playlists' memberships
+at the moment they vanish (§9.14b — 50 live rows on a deleted playlist were being scored),
+reshaped the playlist page's generation view to per-track labels (§9.19), replaced the one-track
+breadcrumb with a five-tier navigator (§9.15), and added ~40 tests as those landed. The verify pass
+found seven values the branch produced that no test read (four cover joins, the dev-page list, the
+Liked Songs flag, the song glyph) and pinned each.
 
 Placed third-last by decision, 2026-08-24, immediately before **V**: re-laying the pages out
 changes where copy sits and how much of it a page needs, so rewriting the words first would mean
@@ -1289,12 +1298,19 @@ What the step inherits, all of it measured during W:
 - **The same data is rendered differently in different places.** A track row is a cover, a name, a
   credit, an album and a duration on five pages, each with its own column order and its own choice
   about which columns are muted.
-- **`.data-table` and `.table` still coexist.** Nine templates were on the old class when W began;
-  the conversion is page-by-page, and every conversion risks orphaning a rule keyed on the old one
-  (§9.12's strip, §9.14's dropdown highlight, §9.17's unowned rows — three near-misses, one of
-  which shipped invisibly for a while).
+- **Every table is `.table` now, and the last `.data-table` rules were deleted at W's verify** —
+  but the conversion was page-by-page, and each one risked orphaning a rule keyed on the old class
+  (§9.12's strip, §9.14's dropdown highlight, §9.17's unowned rows — three near-misses, one of which
+  shipped invisibly for a while). X should treat "which class does this rule key on" as a thing one
+  shared renderer settles once.
 - **Row states are a shared vocabulary already**: `removed`, `unfollowed`, `unowned`,
   `tracklist-divider`. They belong to whatever renders a table, not to individual pages.
+- **Two tables deliberately off the defaults**, which X should inherit knowingly rather than
+  discover: the review queue's `#item-table` and the cross queue's `#cross-item` are 13px with
+  their own cell padding (spec §9.5 — cell padding is the one table property Bootstrap 5.3 does not
+  expose as a variable, so it is a direct override on Bootstrap's own selector shape).
+- **The tenure page's sort links were narrowed to the two columns it still shows** (`tenure`,
+  `score`) at W's verify; `total generations` and `runs` sorted by columns §9.12 had removed.
 
 Two traps worth carrying into the spec, both found the hard way in W:
 
