@@ -16,25 +16,13 @@
   // varies here and the text colour goes per-chip instead. Cycle order is
   // chosen so the first few slots, which co-occur on nearly every item, are
   // maximally separated on the lightness ladder.
-  const COLORS = [
-    ["#2563eb", "#fff"], // Blue
-    ["#dc2626", "#fff"], // Red
-    ["#047857", "#fff"], // Green
-    ["#facc15", "#000"], // Gold
-    ["#ec4899", "#000"], // Pink
-    ["#1e3a8a", "#fff"], // Navy
-    ["#ddd6fe", "#000"], // Lavender
-    ["#fb923c", "#000"], // Orange
-    ["#14b8a6", "#000"], // Teal
-    ["#78350f", "#fff"], // Brown
-    ["#7dd3fc", "#000"], // Sky
-    ["#84cc16", "#000"], // Lime
-  ];
-  // The ISRC stripe (§3.3) is a 4px left border, not a filled chip -- a
-  // lightness that reads well filled disappears as a hairline, so this is
-  // its own smaller palette of saturated mid-tones, bare hex with no text
-  // colour to pair.
-  const ISRC_COLORS = ["#2563eb", "#dc2626", "#047857", "#ec4899", "#14b8a6", "#fb923c"];
+  // The palette itself lives in style.css as --chip-N-bg / --chip-N-fg and
+  // --isrc-N, one set per theme (ui-framework-W.md §5). This file assigns
+  // only the *index*: a chip gets class chip-N and the stylesheet resolves
+  // the colour for whichever theme is active, so a theme toggle re-paints
+  // every chip with no JS involved. The counts are what cycle the ladder.
+  const CHIP_COUNT = 12;
+  const ISRC_COUNT = 6;
 
   const headerProgress = document.getElementById("progress-label");
   const progressFill = document.getElementById("progress-fill");
@@ -447,7 +435,7 @@
     for (const tid of item.track_ids) {
       const label = item.labels[tid][tier];
       if (!colorMap.has(label)) {
-        colorMap.set(label, COLORS[ci % COLORS.length]);
+        colorMap.set(label, ci % CHIP_COUNT);
         ci += 1;
       }
     }
@@ -465,7 +453,7 @@
     for (const tid of item.track_ids) {
       const isrc = item.tracks[tid].isrc;
       if (isrc && counts.get(isrc) >= 2 && !colorMap.has(isrc)) {
-        colorMap.set(isrc, ISRC_COLORS[ci % ISRC_COLORS.length]);
+        colorMap.set(isrc, ci % ISRC_COUNT);
         ci += 1;
       }
     }
@@ -524,11 +512,8 @@
     td.className = "chip-cell";
     const label = item.labels[tid][tier];
     const chip = document.createElement("span");
-    chip.className = "tier-chip";
+    chip.className = `tier-chip chip-${colorMap.get(label)}`;
     chip.textContent = `${TIER_ABBR[tier]}${displayNums.get(label)}`;
-    const [background, color] = colorMap.get(label);
-    chip.style.background = background;
-    chip.style.color = color;
 
     td.appendChild(chip);
     return td;
@@ -610,7 +595,7 @@
       const isrcTd = textCell(formatIsrc(t.isrc));
       if (t.isrc) isrcTd.title = t.isrc;
       if (t.isrc && isrcColors.has(t.isrc)) {
-        isrcTd.style.borderLeft = `4px solid ${isrcColors.get(t.isrc)}`;
+        isrcTd.classList.add(`isrc-${isrcColors.get(t.isrc)}`);
       }
       tr.appendChild(isrcTd);
 
@@ -637,8 +622,35 @@
 
   // ---------- Wiring ----------
 
+  // Bootstrap's popover, fed the hidden #help-popover's markup as a string
+  // rather than the node: handed the element itself, the component *moves*
+  // it into the popover on first show, and the [hidden] on it comes along.
+  //
+  // Created on first click, not at load: base.html defers the Bootstrap
+  // bundle and this file runs at parse time, so `window.bootstrap` does not
+  // exist yet here. `trigger: "manual"` keeps Bootstrap from binding a
+  // second click handler on top of this one.
   helpToggle.addEventListener("click", () => {
-    helpPopover.hidden = !helpPopover.hidden;
+    bootstrap.Popover.getOrCreateInstance(helpToggle, {
+      html: true,
+      sanitize: false,
+      trigger: "manual",
+      placement: "bottom",
+      // bottom-START, via popperConfig: Popper centres a plain "bottom" on the
+      // button, and a 500px popover centred on a button 224px from the left
+      // edge overflows the viewport, so Popper flips it to the right (seen on
+      // the cross queue). Start-aligned it hangs off the button's left edge,
+      // as the hand-rolled one did, and fits wherever the button is. It has
+      // to go in here: Bootstrap's own `placement` option maps through a
+      // five-entry table and passes anything else to Popper as undefined.
+      // When even start-aligned overflows (the review queue's button sits far
+      // enough right that its 640px popover would), Bootstrap's fallbacks
+      // land on plain "bottom", centred -- so data-popper-placement reading
+      // "bottom" on one page is Popper fitting it, not this line failing.
+      popperConfig: (defaults) => ({ ...defaults, placement: "bottom-start" }),
+      customClass: "help-popover",
+      content: () => helpPopover.innerHTML,
+    }).toggle();
   });
 
   document.querySelectorAll(".tier-btn").forEach((btn) => {

@@ -10,8 +10,12 @@
     <div id="progress-label"></div>
     <div id="queue-name">Cross-artist queue</div>
     <div id="tier-legend">
-      <span class="muted">Same title, no shared artist. Usually the answer is no &mdash; just hit Enter.</span>
-      <span id="help-toggle" tabindex="0">?</span>
+      {# What a bucket is, and nothing more. The old line went on to say the
+         answer is "usually no": conversational, and a claim about the data
+         that nothing keeps true (site copy rules, ui-framework-W.md §9b). #}
+      <span class="muted">Same title, no shared artist.</span>
+      <button type="button" id="help-toggle" class="btn btn-sm btn-outline-secondary rounded-circle"
+              aria-label="Keys"><i class="bi bi-question"></i></button>
       <div id="help-popover" hidden>
         <table>
           <tr><td>&uarr; / &darr;, j / k</td><td>move focus</td></tr>
@@ -19,14 +23,15 @@
           <tr><td>1 &hellip; 9</td><td>assign the selection to the <em>n</em>th existing group</td></tr>
           <tr><td>g</td><td>group the selected new songs together as a new song group</td></tr>
           <tr><td>u</td><td>unassign the focused row</td></tr>
-          <tr><td>Enter</td><td>save and advance &mdash; with nothing assigned, that's "none of these are related"</td></tr>
+          <tr><td>Enter</td><td>save and advance; with nothing assigned, none of these are related</td></tr>
           <tr><td>Backspace</td><td>discard and go back</td></tr>
         </table>
       </div>
-      <div id="action-buttons">
-        <button id="reset-btn" type="button" title="Unassign everything on this bucket">Reset</button>
-        <button id="back-btn" type="button" title="Backspace">&lt; Back</button>
-        <button id="save-btn" type="button" title="Enter">Save &gt;</button>
+      {# Separate buttons, as on the review queue: three different actions. #}
+      <div id="action-buttons" class="d-flex gap-2">
+        <button id="reset-btn" type="button" class="btn btn-sm btn-outline-emphasis" title="Unassign everything on this bucket">Reset</button>
+        <button id="back-btn" type="button" class="btn btn-sm btn-outline-emphasis" title="Backspace"><i class="bi bi-chevron-left"></i> Back</button>
+        <button id="save-btn" type="button" class="btn btn-sm btn-primary" title="Enter">Save <i class="bi bi-chevron-right"></i></button>
       </div>
     </div>
   </header>
@@ -43,7 +48,7 @@
     <section class="cross-section">
       <h3>Existing groups</h3>
       <div id="group-rows"></div>
-      <p id="groups-empty" class="empty" hidden>No established tracks here yet &mdash; this bucket is new.</p>
+      <p id="groups-empty" class="empty" hidden>No established tracks here yet; this bucket is new.</p>
     </section>
   </main>
 

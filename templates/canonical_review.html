@@ -10,19 +10,27 @@
     <div id="progress-label"></div>
     <div id="queue-name"></div>
     <div id="tier-legend">
-      <button class="tier-btn" data-level="2" title="Song — the composition, any performance (AAA / AAA Acoustic / AAA Remix all together)">1 Song</button>
-      <button class="tier-btn" data-level="3" title="Version — sounds different (AAA vs. AAA Acoustic)">2 Version</button>
-      <button class="tier-btn" data-level="4" title="Recording — sounds the same, different master (remaster, Taylor's Version, deluxe, clean/explicit)">3 Recording</button>
-      <button class="tier-btn" data-level="5" title="Release — same audio, different album/EP/single (or a duplicate album upload)">4 Release</button>
-      <button class="tier-btn" data-level="1" title="Not even the same song">0 None</button>
-      <span id="help-toggle" tabindex="0">?</span>
+      {# A btn-group: these are the five answers to one question, and the group
+         says so. Number keys 1-4 and 0 do the same thing. #}
+      <div class="btn-group btn-group-sm" role="group" aria-label="Relationship">
+        <button type="button" class="btn btn-outline-emphasis tier-btn" data-level="2" title="Song: the composition, any performance (AAA / AAA Acoustic / AAA Remix all together)">1 Song</button>
+        <button type="button" class="btn btn-outline-emphasis tier-btn" data-level="3" title="Version: sounds different (AAA vs. AAA Acoustic)">2 Version</button>
+        <button type="button" class="btn btn-outline-emphasis tier-btn" data-level="4" title="Recording: sounds the same, different master (remaster, Taylor's Version, deluxe, clean/explicit)">3 Recording</button>
+        <button type="button" class="btn btn-outline-emphasis tier-btn" data-level="5" title="Release: same audio, different album/EP/single (or a duplicate album upload)">4 Release</button>
+        <button type="button" class="btn btn-outline-emphasis tier-btn" data-level="1" title="Not even the same song">0 None</button>
+      </div>
+      {# Bootstrap's popover, initialised in canonical_review.js with the hidden
+         div below as its content source. The trigger is a real button now, so
+         it is focusable and dismissable like every other control. #}
+      <button type="button" id="help-toggle" class="btn btn-sm btn-outline-secondary rounded-circle"
+              aria-label="Keys and tiers"><i class="bi bi-question"></i></button>
       <div id="help-popover" hidden>
         <table class="tier-meanings">
-          <tr><th>1 Song</th><td>the composition, any performance</td><td class="muted">AAA / AAA (Acoustic) / AAA (Remix) — all one song</td></tr>
+          <tr><th>1 Song</th><td>the composition, any performance</td><td class="muted">AAA / AAA (Acoustic) / AAA (Remix): all one song</td></tr>
           <tr><th>2 Version</th><td>sounds different</td><td class="muted">AAA (Acoustic) &ne; AAA</td></tr>
           <tr><th>3 Recording</th><td>sounds the same, different master</td><td class="muted">remaster, Taylor's Version, deluxe, clean/explicit</td></tr>
           <tr><th>4 Release</th><td>same audio, different album/EP/single</td><td class="muted">AAA's four track ids, or a duplicate album upload</td></tr>
-          <tr><th>0 None</th><td colspan="2">not even the same song — fully separate at every tier</td></tr>
+          <tr><th>0 None</th><td colspan="2">not even the same song; fully separate at every tier</td></tr>
         </table>
         <hr>
         <table>
@@ -39,10 +47,14 @@
           <tr><td>Backspace</td><td>discard edits, go to previous item</td></tr>
         </table>
       </div>
-      <div id="action-buttons">
-        <button id="clear-btn" type="button" title="Esc">Clear</button>
-        <button id="back-btn" type="button" title="Backspace">&lt; Back</button>
-        <button id="save-btn" type="button" title="Enter">Save &gt;</button>
+      {# Three separate buttons, not a group (Finn, after seeing both): these
+         are three different actions, not three answers to one question the
+         way the tier buttons are. Save is the Enter action and the only
+         filled one. #}
+      <div id="action-buttons" class="d-flex gap-2">
+        <button id="clear-btn" type="button" class="btn btn-sm btn-outline-emphasis" title="Esc">Clear</button>
+        <button id="back-btn" type="button" class="btn btn-sm btn-outline-emphasis" title="Backspace"><i class="bi bi-chevron-left"></i> Back</button>
+        <button id="save-btn" type="button" class="btn btn-sm btn-primary" title="Enter">Save <i class="bi bi-chevron-right"></i></button>
       </div>
     </div>
   </header>
@@ -50,7 +62,7 @@
   <main id="review-item" hidden>
     <h2 id="item-title"></h2>
     <p id="dragged-in-note" hidden></p>
-    <table id="item-table" class="data-table">
+    <table id="item-table" class="table table-sm align-middle">
       <thead>
         <tr>
           <th></th><th></th><th>Track</th><th>Artists</th><th>Album</th><th>Duration</th>

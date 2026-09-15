@@ -4,24 +4,35 @@
 {% block body_class %}immersive{% endblock %}
 
 {% block content %}
+  {# data-bs-theme="light" is Bootstrap's own scoping: every colour variable
+     inside resolves to the light set whatever <html> says. The canvas is a
+     drafting surface of real album art on pinned-light backgrounds, and it
+     opts out of the toggle here rather than being half-themed by inheritance
+     (ui-framework-W.md §9.22). Its text colour is applied in CSS, since the
+     attribute redefines the variables but nothing inside reads them. #}
+  <div id="canvas-app" data-bs-theme="light">
   <div id="toolbar">
-    <button id="pull-btn">Pull library</button>
-    <button id="export-btn">Copy as text</button>
-    <button id="download-btn">Download .md</button>
-    <label>Zoom
-      <input id="zoom-slider" type="range" min="0.25" max="2" step="0.01" value="1">
+    {# The two exports are one action with two destinations, so they group and
+       lead; Pull is a different action and stands alone after them. #}
+    <div class="btn-group btn-group-sm" role="group" aria-label="Export">
+      <button id="export-btn" type="button" class="btn btn-outline-emphasis">Copy as text</button>
+      <button id="download-btn" type="button" class="btn btn-outline-emphasis">Download .md</button>
+    </div>
+    <button id="pull-btn" type="button" class="btn btn-sm btn-outline-emphasis">Pull library</button>
+    <label class="d-flex align-items-center gap-2">Zoom
+      <input id="zoom-slider" class="form-range" type="range" min="0.25" max="2" step="0.01" value="1">
     </label>
-    <label>Card scale
-      <input id="scale-slider" type="range" min="0.4" max="1.5" step="0.01" value="1">
+    <label class="d-flex align-items-center gap-2">Card scale
+      <input id="scale-slider" class="form-range" type="range" min="0.4" max="1.5" step="0.01" value="1">
     </label>
-    <label>Cutoff
-      <input id="cutoff-input" type="number" min="1" step="10" value="300">
+    <label class="d-flex align-items-center gap-2">Cutoff
+      <input id="cutoff-input" class="form-control form-control-sm" type="number" min="1" step="10" value="300">
     </label>
-    <label>
-      <input id="radius-checkbox" type="checkbox">
-      Show grouping radius
-    </label>
-    <span id="status"></span>
+    <div class="form-check form-check-inline mb-0">
+      <input id="radius-checkbox" class="form-check-input" type="checkbox">
+      <label class="form-check-label" for="radius-checkbox">Show grouping radius</label>
+    </div>
+    <span id="status" class="muted"></span>
   </div>
 
   <div id="main">
@@ -30,6 +41,7 @@
       <div id="world"></div>
       <div id="marquee" hidden></div>
     </div>
+  </div>
   </div>
 
   <script src="{{ url_for('static', filename='js/canvas.js') }}"></script>

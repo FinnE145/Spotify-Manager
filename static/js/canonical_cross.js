@@ -398,8 +398,31 @@
 
   // ---------- Wiring ----------
 
+  // Bootstrap's popover, same shape as canonical_review.js and for the same
+  // two reasons: content as a string (handed the node, the component moves
+  // it and its [hidden] along), and created on first click, because the
+  // bundle is deferred and `window.bootstrap` does not exist at parse time.
   helpToggle.addEventListener("click", () => {
-    helpPopover.hidden = !helpPopover.hidden;
+    bootstrap.Popover.getOrCreateInstance(helpToggle, {
+      html: true,
+      sanitize: false,
+      trigger: "manual",
+      placement: "bottom",
+      // bottom-START, via popperConfig: Popper centres a plain "bottom" on the
+      // button, and a 500px popover centred on a button 224px from the left
+      // edge overflows the viewport, so Popper flips it to the right (seen on
+      // the cross queue). Start-aligned it hangs off the button's left edge,
+      // as the hand-rolled one did, and fits wherever the button is. It has
+      // to go in here: Bootstrap's own `placement` option maps through a
+      // five-entry table and passes anything else to Popper as undefined.
+      // When even start-aligned overflows (the review queue's button sits far
+      // enough right that its 640px popover would), Bootstrap's fallbacks
+      // land on plain "bottom", centred -- so data-popper-placement reading
+      // "bottom" on one page is Popper fitting it, not this line failing.
+      popperConfig: (defaults) => ({ ...defaults, placement: "bottom-start" }),
+      customClass: "help-popover",
+      content: () => helpPopover.innerHTML,
+    }).toggle();
   });
   document.getElementById("reset-btn").addEventListener("click", () => {
     if (!itemSection.hidden) resetAssignments();

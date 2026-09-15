@@ -627,20 +627,46 @@ img.cover {
   margin-left: 8px;
 }
 
-#toolbar {
+/* The canvas is light-mode only (ui-framework-W.md §9.22): its surfaces are
+   pinned light hex below, and canvas.html scopes it data-bs-theme="light" so
+   every Bootstrap variable inside resolves to the light set too. That
+   attribute redefines the variables without applying them, so the text colour
+   is set here -- without it the card names inherited dark mode's light body
+   colour onto a white card, which is what broke. Same flex-column shape as
+   #review-app so #main can still fill the viewport. */
+#canvas-app {
   display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #ccc;
-  background: #f5f5f5;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  color: var(--bs-body-color);
 }
 
-#toolbar label {
+#toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
   font-size: 13px;
+}
+
+/* A narrow window wraps the toolbar by item, never mid-label. */
+#toolbar .btn,
+#toolbar label,
+#toolbar .form-check-label {
+  white-space: nowrap;
+}
+
+/* form-range is width:100% by design; on a toolbar it needs a size. */
+#toolbar .form-range {
+  width: 110px;
+}
+
+#toolbar #cutoff-input {
+  width: 5.5em;
 }
 
 #main {
@@ -778,18 +804,18 @@ img.cover {
 #review-header {
   flex: none;
   padding: 8px 12px;
-  border-bottom: 1px solid #ccc;
-  background: #f5f5f5;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
 }
 
 #progress-label {
   font-size: 13px;
-  color: #444;
+  color: var(--bs-body-color);
 }
 
 #queue-name {
   font-size: 12px;
-  color: #888;
+  color: var(--bs-secondary-color);
   margin-top: 2px;
 }
 
@@ -801,87 +827,45 @@ img.cover {
   position: relative;
 }
 
-.tier-btn {
-  font-size: 13px;
-  padding: 4px 10px;
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
-}
-
-.tier-btn:hover {
-  background: var(--bs-secondary-bg);
-}
-
 #action-buttons {
   margin-left: auto;
-  display: flex;
-  gap: 6px;
-}
-
-#action-buttons button {
-  font-size: 13px;
-  padding: 4px 10px;
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
-}
-
-#action-buttons button:hover {
-  background: var(--bs-secondary-bg);
-}
-
-#save-btn {
-  font-weight: 600;
-  border-color: #2563eb;
-  color: #2563eb;
 }
 
 #help-toggle {
   margin-left: 8px;
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #bbb;
-  border-radius: 50%;
-  font-size: 12px;
-  cursor: pointer;
-  color: #666;
 }
 
-#help-popover {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 6px;
-  background: #fff;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  padding: 8px 10px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  z-index: 10;
-  font-size: 12px;
+/* The popover's body is the same two tables the hand-rolled one held. Wide,
+   because the tier-meanings table has three columns of prose. */
+.help-popover {
+  --bs-popover-max-width: 640px;
+  --bs-popover-font-size: 12px;
 }
 
-#help-popover td {
+/* Scoped to the popover's own class, not the hidden source div: Bootstrap
+   copies the markup into its .popover-body, and an id-keyed rule would style
+   only the invisible original. */
+.help-popover td {
   padding: 2px 8px 2px 0;
   white-space: nowrap;
 }
 
-#help-popover hr {
+.help-popover hr {
   border: none;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid var(--bs-border-color);
   margin: 6px 0;
 }
 
 .tier-meanings th {
   text-align: left;
   padding: 2px 8px 2px 0;
-  color: #444;
+  color: var(--bs-body-color);
 }
 
 .tier-meanings td {
@@ -895,6 +879,12 @@ img.cover {
   padding: 12px 16px;
 }
 
+/* 13px, like #item-table on the review queue and for the same reason: a
+   dense working list, and Bootstrap's 16px body size made it sprawl. */
+#cross-item {
+  font-size: 13px;
+}
+
 /* -- Cross-artist queue -------------------------------------------- */
 
 .cross-section {
@@ -906,7 +896,7 @@ img.cover {
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #666;
+  color: var(--bs-secondary-color);
 }
 
 .cross-row,
@@ -927,15 +917,17 @@ img.cover {
 }
 
 .cross-row.selected {
-  background: #eff6ff;
+  background: var(--bs-primary-bg-subtle);
 }
 
 .cross-row.focused {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--bs-primary);
 }
 
+/* These are flex rows, not table rows, so a plain background on the row is
+   the right tool here -- there is no cell underneath declaring its own. */
 .cross-group {
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--bs-border-color);
   border-radius: 5px;
   padding: 4px;
   margin-bottom: 6px;
@@ -943,12 +935,12 @@ img.cover {
 
 .cross-group-head {
   cursor: pointer;
-  background: #fafafa;
+  background: var(--bs-tertiary-bg);
   font-weight: 600;
 }
 
 .cross-group-head:hover {
-  background: #f0f0f0;
+  background: var(--bs-secondary-bg);
 }
 
 .cross-key {
@@ -958,16 +950,16 @@ img.cover {
   min-width: 20px;
   height: 20px;
   padding: 0 4px;
-  border: 1px solid #bbb;
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   font-size: 12px;
   font-weight: 600;
-  color: #555;
-  background: #fff;
+  color: var(--bs-secondary-color);
+  background: var(--bs-body-bg);
 }
 
 .cross-nest-marker {
-  color: #bbb;
+  color: var(--bs-border-color);
 }
 
 .cross-title {
@@ -975,12 +967,12 @@ img.cover {
 }
 
 .cross-artists {
-  color: #444;
+  color: var(--bs-body-color);
   min-width: 12em;
 }
 
 .cross-album {
-  color: #888;
+  color: var(--bs-secondary-color);
   min-width: 12em;
 }
 
@@ -994,12 +986,31 @@ img.cover {
 
 #dragged-in-note {
   font-size: 12px;
-  color: #b45309;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  color: var(--bs-warning-text-emphasis);
+  background: var(--bs-warning-bg-subtle);
+  border: 1px solid var(--bs-warning-border-subtle);
   border-radius: 4px;
   padding: 4px 8px;
   display: inline-block;
+}
+
+/* 13px, the size .data-table always was, kept on this one table: thirteen
+   columns of a working tool, and at Bootstrap's 16px the rows went from
+   tight to 81px with the artist credit wrapping to three lines. A deliberate
+   exception to the shared table shape -- roadmap step X should know. */
+#item-table {
+  font-size: 13px;
+}
+
+/* Cell padding is the one table property Bootstrap 5.3 does NOT expose as a
+   variable -- .table and .table-sm both write `padding` straight onto the
+   cells (checked in the vendored CSS; there is no --bs-table-cell-padding-*).
+   So this is a direct override, the exception to the feed-the-variable rule,
+   and the selector mirrors Bootstrap's own so it wins on the id alone.
+   table-sm stays for its .25rem horizontal; only the vertical grows. */
+#item-table > :not(caption) > * > * {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
 }
 
 #item-table img.cover {
@@ -1008,16 +1019,60 @@ img.cover {
 }
 
 #item-table tr.focused {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid var(--bs-primary);
   outline-offset: -2px;
 }
 
+/* --bs-table-bg, not `background`, now that this is a .table (standing rule
+   2): Bootstrap declares a background on every cell, which a colour on the
+   row never reaches. */
 #item-table tr.selected {
-  background: #eff6ff;
+  --bs-table-bg: var(--bs-primary-bg-subtle);
 }
 
 .chip-cell {
   white-space: nowrap;
+}
+
+/* The chip and stripe palettes, one set per theme, from ui-framework-W.md §5.
+   canonical_review.js assigns the index (chip-N / isrc-N); nothing else in
+   the JS knows a colour, which is what lets the theme toggle re-paint them.
+   Light is T §3.1's contrast-checked set unchanged. Dark inverts the binding
+   constraint -- not vanishing into the ground, rather than not vanishing
+   into white text -- so every dark chip is black-on-light, and the two that
+   could not survive it (navy, brown) become an indigo and a tan. */
+:root {
+  --chip-0-bg: #2563eb; --chip-0-fg: #fff;
+  --chip-1-bg: #dc2626; --chip-1-fg: #fff;
+  --chip-2-bg: #047857; --chip-2-fg: #fff;
+  --chip-3-bg: #facc15; --chip-3-fg: #000;
+  --chip-4-bg: #ec4899; --chip-4-fg: #000;
+  --chip-5-bg: #1e3a8a; --chip-5-fg: #fff;
+  --chip-6-bg: #ddd6fe; --chip-6-fg: #000;
+  --chip-7-bg: #fb923c; --chip-7-fg: #000;
+  --chip-8-bg: #14b8a6; --chip-8-fg: #000;
+  --chip-9-bg: #78350f; --chip-9-fg: #fff;
+  --chip-10-bg: #7dd3fc; --chip-10-fg: #000;
+  --chip-11-bg: #84cc16; --chip-11-fg: #000;
+  --isrc-0: #2563eb; --isrc-1: #dc2626; --isrc-2: #047857;
+  --isrc-3: #ec4899; --isrc-4: #14b8a6; --isrc-5: #fb923c;
+}
+
+[data-bs-theme="dark"] {
+  --chip-0-bg: #60a5fa; --chip-0-fg: #000;
+  --chip-1-bg: #f87171; --chip-1-fg: #000;
+  --chip-2-bg: #34d399; --chip-2-fg: #000;
+  --chip-3-bg: #fcd34d; --chip-3-fg: #000;
+  --chip-4-bg: #f472b6; --chip-4-fg: #000;
+  --chip-5-bg: #818cf8; --chip-5-fg: #000;
+  --chip-6-bg: #c4b5fd; --chip-6-fg: #000;
+  --chip-7-bg: #fdba74; --chip-7-fg: #000;
+  --chip-8-bg: #2dd4bf; --chip-8-fg: #000;
+  --chip-9-bg: #d4a373; --chip-9-fg: #000;
+  --chip-10-bg: #7dd3fc; --chip-10-fg: #000;
+  --chip-11-bg: #a3e635; --chip-11-fg: #000;
+  --isrc-0: #3b82f6; --isrc-1: #f87171; --isrc-2: #10b981;
+  --isrc-3: #f472b6; --isrc-4: #2dd4bf; --isrc-5: #fb923c;
 }
 
 .tier-chip {
@@ -1026,8 +1081,27 @@ img.cover {
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 10px;
-  color: #fff;
 }
+
+.chip-0 { background: var(--chip-0-bg); color: var(--chip-0-fg); }
+.chip-1 { background: var(--chip-1-bg); color: var(--chip-1-fg); }
+.chip-2 { background: var(--chip-2-bg); color: var(--chip-2-fg); }
+.chip-3 { background: var(--chip-3-bg); color: var(--chip-3-fg); }
+.chip-4 { background: var(--chip-4-bg); color: var(--chip-4-fg); }
+.chip-5 { background: var(--chip-5-bg); color: var(--chip-5-fg); }
+.chip-6 { background: var(--chip-6-bg); color: var(--chip-6-fg); }
+.chip-7 { background: var(--chip-7-bg); color: var(--chip-7-fg); }
+.chip-8 { background: var(--chip-8-bg); color: var(--chip-8-fg); }
+.chip-9 { background: var(--chip-9-bg); color: var(--chip-9-fg); }
+.chip-10 { background: var(--chip-10-bg); color: var(--chip-10-fg); }
+.chip-11 { background: var(--chip-11-bg); color: var(--chip-11-fg); }
+
+.isrc-0 { border-left: 4px solid var(--isrc-0); }
+.isrc-1 { border-left: 4px solid var(--isrc-1); }
+.isrc-2 { border-left: 4px solid var(--isrc-2); }
+.isrc-3 { border-left: 4px solid var(--isrc-3); }
+.isrc-4 { border-left: 4px solid var(--isrc-4); }
+.isrc-5 { border-left: 4px solid var(--isrc-5); }
 
 #review-done,
 #review-empty {
@@ -1136,21 +1210,6 @@ img.cover {
 .tree-tier {
   font-size: 12px;
   color: var(--bs-secondary-color);
-}
-
-.tier-chip.version {
-  background: #2563eb;
-  color: #fff;
-}
-
-.tier-chip.recording {
-  background: #059669;
-  color: #fff;
-}
-
-.tier-chip.release {
-  background: #d97706;
-  color: #fff;
 }
 
 .tree-leaf {
@@ -1422,10 +1481,6 @@ td.gen-cell.filled {
   font-size: 12px;
 }
 
-.tier-chip.song {
-  background: #7c3aed;
-  color: #fff;
-}
 
 /* Tier chips carry a colored background; the link inside must stay
    readable against it rather than defaulting to link-blue. */
