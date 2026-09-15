@@ -773,6 +773,23 @@ def test_playlists_return_matches_only(conn):
     assert {r["id"] for r in ranked["playlists"]} == {found}
 
 
+def test_an_unfollowed_playlist_is_not_a_search_result(conn):
+    # source: ui-framework-W.md 9.14b -- search reads `snapshot` directly, not
+    # `membership`, so ending an unfollowed playlist's memberships does not
+    # reach it: without its own filter it would keep offering a playlist that
+    # no longer exists on Spotify. The kept playlist is what separates this
+    # from "returns nothing", which would pass on a broken query.
+    kept = builders.make_playlist(conn, name="Findable Playlist")
+    builders.make_playlist(
+        conn, name="Findable Playlist Deleted", unfollowed_at=builders.days_ago(1)
+    )
+    conn.commit()
+
+    ranked = search.rank(conn, "findable playlist")
+
+    assert {r["id"] for r in ranked["playlists"]} == {kept}
+
+
 def test_a_track_with_no_canonical_group_is_skipped_without_crashing(conn):
     # source: S_sweep.md §3, carried forward -- ensure_track_groups() is the
     # route's job, not rank()'s, so a matching track with no track_group row

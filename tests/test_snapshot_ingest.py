@@ -420,6 +420,49 @@ def test_a_playlist_that_disappeared_is_marked_unfollowed(conn, library):
     ).fetchone()[0] == jobs.now_iso()
 
 
+def test_an_unfollowed_playlists_memberships_end_with_it(conn, library):
+    # source: ui-framework-W.md 9.14b -- Symr has no record of any playlist
+    # deleted before it existed, so a newly-deleted one must not go on
+    # counting as live. Nothing filters live-membership queries on
+    # unfollowed_at (there are six of them, in scoring, canonical, entities
+    # and generations), so if the rows are not ended here they are live
+    # everywhere: scored, counted in live_count, and listed on every one of
+    # their tracks' pages.
+    snapshot._run_pull(force_all=False)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM membership WHERE playlist_id = 'p2' AND removed_at IS NULL"
+    ).fetchone()[0] == 1
+
+    library.playlists = [p for p in library.playlists if p["id"] != "p2"]
+    snapshot._run_pull(force_all=False)
+
+    rows = conn.execute(
+        "SELECT removed_at FROM membership WHERE playlist_id = 'p2'"
+    ).fetchall()
+    assert rows, "the membership rows themselves must survive -- the log is append-only"
+    assert all(r["removed_at"] == jobs.now_iso() for r in rows)
+
+
+def test_ending_them_does_not_rewrite_a_membership_removed_earlier(conn, library):
+    # source: ui-framework-W.md 9.14b -- the UPDATE is guarded on
+    # `removed_at IS NULL`. Without that guard a track taken out of the
+    # playlist months ago would have its removal date rewritten to the day
+    # the playlist was deleted, quietly falsifying the append-only log.
+    snapshot._run_pull(force_all=False)
+    conn.execute(
+        "UPDATE membership SET removed_at = '2020-01-01T00:00:00Z' "
+        "WHERE playlist_id = 'p2'"
+    )
+    conn.commit()
+
+    library.playlists = [p for p in library.playlists if p["id"] != "p2"]
+    snapshot._run_pull(force_all=False)
+
+    assert conn.execute(
+        "SELECT removed_at FROM membership WHERE playlist_id = 'p2'"
+    ).fetchone()[0] == "2020-01-01T00:00:00Z"
+
+
 def test_one_failing_playlist_records_its_error_and_the_run_continues(conn, library):
     """A failure is per-playlist. The run keeps going and the error is stored,
     which is what puts that playlist back in every subsequent work list."""

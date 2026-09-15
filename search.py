@@ -98,7 +98,12 @@ def _build_index(conn):
     track_rows = conn.execute("SELECT track_id, name, album_id FROM track").fetchall()
     album_rows = conn.execute("SELECT album_id, name FROM album").fetchall()
     artist_rows = conn.execute("SELECT artist_id, name FROM artist").fetchall()
-    playlist_rows = conn.execute("SELECT playlist_id, name FROM snapshot").fetchall()
+    # Unfollowed playlists are excluded outright: they are gone from Spotify,
+    # and Symr knows nothing at all about the ones deleted before it existed.
+    # /dev/snapshot is the one page that still lists them.
+    playlist_rows = conn.execute(
+        "SELECT playlist_id, name FROM snapshot WHERE unfollowed_at IS NULL"
+    ).fetchall()
 
     album_names = {r["album_id"]: r["name"] for r in album_rows}
     artist_names = {r["artist_id"]: r["name"] for r in artist_rows}

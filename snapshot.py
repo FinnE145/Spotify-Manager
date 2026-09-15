@@ -441,6 +441,23 @@ def _sync_playlists_and_get_targets(conn, sp, force_all):
     now = jobs.now_iso()
     for pid in existing_ids - seen_ids:
         conn.execute("UPDATE snapshot SET unfollowed_at = ? WHERE playlist_id = ?", (now, pid))
+        # An unfollowed playlist's memberships end with it. Symr has no record
+        # of any playlist deleted before it existed, so a newly-deleted one
+        # must not count for more than those do -- and the fix belongs here,
+        # at the moment the fact becomes true, rather than as an
+        # `unfollowed_at IS NULL` filter on every live-membership query. Every
+        # reader already agrees on what removed_at means; there is no second
+        # rule to remember, and scoring, live_count, playlists_for_tracks and
+        # generation_presence all become correct without being touched.
+        #
+        # Re-following restores the playlist normally: _diff_playlist_tracks
+        # compares against live rows only, so it finds none and inserts fresh
+        # ones, leaving a truthful gap in the log rather than pretending the
+        # playlist was there all along.
+        conn.execute(
+            "UPDATE membership SET removed_at = ? WHERE playlist_id = ? AND removed_at IS NULL",
+            (now, pid),
+        )
     conn.commit()
 
     if force_all:
