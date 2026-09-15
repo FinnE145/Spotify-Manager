@@ -916,7 +916,7 @@ def test_an_unrecognised_sort_falls_back_to_tenure_and_reports_the_fallback(conn
     conn.commit()
 
     assert entities.tenure_page(conn, "version", ";drop", 1)["sort"] == "tenure"
-    assert entities.tenure_page(conn, "version", "runs", 1)["sort"] == "runs"
+    assert entities.tenure_page(conn, "version", "score", 1)["sort"] == "score"
 
 
 def test_the_page_number_is_clamped_into_range_and_returned_normalized(conn):

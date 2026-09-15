@@ -780,9 +780,10 @@ def artist_detail(conn, artist_id):
 # both, so it is the only existing home costing no new dependency. See
 # P3-006.
 
-_TENURE_SORT_KEYS = {
-    "tenure": "tenure", "total": "total_generations", "runs": "run_count", "score": "score",
-}
+# Only the two columns the page still shows (ui-framework-W.md §9.12 dropped
+# Total and Runs from the table; a sort by a column you cannot see went with
+# them at W verify).
+_TENURE_SORT_KEYS = {"tenure": "tenure", "score": "score"}
 _TENURE_PAGE_SIZE = 100
 # 365.25 / 12. A tenure runs to hundreds of days, where "598 days" is a number
 # you have to divide in your head before it means anything.

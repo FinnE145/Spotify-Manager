@@ -192,8 +192,8 @@ body.immersive {
 }
 
 /* Bootstrap's .table is 1rem; Symr's pages are dense data listings and read
-   better at the 13px .data-table always used. One rule, so every page keeps
-   the same density as it converts. */
+   better at the 13px the pre-Bootstrap tables always used. One rule, so every
+   page has the same density. */
 .page .table {
   font-size: 13px;
 }
@@ -215,9 +215,8 @@ body.immersive {
 
 /* The last row's bottom border sits directly above whatever follows the table --
    an <hr>, a card edge, a section break -- and reads as a doubled line every
-   time. Both table classes, since pages are still mid-conversion. */
-.table > tbody > tr:last-child > *,
-.data-table > tbody > tr:last-child > * {
+   time. */
+.table > tbody > tr:last-child > * {
   border-bottom-width: 0;
 }
 
@@ -395,42 +394,10 @@ body.immersive {
 
 /* -- Snapshot ------------------------------------------------------ */
 
-.checkbox-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  margin-bottom: 8px;
-}
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.data-table th,
-.data-table td {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--bs-border-color);
-  text-align: left;
-}
-
-.data-table th {
-  font-weight: 600;
-  color: var(--bs-emphasis-color);
-}
-
 /* An unfollowed or removed row reads quieter than a live one. This MUST go
    through --bs-table-color inside a Bootstrap table: a `color` on the <tr> is
    only inherited by the cells, and Bootstrap's `.table > :not(caption) > * > *`
-   rule *declares* a colour on them, which beats inheritance at any specificity.
-   The .data-table half stays until the last page converts. */
-.data-table tr.unfollowed,
-.data-table tr.removed {
-  color: var(--bs-secondary-color);
-}
-
+   rule *declares* a colour on them, which beats inheritance at any specificity. */
 .table tr.unfollowed,
 .table tr.removed {
   --bs-table-color: var(--bs-secondary-color);
@@ -633,13 +600,22 @@ img.cover {
    attribute redefines the variables without applying them, so the text colour
    is set here -- without it the card names inherited dark mode's light body
    colour onto a white card, which is what broke. Same flex-column shape as
-   #review-app so #main can still fill the viewport. */
+   #review-app so #main can still fill the viewport.
+
+   The font metrics are the pre-Bootstrap body's, pinned here so the reboot's
+   line-height: 1.5 never reaches the workspace: labels and notes size
+   themselves from their text and are snapped to the grid, and the canvas's
+   type was tuned by hand against `normal`. Only x/y are ever stored, so this
+   is about what the drafting surface looks like, not saved data. (W verify) */
 #canvas-app {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   color: var(--bs-body-color);
+  font-family: system-ui, sans-serif;
+  font-size: 16px;
+  line-height: normal;
 }
 
 #toolbar {
@@ -994,7 +970,7 @@ img.cover {
   display: inline-block;
 }
 
-/* 13px, the size .data-table always was, kept on this one table: thirteen
+/* 13px, the size the pre-Bootstrap tables always were, kept on this one: thirteen
    columns of a working tool, and at Bootstrap's 16px the rows went from
    tight to 81px with the artist credit wrapping to three lines. A deliberate
    exception to the shared table shape -- roadmap step X should know. */
@@ -1253,12 +1229,6 @@ img.cover {
   margin-bottom: 0;
 }
 
-.toggle-links a.active {
-  font-weight: 700;
-  color: var(--bs-emphasis-color);
-  text-decoration: none;
-}
-
 /* .leaf-meta is inline in its six other uses (a credit trailing a name on one
    line). Here the Track column is the only one that wraps, and a credit
    running on from the title read as part of it -- "Rally Car Josh Sallee".
@@ -1283,12 +1253,13 @@ img.cover {
    performance note) -- kept minimal so 3,600 of them per page stay cheap.
 
    Deliberately unprefixed by a table class: generation_strip renders into the
-   tenure table (now .table) and into the entity pages (still .data-table), so
-   a rule keyed on either one goes silently blank on the other. It did --
-   converting this page took the whole strip invisible, background and all.
-   The plain `background` is what makes it work in both: inside a .table it
-   beats Bootstrap's own cell rule on source order at equal specificity, and
-   inside a .data-table there is no --bs-table-bg for a variable to feed. */
+   tenure table and into the entity pages, and while those were on different
+   table classes a rule keyed on either one went silently blank on the other.
+   It did -- converting the tenure page took the whole strip invisible,
+   background and all. Every table is .table now, but the rule stays
+   unprefixed: the strip belongs to the macro, not to whichever table holds
+   it. The plain `background` beats Bootstrap's own cell rule on source order
+   at equal specificity. */
 td.gen-cell {
   padding: 0;
   /* 13px is what "37" needs: 10px of tabular digits at 8px, the 1px separator,

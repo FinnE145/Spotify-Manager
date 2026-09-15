@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_macros.html" import entity_link, generation_strip, score_display, cover_cell %}
 
-{% block title %}Symr — Tenure{% endblock %}
+{% block title %}Symr | Tenure{% endblock %}
 
 {% macro sort_link(key, label) -%}
 <a href="{{ url_for('dev_generations_tenure', tier=tier, sort=key, page=1) }}" class="{{ 'active' if sort == key }}">{{ label }}</a>
@@ -29,8 +29,7 @@
 
   {% if rows %}
   <p class="meta mt-3">
-    Sort by {{ sort_link('tenure', 'tenure') }}, {{ sort_link('total', 'total generations') }},
-    {{ sort_link('runs', 'runs') }}, or {{ sort_link('score', 'score') }}. All descending.
+    Sort by {{ sort_link('tenure', 'tenure') }} or {{ sort_link('score', 'score') }}. Both descending.
   </p>
 
   <div class="tenure-scroll">

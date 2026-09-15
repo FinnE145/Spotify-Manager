@@ -15,7 +15,6 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
-import canonical
 import jobs
 
 TIER_COLUMN = {"version": "version_id", "song": "song_id"}
