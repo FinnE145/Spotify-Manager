@@ -8,7 +8,7 @@
   <td>{{ entity_link('version', t.version_id, t.name) }}</td>
   <td>{{ t.artists }}</td>
   <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
-  <td>{{ score_display(t.score) }}</td>
+  <td>{{ score_display(t.score, label=false) }}</td>
 </tr>
 {% else %}
 <tr><td colspan="5" class="empty">No songs match.</td></tr>

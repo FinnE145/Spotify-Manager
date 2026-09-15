@@ -132,16 +132,18 @@ body.immersive {
    .link-body-emphasis + .link-underline-opacity-25 pairing, applied once here
    rather than as four utility classes on every anchor across thirty templates.
    Anchors that are already something else -- buttons, list-group items,
-   dropdown items, home's cards -- carry their own colour and are excluded
-   rather than fought with. */
-.page a:not(.btn):not(.list-group-item):not(.dropdown-item):not(.card),
+   dropdown items, nav tabs, home's cards -- carry their own colour and are
+   excluded rather than fought with. Narrowing this rule's own scope is not
+   the same as out-specifying it: these are components Bootstrap styles, and
+   the exclusion list is where that gets said once. */
+.page a:not(.btn):not(.list-group-item):not(.dropdown-item):not(.nav-link):not(.card),
 .search-dropdown a {
   color: var(--bs-emphasis-color);
   text-decoration-color: rgba(var(--bs-emphasis-color-rgb), 0.35);
   text-underline-offset: 0.2em;
 }
 
-.page a:not(.btn):not(.list-group-item):not(.dropdown-item):not(.card):hover,
+.page a:not(.btn):not(.list-group-item):not(.dropdown-item):not(.nav-link):not(.card):hover,
 .search-dropdown a:hover {
   color: var(--bs-link-hover-color);
   text-decoration-color: currentColor;
@@ -419,15 +421,6 @@ body.immersive {
   color: var(--bs-emphasis-color);
 }
 
-.data-table.sortable th {
-  cursor: pointer;
-  user-select: none;
-}
-
-.data-table.sortable th:hover {
-  color: var(--bs-link-hover-color);
-}
-
 /* An unfollowed or removed row reads quieter than a live one. This MUST go
    through --bs-table-color inside a Bootstrap table: a `color` on the <tr> is
    only inherited by the cells, and Bootstrap's `.table > :not(caption) > * > *`
@@ -441,13 +434,22 @@ body.immersive {
 .table tr.unfollowed,
 .table tr.removed {
   --bs-table-color: var(--bs-secondary-color);
-  text-decoration: line-through;
   /* The link in the row has to dim too, or the one cell that matters most stays
      bright. Overriding the variable rather than the colour is deliberate: the
      site-wide link rule carries four :not() clauses and scores (0,5,1), so a
      selector specific enough to beat it would have to repeat them. Feeding
      --bs-emphasis-color, which that rule already reads, wins with no fight. */
   --bs-emphasis-color: var(--bs-secondary-color);
+}
+
+/* The strike goes on the CELLS, not the row. text-decoration propagates into
+   in-flow descendants but **not from a table-row box into its cells** -- it was
+   declared on the <tr> and silently did nothing, on this page and on
+   /dev/snapshot's unfollowed playlists, for as long as the rule has existed
+   (measured: textDecorationLine came back "none"). */
+.table tr.unfollowed > td,
+.table tr.removed > td {
+  text-decoration: line-through;
 }
 
 img.cover {
@@ -1198,6 +1200,20 @@ img.cover {
   text-decoration: none;
 }
 
+/* .leaf-meta is inline in its six other uses (a credit trailing a name on one
+   line). Here the Track column is the only one that wraps, and a credit
+   running on from the title read as part of it -- "Rally Car Josh Sallee".
+   Scoped to this table rather than changed globally. */
+#tenure-table .leaf-meta {
+  display: block;
+}
+
+/* "8.8 mo." is narrow enough to look like it fits and wide enough to wrap,
+   which makes one row taller than its neighbours for no reason. */
+#tenure-table .span-cell {
+  white-space: nowrap;
+}
+
 /* The strip's 36+ columns push the table wider than .page's 900px cap; the
    page itself must not gain a horizontal scrollbar for it. */
 .tenure-scroll {
@@ -1205,17 +1221,60 @@ img.cover {
 }
 
 /* Real <td>s, one per generation (see docs/specs/generations-B.md's
-   performance note) -- kept minimal so 3,600 of them per page stay cheap. */
-.data-table td.gen-cell {
+   performance note) -- kept minimal so 3,600 of them per page stay cheap.
+
+   Deliberately unprefixed by a table class: generation_strip renders into the
+   tenure table (now .table) and into the entity pages (still .data-table), so
+   a rule keyed on either one goes silently blank on the other. It did --
+   converting this page took the whole strip invisible, background and all.
+   The plain `background` is what makes it work in both: inside a .table it
+   beats Bootstrap's own cell rule on source order at equal specificity, and
+   inside a .data-table there is no --bs-table-bg for a variable to feed. */
+td.gen-cell {
   padding: 0;
-  width: 9px;
-  min-width: 9px;
+  /* 13px is what "37" needs: 10px of tabular digits at 8px, the 1px separator,
+     and a hair either side. Anything narrower and the digits touch the border;
+     anything wider and the Track column has no room left to hold a title on
+     two lines. Measured against .page's 868px of usable width. */
+  width: 13px;
+  min-width: 13px;
   border-left: 1px solid var(--bs-body-bg);
   background: var(--bs-secondary-bg);
+  font-size: 8px;
+  line-height: 1.4;
+  text-align: center;
+  /* Top, so the number labels the column and the bar below it stays the thing
+     you actually scan along. */
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+  color: var(--bs-secondary-color);
 }
 
-.data-table td.gen-cell.filled {
+td.gen-cell.filled {
   background: var(--bs-primary);
+  /* --bs-primary is a mid blue in both themes, so the contrasting text is
+     white in both -- not var(--bs-body-bg), which would go dark in light mode
+     and vanish against it. */
+  color: #fff;
+}
+
+/* The breadcrumb's dropdown options (ui-framework-W.md §9.15): a cover, a
+   name, and whatever tells that tier's members apart on a second line. */
+.crumb-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crumb-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.crumb-sub {
+  font-size: 12px;
+  color: var(--bs-secondary-color);
 }
 
 /* -- Entity pages (docs/specs/entity-pages-K.md) -------------------- */
@@ -1239,9 +1298,19 @@ img.cover {
   margin: 0 0 4px;
 }
 
+/* Bootstrap's breadcrumb component, fed rather than fought: the divider is
+   its own variable, and `\203A` is the same chevron the page used to write by
+   hand between the crumbs. */
 .breadcrumb {
+  --bs-breadcrumb-divider: "\203A";
   color: var(--bs-secondary-color);
   font-size: 13px;
+  margin-bottom: 0;
+}
+
+.entity-breadcrumb .breadcrumb-item.active {
+  color: var(--bs-emphasis-color);
+  font-weight: 600;
 }
 
 .nav-search {
@@ -1266,12 +1335,16 @@ img.cover {
   z-index: 10;
 }
 
-.search-dropdown .data-table {
+.search-dropdown .table {
   font-size: 12px;
 }
 
+/* Fed as --bs-table-bg, not set as `background`: Bootstrap declares a
+   background on every cell, which a colour on the <tr> only ever inherits to
+   and so never wins. This is the dropdown's keyboard highlight -- it would
+   have gone silently dead when _search_combined.html became a .table. */
 .search-dropdown tr.highlighted {
-  background: var(--bs-secondary-bg);
+  --bs-table-bg: var(--bs-secondary-bg);
 }
 
 .search-type-label {
@@ -1315,35 +1388,34 @@ img.cover {
   font-size: 17px;
 }
 
-/* A See more'd section becomes scrollable rather than growing the page --
-   the one inner scroll region left on the site. */
-.search-section.scrollable table {
-  display: block;
-  max-height: 420px;
-  overflow-y: auto;
-}
-
-.search-section.scrollable thead,
-.search-section.scrollable tbody {
-  display: table;
-  width: 100%;
-  table-layout: fixed;
-}
-
+/* No .scrollable region after See more any more: every section is a collapse,
+   which is the bound, and an inner scroll region inside one is the thing that
+   traps the wheel on the way down the page (ui-framework-W.md §9.3). */
+/* .btn-link is Bootstrap's borderless button, but it ships raw link blue --
+   the one blue thing on the page, and precisely the treatment the site-wide
+   link rule exists to avoid. Fed through the button's own variables rather
+   than out-specified, so hover and focus keep working. */
 .search-see-more {
   margin-top: 8px;
+  --bs-btn-color: var(--bs-emphasis-color);
+  --bs-btn-hover-color: var(--bs-link-hover-color);
+  --bs-btn-active-color: var(--bs-link-hover-color);
 }
 
 /* An album's unowned tracklist rows -- rendered from the simplified Spotify
    object, not linked, and visually distinct from the rows Symr actually
    knows as tracks. */
-.data-table tr.unowned {
-  color: var(--bs-secondary-color);
+/* --bs-table-color, not `color`: Bootstrap *declares* a colour on every cell,
+   which a colour inherited from the row never beats (standing rule 2). Left
+   plain and these nine rows would look exactly like the two Symr owns, which
+   reads as owning the whole album. */
+.table tr.unowned {
+  --bs-table-color: var(--bs-secondary-color);
 }
 
 /* Separates the tracklist page Spotify returned from the owned tracks that
    fell past it (docs/specs/entity-pages-K.md §5.2). */
-.data-table tr.tracklist-divider td {
+.table tr.tracklist-divider td {
   padding-top: 12px;
   border-top: 2px solid var(--bs-border-color);
   color: var(--bs-secondary-color);

@@ -65,14 +65,19 @@
 
    The branches pick the href and nothing else -- there is one <a> below, so
    the class attribute is emitted in one place rather than five. #}
-{% macro entity_link(kind, id, text, params={}, css_class='') -%}
+{# Accepts a {% call %} body, so a link with rich content (the breadcrumb's
+   dropdown options: cover, name, second line) still builds its href here.
+   Duplicating the href logic outside this macro is exactly what it exists to
+   prevent -- see CLAUDE.md's note that no url_for to an entity route survives
+   outside this file. #}
+{% macro entity_link(kind, id, text='', params={}, css_class='') -%}
 {%- if kind == 'track' -%}{% set href = url_for('track_page', track_id=id, **params) %}
 {%- elif kind == 'album' -%}{% set href = url_for('album_page', album_id=id, **params) %}
 {%- elif kind == 'artist' -%}{% set href = url_for('artist_page', artist_id=id, **params) %}
 {%- elif kind == 'playlist' -%}{% set href = url_for('playlist_page', playlist_id=id, **params) %}
 {%- else -%}{% set href = url_for(kind ~ '_page', group_id=id, **params) %}
 {%- endif -%}
-<a href="{{ href }}"{% if css_class %} class="{{ css_class }}"{% endif %}>{{ text }}</a>
+<a href="{{ href }}"{% if css_class %} class="{{ css_class }}"{% endif %}>{% if caller is defined %}{{ caller() }}{% else %}{{ text }}{% endif %}</a>
 {%- endmacro %}
 
 {# A track's credited artists as individual links, comma-joined -- credits is
@@ -158,9 +163,14 @@
    macro covers both call shapes: entity pages pass both horizons
    ("score 73 · recent 48"), listings pass all_time only ("score 73"),
    since rows there are dense and all_time is what they're sorted by. #}
-{% macro score_display(all_time, recent=none) -%}
+{# `label=false` drops the word "score" from the chip. H spells it out because an
+   unlabelled unbounded number beside a track name reads as a play count or a
+   duration -- that reasoning is about a chip sitting *in prose*. In a column
+   under a Score header the header is the label, and repeating it on every row
+   is noise. Every other caller keeps the default. #}
+{% macro score_display(all_time, recent=none, label=true) -%}
 {%- if all_time is not none -%}
-<span class="score-display">score {{ "%.0f"|format(all_time) }}{% if recent is not none %} &middot; recent {{ "%.0f"|format(recent) }}{% endif %}</span>
+<span class="score-display">{% if label %}score {% endif %}{{ "%.0f"|format(all_time) }}{% if recent is not none %} &middot; recent {{ "%.0f"|format(recent) }}{% endif %}</span>
 {%- endif -%}
 {%- endmacro %}
 
@@ -168,8 +178,54 @@
    so the tenure table and the group/artist pages share one implementation.
    ordinals is the set/list of ordinals present; spans is generations.generation_spans()'s
    full ordered list. Emits bare <td>s -- the caller supplies the <tr>. #}
+{# Every cell carries its ordinal, not just the run's ends: numbering only the
+   ends would need those cells wider than the rest, and an uneven grid is
+   harder to read across than small text is. #}
 {% macro generation_strip(ordinals, spans) -%}
 {% for s in spans %}
-<td class="gen-cell {{ 'filled' if s.ordinal in ordinals }}" title="Generation {{ s.ordinal }} — {{ s.name }}"></td>
+<td class="gen-cell {{ 'filled' if s.ordinal in ordinals }}" data-datetime-title="{{ s.started_at or '' }}" data-title-suffix="{{ s.name }}">{{ s.ordinal }}</td>
 {% endfor %}
+{%- endmacro %}
+
+{# One crumb. A tier above this page has exactly one group and is a plain link;
+   a tier below can have several, and several is what makes it a dropdown. The
+   options carry a cover and whatever actually tells that tier's members apart
+   (entities._breadcrumb_option), since "Release 14757" tells you nothing. #}
+{% macro crumb(c) -%}
+{%- if c.current -%}
+{{ c.tier|capitalize }}
+{%- elif c.options|length == 1 -%}
+{{ entity_link(c.tier, c.options[0].id, c.tier|capitalize) }}
+{%- elif c.options -%}
+<span class="dropdown d-inline-block">
+  <a href="#" class="dropdown-toggle" role="button" data-bs-toggle="dropdown"
+     aria-expanded="false">{{ c.tier|capitalize }} ({{ c.options|length }})</a>
+  <ul class="dropdown-menu">
+    {% for o in c.options %}
+    <li>
+      {% call entity_link(c.tier, o.id, css_class='dropdown-item crumb-option') %}
+      {% if o.image_url %}<img class="cover" src="{{ o.image_url }}" alt="">
+      {% else %}<span class="cover cover-placeholder"></span>{% endif %}
+      <span class="crumb-text">{{ o.name }}{% if o.sub %}<span class="crumb-sub">{{ o.sub }}</span>{% endif %}</span>
+      {% endcall %}
+    </li>
+    {% endfor %}
+  </ul>
+</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# The whole five-tier breadcrumb. Bootstrap's component, not a hand-rolled
+   one: a <p class="breadcrumb"> silently inherits its `display: flex`, which
+   trims the whitespace around a separator written between the crumbs
+   (ui-framework-W.md §9.15). The divider comes from --bs-breadcrumb-divider. #}
+{% macro breadcrumb_nav(crumbs) -%}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb entity-breadcrumb">
+    {% for c in crumbs %}
+    <li class="breadcrumb-item{{ ' active' if c.current }}"
+        {% if c.current %}aria-current="page"{% endif %}>{{ crumb(c) }}</li>
+    {% endfor %}
+  </ol>
+</nav>
 {%- endmacro %}

@@ -528,43 +528,45 @@ def test_playlist_generation_view_renders_the_generation_split(client, corpus, c
     """The generation view is a whole alternate render path on an
     already-swept route (P2-008).
 
-    **The assertions are the carried/new headings and their counts, because
-    nothing else here discriminates.** This test used to assert a member
-    track's name, which the *ordinary* playlist render also contains -- so
-    `if False:` on the `?generation=1` branch passed it. The headings exist
-    only in the generation view, and the counts are what `?tier=` changes:
-    the two tracks below are two versions of one song, so version tier sees
-    two groups and song tier sees one.
+    **The assertions are the overlay column and its counts, because nothing
+    else here discriminates.** This test used to assert a member track's
+    name, which the *ordinary* playlist render also contains -- so
+    `if False:` on the `?generation=1` branch passed it. Since
+    ui-framework-W.md §9.19 the view is a column in the tracklist rather than
+    two lists, so the column header and the carried/new summary are what only
+    that branch produces.
     """
     # source: CLAUDE.md's route map -- "/playlist/<id> (?generation=1 renders
     # the generation view, ?tier= toggles it)"; generations-B.md's
     # carried/new split and its rollup tier.
+    # A second generation holding a *different version of the same song* as
+    # generation 1. That is the one shape where the tier changes the answer:
+    # the version is new, the song was already there.
     tb = builders.make_track(conn, "t-gen-second", name="Second Version")
     builders.make_group(conn, [tb], song=corpus["groups"]["song"])
+    gen2 = builders.make_playlist(conn, "p-corpus-gen2", name="v2.0.0")
+    builders.make_generation(conn, ordinal=2, playlist_id=gen2)
     builders.make_membership(
-        conn,
-        playlist_id=corpus["gen_playlist"],
-        track_id=tb,
-        added_at=builders.days_ago(9),
+        conn, playlist_id=gen2, track_id=tb, added_at=builders.days_ago(4)
     )
     canonical.ensure_track_groups(conn)
     conn.commit()
 
-    plain = client.get(f"/playlist/{corpus['gen_playlist']}").get_data(as_text=True)
-    assert "New in this generation" not in plain
+    plain = client.get(f"/playlist/{gen2}").get_data(as_text=True)
+    assert "carried," not in plain
+    assert "<th>Generation" not in plain
 
-    resp = client.get(f"/playlist/{corpus['gen_playlist']}?generation=1")
+    at_version = client.get(f"/playlist/{gen2}?generation=1").get_data(as_text=True)
+    assert "<th>Generation 2</th>" in at_version
+    assert "0 carried, 1 new" in at_version
+    assert "New</td>" in at_version
 
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    # Generation 1 is the first, so nothing can have been carried into it.
-    assert "Carried forward (0)" in body
-    assert "New in this generation (2)" in body
-
-    tiered = client.get(f"/playlist/{corpus['gen_playlist']}?generation=1&tier=song")
-
-    assert tiered.status_code == 200
-    assert "New in this generation (1)" in tiered.get_data(as_text=True)
+    # Same track, same generation, song tier: its song was in generation 1,
+    # so it flips to carried. A route that ignored ?tier= gives the version
+    # answer twice.
+    at_song = client.get(f"/playlist/{gen2}?generation=1&tier=song").get_data(as_text=True)
+    assert "1 carried, 0 new" in at_song
+    assert "Carried forward</td>" in at_song
 
 
 # -- Semantic assertions for the query-string variants ----------------------
@@ -1202,8 +1204,15 @@ def test_the_tenure_tier_toggle_rolls_two_versions_into_one_song(client, conn):
     version = client.get("/dev/generations/tenure?tier=version").get_data(as_text=True)
     song = client.get("/dev/generations/tenure?tier=song").get_data(as_text=True)
 
-    assert "2 groups ever present in a generation" in version
-    assert "1 group ever present in a generation" in song
+    # The count moved into the pager line when the intro copy was deleted
+    # (ui-framework-W.md); it is still the one thing on the page the toggle
+    # changes, so it is still what this asserts. Read back by regex rather
+    # than by substring: "1 group" is a substring of "21 groups".
+    def total_shown(body):
+        return re.search(r"of \d+ &middot;\s*([\d,]+) group", body).group(1)
+
+    assert total_shown(version) == "2"
+    assert total_shown(song) == "1"
 
 
 def test_the_generations_list_tier_toggle_counts_songs_not_versions(client, conn):
@@ -1628,3 +1637,48 @@ def test_the_comparison_is_hostname_only_not_full_origin(client):
     assert resp.status_code == 302
     with client.session_transaction(base_url="http://localhost:9999") as sess:
         assert "oauth_state" in sess
+
+
+# -- error.html's two boxes (ui-framework-W.md 9.21) -------------------------
+
+
+def test_a_404_renders_its_detail_as_an_alert_and_no_exception_box(client):
+    # source: ui-framework-W.md 9.21 -- the detail is information and gets a
+    # neutral alert; the exception box exists only on a 500. A template that
+    # rendered both boxes unconditionally, or swapped their classes, passes
+    # the non-5xx sweep.
+    body = client.get("/album/does-not-exist").get_data(as_text=True)
+
+    assert "<h1>404 Not Found</h1>" in body
+    assert 'class="alert alert-secondary"' in body
+    assert "Album not found." in body
+    assert "alert-danger" not in body
+
+
+def test_a_500_renders_the_exception_in_a_danger_alert(app, client):
+    # source: ui-framework-W.md 9.21 -- the 500 branch cannot be reached from
+    # any real route without breaking something, so a throwaway route raises
+    # on purpose. The app fixture deliberately leaves TESTING off, which is
+    # what lets app.py's own handler run here instead of the exception
+    # propagating into the test.
+    @app.route("/__boom")
+    def boom():
+        raise RuntimeError("kaboom")
+
+    resp = client.get("/__boom")
+
+    assert resp.status_code == 500
+    body = resp.get_data(as_text=True)
+    assert "<h1>500 Internal Server Error</h1>" in body
+    assert 'class="alert alert-danger"' in body
+    assert "RuntimeError: kaboom" in body
+
+
+def test_a_coming_soon_page_names_itself_and_says_so(client):
+    # source: ui-framework-W.md 9.20 -- the page name is the heading and the
+    # status is the line under it, the same shape as every other page. The
+    # four stubs share one template, so one route stands for all of them.
+    body = client.get("/audit").get_data(as_text=True)
+
+    assert "<h1>Audit</h1>" in body
+    assert "Coming soon." in body

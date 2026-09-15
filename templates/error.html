@@ -4,13 +4,16 @@
 
 {% block content %}
 <main class="page">
-  <h1>{{ code }} — {{ name }}</h1>
+  <h1>{{ code }} {{ name }}</h1>
   <p class="meta">{{ method }} {{ path }}</p>
+  {# Bootstrap's alert is exactly this: a bordered message with a semantic
+     colour. The detail is information; the exception, only ever present on a
+     500, is a failure and reads as one. #}
   {% if detail %}
-  <div class="panel">{{ detail }}</div>
+  <div class="alert alert-secondary" role="alert">{{ detail }}</div>
   {% endif %}
   {% if exc %}
-  <div class="panel error">{{ exc }}</div>
+  <div class="alert alert-danger" role="alert"><code>{{ exc }}</code></div>
   {% endif %}
 </main>
 {% endblock %}

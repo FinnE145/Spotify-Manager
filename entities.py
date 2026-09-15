@@ -77,16 +77,24 @@ def play_stats(conn, track_ids):
 def playlists_for_tracks(conn, track_ids):
     """Every playlist membership (live or removed) for any of track_ids:
     playlist id/name, which track, added_at, removed_at. The rollup the
-    group, album and artist pages each need over their own track set."""
+    group, album and artist pages each need over their own track set.
+
+    **Unfollowed playlists are excluded, removed rows and all**
+    (ui-framework-W.md §9.14b). Ending their memberships was not enough here:
+    a history table that lists the playlists Symr watched being deleted, while
+    silently omitting every playlist deleted before Symr existed, reads as a
+    complete history and is not one. Showing none of them is the honest
+    version of the same list."""
     if not track_ids:
         return []
     placeholders = ",".join("?" for _ in track_ids)
     return conn.execute(
         f"""
-        SELECT m.playlist_id, s.name AS playlist_name, m.track_id, m.added_at, m.removed_at
+        SELECT m.playlist_id, s.name AS playlist_name, s.image_url AS playlist_image_url,
+               m.track_id, m.added_at, m.removed_at
         FROM membership m
         JOIN snapshot s ON s.playlist_id = m.playlist_id
-        WHERE m.track_id IN ({placeholders})
+        WHERE m.track_id IN ({placeholders}) AND s.unfollowed_at IS NULL
         ORDER BY s.name COLLATE NOCASE, m.added_at
         """,
         list(track_ids),
@@ -206,6 +214,106 @@ def fetch_artist_image(conn, artist_id):
 # order, matching the order of the routes in app.py.
 
 
+# The breadcrumb's tiers, root first. "track" is on the end but is not a
+# canonical group: its ids are track ids, which is why it is special-cased
+# below rather than folded into the loop.
+_BREADCRUMB_TIERS = ("song", "version", "recording", "release", "track")
+
+
+def _short_id(value, head=6, tail=5):
+    """A track id with its middle removed, for a breadcrumb option where the
+    id is the only thing telling two identically-named tracks apart."""
+    if not value or len(value) <= head + tail + 1:
+        return value
+    return f"{value[:head]}\u2026{value[-tail:]}"
+
+
+def _breadcrumb_option(tier, group_id, track):
+    """One entry in a breadcrumb dropdown. Each tier is identified by what
+    actually distinguishes its members from each other: releases differ by
+    album, recordings by length, versions by credit, and two tracks can be
+    identical in all three, so those fall back to the id."""
+    if track is None:
+        return {"id": group_id, "image_url": None, "name": str(group_id), "sub": None}
+    if tier == "release":
+        return {
+            "id": group_id,
+            "image_url": track["album_image_url"],
+            "name": track["album_name"] or str(group_id),
+            "sub": None,
+        }
+    if tier == "recording":
+        ms = track["duration_ms"]
+        return {
+            "id": group_id,
+            "image_url": track["album_image_url"],
+            "name": track["name"],
+            "sub": f"{ms // 60000}:{(ms // 1000) % 60:02d}" if ms else None,
+        }
+    if tier == "track":
+        return {
+            "id": group_id,
+            "image_url": track["album_image_url"],
+            "name": track["name"],
+            "sub": _short_id(group_id),
+        }
+    # song and version
+    return {
+        "id": group_id,
+        "image_url": track["album_image_url"],
+        "name": track["name"],
+        "sub": track["artists"],
+    }
+
+
+def _breadcrumb(conn, tier, track_ids, tracks_by_id):
+    """The five-tier breadcrumb, as one entry per tier.
+
+    A tier **above** the current one has exactly one group -- every member
+    track shares it -- so it is a plain link. A tier **below** can have
+    several, and each gets an option; the template turns one option into a
+    link and several into a dropdown.
+
+    No extra track queries: every descendant group's tracks are a subset of
+    this group's, so its representative is already in `tracks_by_id`.
+    """
+    placeholders = ",".join("?" for _ in track_ids)
+    rows = conn.execute(
+        f"SELECT song_id, version_id, recording_id, release_id, track_id "
+        f"FROM track_group WHERE track_id IN ({placeholders})",
+        list(track_ids),
+    ).fetchall()
+
+    crumbs = []
+    for t in _BREADCRUMB_TIERS:
+        if t == "track":
+            ids = list(dict.fromkeys(r["track_id"] for r in rows))
+        else:
+            ids = list(dict.fromkeys(r[f"{t}_id"] for r in rows if r[f"{t}_id"] is not None))
+
+        options = []
+        for gid in ids:
+            if t == "track":
+                rep_id = gid
+            else:
+                try:
+                    rep_id = canonical.representative(conn, gid)
+                except ValueError:
+                    rep_id = None
+            # tracks_by_id covers every descendant group for free (their
+            # tracks are a subset of this group's). An *ancestor* group's
+            # representative usually is not in it -- the track page's whole
+            # breadcrumb is ancestors -- so that case pays one lookup rather
+            # than falling back to rendering a bare group id.
+            track = tracks_by_id.get(rep_id)
+            if track is None and rep_id is not None:
+                track = canonical.track_display(conn, rep_id)
+            options.append(_breadcrumb_option(t, gid, track))
+
+        crumbs.append({"tier": t, "current": t == tier, "options": options})
+    return crumbs
+
+
 def group_detail(conn, tier, group_id):
     """Everything one of the four group pages renders (/song, /version,
     /recording, /release), keyed by tier.
@@ -234,11 +342,6 @@ def group_detail(conn, tier, group_id):
     rep = canonical.track_display(conn, rep_id) if rep_id else None
     artist_credits = canonical.artist_credits_for_tracks(conn, track_ids)
 
-    breadcrumb = conn.execute(
-        "SELECT song_id, version_id, recording_id, release_id FROM track_group WHERE track_id = ?",
-        (track_ids[0],),
-    ).fetchone()
-
     track_scores = scoring.scores_for_tier(conn, "track", track_ids)
     member_tracks = sorted(
         (canonical.track_display(conn, tid) for tid in track_ids),
@@ -248,6 +351,7 @@ def group_detail(conn, tier, group_id):
         ),
     )
     tracks_by_id = {t["track_id"]: t for t in member_tracks}
+    breadcrumb = _breadcrumb(conn, tier, track_ids, tracks_by_id)
 
     ordinals = generations.presence_for_tracks(conn, track_ids)
     runs = generations.runs(ordinals) if ordinals else []
@@ -292,12 +396,15 @@ def track_detail(conn, track_id):
     track_artists = canonical.artist_credits_for_tracks(conn, [track_id]).get(track_id, [])
     groups = canonical.groups_for_track(conn, track_id)
 
+    # Unfollowed playlists excluded for the reason playlists_for_tracks gives:
+    # a partial history that looks complete is worse than a shorter honest one.
     memberships = conn.execute(
         """
-        SELECT m.playlist_id, s.name AS playlist_name, m.added_at, m.removed_at, m.position
+        SELECT m.playlist_id, s.name AS playlist_name, s.image_url AS playlist_image_url,
+               m.added_at, m.removed_at, m.position
         FROM membership m
         JOIN snapshot s ON s.playlist_id = m.playlist_id
-        WHERE m.track_id = ?
+        WHERE m.track_id = ? AND s.unfollowed_at IS NULL
         ORDER BY s.name COLLATE NOCASE, m.added_at
         """,
         (track_id,),
@@ -312,6 +419,11 @@ def track_detail(conn, track_id):
         "track": track,
         "track_artists": track_artists,
         "groups": groups,
+        # The same five-tier breadcrumb the group pages render, with this
+        # track as the current tier. Every crumb above it is a single group,
+        # so this page never produces a dropdown -- but it goes through the
+        # one builder rather than a second, simpler one that would drift.
+        "breadcrumb": _breadcrumb(conn, "track", [track_id], {track_id: track}),
         "memberships": memberships,
         "stats": play_stats(conn, [track_id]),
         "aliases": aliases,
@@ -344,7 +456,8 @@ def playlist_detail(conn, playlist_id):
 
     rows = conn.execute(
         """
-        SELECT m.id, m.track_id, t.name, t.album_id, a.name AS album_name, t.duration_ms,
+        SELECT m.id, m.track_id, t.name, t.album_id, a.name AS album_name,
+               a.image_url AS album_image_url, t.duration_ms,
                m.added_at, m.removed_at, m.position
         FROM membership m
         JOIN track t ON t.track_id = m.track_id
@@ -398,8 +511,9 @@ def album_detail(conn, album_id):
 
     def _load():
         return conn.execute(
-            "SELECT album_id, name, album_type, release_date, total_tracks, image_url, "
-            "external_url, tracklist_json, tracklist_pulled_at FROM album WHERE album_id = ?",
+            "SELECT album_id, name, album_type, release_date, release_date_precision, "
+            "total_tracks, image_url, external_url, tracklist_json, tracklist_pulled_at "
+            "FROM album WHERE album_id = ?",
             (album_id,),
         ).fetchone()
 
@@ -514,6 +628,19 @@ def album_detail(conn, album_id):
 
     track_names = {r["track_id"]: r["name"] for r in rows + appended if r["owned"]}
 
+    # The album's runtime, and **only when every track is accounted for**: a
+    # sum over the rows that happen to be known reads as the album's length
+    # and is not one. Hot Fuss is complete at 11 of 11 even though Symr owns
+    # two of them, because the stored tracklist supplies the rest; a 460-track
+    # album Spotify paged past is not, and shows nothing rather than a third
+    # of its runtime.
+    durations = [r["duration_ms"] for r in rows + appended]
+    complete = (
+        album["total_tracks"] is not None
+        and len(durations) == album["total_tracks"]
+        and all(d is not None for d in durations)
+    )
+
     return {
         "album": album,
         "artists": artist_rows,
@@ -527,6 +654,7 @@ def album_detail(conn, album_id):
         # (P1-016), so "first 50" is only true when this is still < 50.
         "tracklist_count": len(tracklist) if fetched else None,
         "known_count": len(owned_ids),
+        "total_duration": format_duration(sum(durations)) if complete else None,
         "stats": play_stats(conn, owned_ids),
         "playlists": playlists_for_tracks(conn, owned_ids),
         "score": scoring.album_scores(conn, [album_id]).get(
@@ -656,6 +784,47 @@ _TENURE_SORT_KEYS = {
     "tenure": "tenure", "total": "total_generations", "runs": "run_count", "score": "score",
 }
 _TENURE_PAGE_SIZE = 100
+# 365.25 / 12. A tenure runs to hundreds of days, where "598 days" is a number
+# you have to divide in your head before it means anything.
+_DAYS_PER_MONTH = 30.4375
+
+
+def format_duration(ms):
+    """m:ss, growing an hours field only once there is one.
+
+    An album's total runs past an hour often enough that "97:14" would be the
+    common case, and a fixed h:mm:ss would put a leading "0:" on every track.
+    """
+    if not ms:
+        return ""
+    seconds = round(ms / 1000)
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def format_span(days):
+    """A tenure's length, as days under a month and months above it.
+
+    Under ten months keeps one decimal, since 7 and 8 months are a visible
+    difference at that scale; ten and over drops it, where a tenth of a month
+    is noise. **The cut is made on the rounded value, not the raw one** --
+    9.96 months formats as "10 mo.", not "10.0 mo.", which would be the two
+    digits the decimal is meant to avoid.
+
+    Formatting lives here rather than in the template because these edges are
+    worth a unit test, and a macro can only be tested through a page render.
+    """
+    if days is None:
+        return ""
+    if days < 30:
+        return f"{days} day{'' if days == 1 else 's'}"
+    months = days / _DAYS_PER_MONTH
+    if round(months, 1) < 10:
+        return f"{months:.1f} mo."
+    return f"{months:.0f} mo."
 
 
 def tenure_page(conn, tier, sort, page):
@@ -701,6 +870,7 @@ def tenure_page(conn, tier, sort, page):
                 **t,
                 "representative": canonical.track_display(conn, rep_id) if rep_id else None,
                 "present_ordinals": present,
+                "span": format_span(t["days"]),
             }
         )
 

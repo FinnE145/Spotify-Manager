@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, spotify_track_link, score_display %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, spotify_track_link, score_display, breadcrumb_nav, cover_cell %}
 
 {% block title %}Symr — {{ track.name }}{% endblock %}
 
@@ -14,57 +14,47 @@
         {% if track.album_name %} &middot; {{ entity_link('album', track.album_id, track.album_name) }}{% endif %}
         {% if track.duration_ms %} &middot; {{ "%d:%02d"|format(track.duration_ms // 60000, (track.duration_ms // 1000) % 60) }}{% endif %}
       </p>
-      {% if score %}<p class="meta">{{ score_display(score.all_time, score.recent) }}</p>{% endif %}
+      <p class="meta">
+        Track
+        {% if score %} &middot; {{ score_display(score.all_time, score.recent) }}{% endif %}
+      </p>
+      {# Replaces the four-row "Canonical" table of bare group ids: the same
+         component the group pages render, so a tier is named and covered
+         rather than numbered. #}
+      {{ breadcrumb_nav(breadcrumb) }}
     </div>
   </div>
 
-  <section class="panel">
-    <h2>Spotify identity</h2>
-    <table class="data-table">
-      <tbody>
-        <tr><td>Track id</td><td><code>{{ track.track_id }}</code></td></tr>
-        <tr><td>URI</td><td><code>{{ track.uri or "" }}</code></td></tr>
-        <tr><td>ISRC</td><td>{{ track.isrc or "—" }}</td></tr>
-        <tr><td>Track / disc</td><td>{{ track.track_number if track.track_number is not none else "?" }} / {{ track.disc_number if track.disc_number is not none else "?" }}</td></tr>
-        <tr><td>Playable</td><td>{{ "yes" if track.is_playable else ("no" if track.is_playable is not none else "unknown") }}</td></tr>
-        <tr><td>Linked from</td><td>{{ track.linked_from_id or "—" }}</td></tr>
-        <tr><td>Spotify link</td><td>{% if track.external_url %}<a href="{{ track.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}</td></tr>
-      </tbody>
-    </table>
-  </section>
+  <div class="button-row">
+    <a href="{{ url_for('canonical_group_deep_link', group_id=groups.song) }}"
+       class="btn btn-sm btn-outline-emphasis">Edit in canonical viewer <i class="bi bi-arrow-right"></i></a>
+  </div>
 
-  <section class="panel">
-    <h2>Canonical</h2>
-    <table class="data-table">
-      <thead><tr><th>Tier</th><th>Group</th></tr></thead>
-      <tbody>
-        {% for tier in ('song', 'version', 'recording', 'release') %}
-        <tr>
-          <td>{{ tier|capitalize }}</td>
-          <td>{{ entity_link(tier, groups[tier], groups[tier]) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+  <hr>
 
-  <section class="panel">
-    <h2>Plays</h2>
-    {{ play_stats(stats) }}
-  </section>
+  <h2>Plays</h2>
+  {{ play_stats(stats) }}
 
-  <section class="panel">
-    <h2>Memberships</h2>
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#track-memberships"
+            aria-expanded="false" aria-controls="track-memberships">
+      Memberships ({{ memberships|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="track-memberships">
     {% if memberships %}
-    <table class="data-table">
-      <thead><tr><th>Playlist</th><th>Added</th><th>Removed</th><th>Position</th></tr></thead>
+    <table class="table table-sm table-hover align-middle">
+      <thead><tr><th></th><th>Playlist</th><th>Added</th><th>Removed</th><th>Position</th></tr></thead>
       <tbody>
         {% for m in memberships %}
         <tr class="{{ 'removed' if m.removed_at }}">
+          {{ cover_cell(m.playlist_image_url, 'playlist') }}
           <td>{{ entity_link('playlist', m.playlist_id, m.playlist_name) }}</td>
-          <td>{{ datetime_span(m.added_at) }}</td>
-          <td>{{ datetime_span(m.removed_at) }}</td>
-          <td>{{ m.position if m.position is not none else "" }}</td>
+          <td class="muted">{{ datetime_span(m.added_at) }}</td>
+          <td class="muted">{{ datetime_span(m.removed_at) }}</td>
+          <td class="muted">{{ m.position if m.position is not none else "" }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -72,20 +62,47 @@
     {% else %}
     <p class="empty">Not in any captured playlist.</p>
     {% endif %}
-  </section>
+  </div>
+
+  <hr>
+
+  <h2>Spotify identity</h2>
+  {# Kept in a card, like the other label/value stats tables (§9.8). #}
+  <div class="card">
+    <div class="card-body">
+      <table class="table table-sm align-middle mb-0">
+        <tbody>
+          <tr><th>Track id</th><td><code>{{ track.track_id }}</code></td></tr>
+          <tr><th>URI</th><td><code>{{ track.uri or "" }}</code></td></tr>
+          <tr><th>ISRC</th><td>{{ track.isrc or "—" }}</td></tr>
+          <tr><th>Track / disc</th><td>{{ track.track_number if track.track_number is not none else "?" }} / {{ track.disc_number if track.disc_number is not none else "?" }}</td></tr>
+          <tr><th>Playable</th><td>{{ "yes" if track.is_playable else ("no" if track.is_playable is not none else "unknown") }}</td></tr>
+          <tr><th>Linked from</th><td>{{ track.linked_from_id or "—" }}</td></tr>
+          <tr><th>Spotify link</th><td>{% if track.external_url %}<a href="{{ track.external_url }}" target="_blank" rel="noreferrer">open.spotify.com <i class="bi bi-box-arrow-up-right"></i></a>{% endif %}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 
   {% if aliases %}
-  <section class="panel">
-    <h2>Relink aliases</h2>
-    <p class="meta">Uris Spotify substituted onto this track during the foreign-track round-trip.</p>
-    <table class="data-table">
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#track-aliases"
+            aria-expanded="false" aria-controls="track-aliases">
+      Relink aliases ({{ aliases|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="track-aliases">
+    <p class="meta">Uris Spotify substituted onto this track during the round-trip.</p>
+    <table class="table table-sm table-hover align-middle">
       <tbody>
         {% for a in aliases %}
         <tr><td>{{ spotify_track_link(a.requested_uri) }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
-  </section>
+  </div>
   {% endif %}
 </main>
 {% endblock %}

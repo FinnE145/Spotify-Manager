@@ -203,3 +203,35 @@ def test_the_backstop_pair_is_captured_before_the_recompute_reads_its_inputs(
 
     assert scoring.ensure_fresh() is True
     assert len(recompute_calls) == 1
+
+
+# -- /dev/scoring's own two branches (ui-framework-W.md 9.13) -----------------
+
+
+def test_the_scoring_page_says_nothing_has_run_before_the_first_recompute(client):
+    # source: ui-framework-W.md 9.13 -- the never-run branch. It is worded as
+    # "queued automatically when anything it depends on changes" rather than
+    # "on the next page load", because ensure_fresh() only enqueues when the
+    # fingerprint has actually moved. Nothing but a render reaches this branch,
+    # and the route sweep only proves the page returns non-5xx.
+    body = client.get("/dev/scoring").get_data(as_text=True)
+
+    assert "No recompute has run in this process yet" in body
+    assert "Succeeded" not in body
+
+
+def test_the_scoring_page_reports_a_finished_recompute_and_its_counts(client, conn):
+    # source: ui-framework-W.md 9.13 / scoring-H.md §9.1 -- the other branch,
+    # plus the four materialized counts the card renders. A page that dropped
+    # a tier row, or rendered the counts unformatted, passes the route sweep.
+    builders.make_group(conn, ["t1"])
+    scoring.recompute(conn)
+    conn.commit()
+
+    body = client.get("/dev/scoring").get_data(as_text=True)
+
+    assert "Succeeded" in body
+    assert "No recompute has run" not in body
+    for tier in ("Version", "Recording", "Release", "Track"):
+        assert f"<th>{tier}</th>" in body
+    assert 'data-tier-count="version"' in body

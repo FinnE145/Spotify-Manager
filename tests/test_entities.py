@@ -1438,18 +1438,92 @@ def test_play_stats_month_not_stale_at_exactly_data_through(conn):
     assert stats["month"] == 1
 
 
-def test_group_detail_breadcrumb_is_scoped_to_this_groups_own_track(conn):
-    # source: S_sweep.md §3 -- sql= at entities.py:235. The breadcrumb query
-    # is keyed on `track_ids[0]`; a mutated `<>` would instead match some
-    # *other* track's track_group row. Two distinct groups whose tier ids all
-    # differ makes the wrong row observably wrong rather than merely absent.
+def _crumb(data, tier):
+    return next(c for c in data["breadcrumb"] if c["tier"] == tier)
+
+
+def test_group_detail_breadcrumb_is_scoped_to_this_groups_own_tracks(conn):
+    # source: S_sweep.md §3 (sql= at the breadcrumb query) carried forward to
+    # ui-framework-W.md 9.15's five-tier breadcrumb. The query is keyed on this
+    # group's track_ids; a mutated comparison would pull in some *other*
+    # track's track_group row. Two distinct groups whose tier ids all differ
+    # makes the wrong row observably wrong rather than merely absent.
     groups_a = builders.make_group(conn, ["t-bc-a"])
     groups_b = builders.make_group(conn, ["t-bc-b"])
 
     data = entities.group_detail(conn, "song", groups_a["song"])
 
-    assert data["breadcrumb"]["version_id"] == groups_a["version"]
-    assert data["breadcrumb"]["version_id"] != groups_b["version"]
+    assert [o["id"] for o in _crumb(data, "version")["options"]] == [groups_a["version"]]
+    assert groups_b["version"] not in [
+        o["id"] for o in _crumb(data, "version")["options"]
+    ]
+
+
+def test_the_breadcrumb_marks_the_current_tier_and_covers_all_five(conn):
+    # source: ui-framework-W.md 9.15 -- the template renders the current tier
+    # as plain text and every other as a link or a dropdown, so exactly one
+    # crumb must be current. "track" is on the end and is not a canonical
+    # group, which is the case most likely to be dropped.
+    groups = builders.make_group(conn, ["t-bc-c"])
+
+    data = entities.group_detail(conn, "recording", groups["recording"])
+
+    assert [c["tier"] for c in data["breadcrumb"]] == [
+        "song", "version", "recording", "release", "track",
+    ]
+    assert [c["tier"] for c in data["breadcrumb"] if c["current"]] == ["recording"]
+    assert [o["id"] for o in _crumb(data, "track")["options"]] == ["t-bc-c"]
+
+
+def test_a_tier_below_with_several_groups_offers_all_of_them(conn):
+    # source: ui-framework-W.md 9.15 -- one option is a plain link and several
+    # is a dropdown, so the count is what the template branches on. A
+    # breadcrumb built from one representative track (as it was before) would
+    # report a single release here and hide the other two.
+    # One song, one version, one recording, three releases -- make_group's own
+    # documented idiom for joining some tiers and forking another.
+    groups = builders.make_group(conn, ["t-r1"])
+    shared = {t: groups[t] for t in ("song", "version", "recording")}
+    builders.make_group(conn, ["t-r2"], **shared)
+    builders.make_group(conn, ["t-r3"], **shared)
+
+    data = entities.group_detail(conn, "song", groups["song"])
+
+    assert len(_crumb(data, "release")["options"]) == 3
+    # The tiers above are shared by every member track, so they stay single.
+    assert len(_crumb(data, "version")["options"]) == 1
+
+
+def test_a_breadcrumb_option_carries_what_tells_its_tier_apart(conn):
+    # source: ui-framework-W.md 9.15 -- releases differ by album, recordings by
+    # length, versions by credit, tracks by id. Rendering "Release 14757" in
+    # the dropdown is the thing this replaces, so each tier's own field is
+    # asserted rather than just "an option exists".
+    album = builders.make_album(conn, name="The Album", image_url="http://cover")
+    builders.make_track(conn, "t-opt", name="The Song", album_id=album)
+    groups = builders.make_group(conn, ["t-opt"])
+
+    data = entities.group_detail(conn, "song", groups["song"])
+
+    release = _crumb(data, "release")["options"][0]
+    assert release["name"] == "The Album"
+    assert release["image_url"] == "http://cover"
+
+    recording = _crumb(data, "recording")["options"][0]
+    assert recording["name"] == "The Song"
+    assert ":" in recording["sub"]  # a duration, not an id
+
+    track = _crumb(data, "track")["options"][0]
+    assert track["name"] == "The Song"
+    assert track["sub"] == entities._short_id("t-opt")
+
+
+def test_a_short_id_keeps_both_ends_and_is_left_alone_when_short(conn):
+    # source: ui-framework-W.md 9.15 -- the id is the only thing separating two
+    # identically-named tracks, so truncation must not eat either end, and a
+    # short id must not gain an ellipsis it does not need.
+    assert entities._short_id("02fK5B1KpqWj59cSOfgohS") == "02fK5B\u2026fgohS"
+    assert entities._short_id("short") == "short"
 
 
 def test_group_detail_member_tracks_sort_handles_a_null_track_name(conn):
@@ -1723,3 +1797,144 @@ def test_artist_detail_album_rows_sort_handles_a_null_album_name(conn):
     assert data["albums"][0]["album_id"] == album
 
 
+
+
+# -- tenure span formatting (ui-framework-W.md 9.12) --------------------------
+
+
+def test_a_span_under_a_month_is_days():
+    # source: ui-framework-W.md 9.12 -- "days if under a month". 29 is the
+    # last day before the cut and 30 the first month, so both sides are named:
+    # an off-by-one in the comparison changes exactly one of them.
+    assert entities.format_span(1) == "1 day"
+    assert entities.format_span(29) == "29 days"
+    assert entities.format_span(30).endswith("mo.")
+
+
+def test_a_span_under_ten_months_keeps_one_decimal():
+    # source: ui-framework-W.md 9.12 -- single-digit months carry a decimal,
+    # because 7 and 8 months are a visible difference at that scale.
+    assert entities.format_span(212) == "7.0 mo."  # 212 / 30.4375 = 6.97
+    assert entities.format_span(267) == "8.8 mo."
+
+
+def test_ten_months_and_over_drops_the_decimal():
+    # source: ui-framework-W.md 9.12 -- two-digit months are whole numbers.
+    assert entities.format_span(335) == "11 mo."
+    assert entities.format_span(598) == "20 mo."
+
+
+def test_the_decimal_cut_is_made_on_the_rounded_value():
+    # source: ui-framework-W.md 9.12 -- the edge the rule creates, and the
+    # only reason the cut is `round(months, 1) < 10` rather than `months < 10`.
+    # 303 days is 9.955 months: a raw comparison keeps the decimal and renders
+    # "10.0 mo.", which is the two digits the decimal exists to avoid.
+    assert 9.9 < 303 / entities._DAYS_PER_MONTH < 10.0
+    assert entities.format_span(303) == "10 mo."
+
+
+def test_a_missing_span_renders_as_nothing_not_zero():
+    # source: ui-framework-W.md 9.12 -- days is nullable upstream, and "0 days"
+    # would be a claim the data does not make.
+    assert entities.format_span(None) == ""
+
+
+# -- deleted playlists stay out of the history tables (ui-framework-W.md 9.14b)
+
+
+def test_an_unfollowed_playlist_is_not_in_a_tracks_membership_history(conn):
+    # source: ui-framework-W.md 9.14b -- ending the memberships was not enough
+    # for the history tables, which show removed rows on purpose. Listing the
+    # playlists Symr watched being deleted while silently omitting every
+    # playlist deleted before Symr existed reads as a complete history and is
+    # not one. The live playlist is what separates this from "returns
+    # nothing", which a broken WHERE would also produce.
+    track = builders.make_track(conn)
+    kept = builders.make_playlist(conn, name="Still Here")
+    gone = builders.make_playlist(
+        conn, name="Deleted", unfollowed_at=builders.days_ago(1)
+    )
+    builders.make_membership(conn, kept, track)
+    # Exactly the shape the fix leaves behind: the row survives, marked removed.
+    builders.make_membership(conn, gone, track, removed_at=builders.days_ago(1))
+    conn.commit()
+
+    data = entities.track_detail(conn, track)
+
+    assert [m["playlist_id"] for m in data["memberships"]] == [kept]
+
+
+def test_playlists_for_tracks_also_drops_unfollowed_playlists(conn):
+    # source: ui-framework-W.md 9.14b -- the same rule, on the rollup the
+    # group, album and artist pages share. It is a separate query from
+    # track_detail's, so it can regress on its own.
+    track = builders.make_track(conn)
+    kept = builders.make_playlist(conn, name="Still Here")
+    gone = builders.make_playlist(
+        conn, name="Deleted", unfollowed_at=builders.days_ago(1)
+    )
+    builders.make_membership(conn, kept, track)
+    builders.make_membership(conn, gone, track, removed_at=builders.days_ago(1))
+    conn.commit()
+
+    rows = entities.playlists_for_tracks(conn, [track])
+
+    assert [r["playlist_id"] for r in rows] == [kept]
+
+
+# -- album duration and identity (ui-framework-W.md 9.17) --------------------
+
+
+def test_a_duration_grows_an_hours_field_only_when_there_is_one():
+    # source: ui-framework-W.md 9.17 -- a fixed h:mm:ss would put "0:" in front
+    # of every track's length, and a fixed m:ss would render a long album as
+    # "97:14". Both sides of the hour are named.
+    assert entities.format_duration(222_000) == "3:42"
+    assert entities.format_duration(3_599_000) == "59:59"
+    assert entities.format_duration(3_600_000) == "1:00:00"
+    assert entities.format_duration(4_325_000) == "1:12:05"
+    assert entities.format_duration(None) == ""
+    assert entities.format_duration(0) == ""
+
+
+def test_album_duration_is_the_whole_album_or_nothing(conn):
+    # source: ui-framework-W.md 9.17 -- a sum over the tracks that happen to be
+    # known reads as the album's runtime and is not one. The complete case is
+    # asserted too: a rule that always returned None would satisfy the
+    # incomplete half on its own.
+    album = builders.make_album(conn, total_tracks=2)
+    builders.make_track(conn, "t-dur-1", album_id=album, duration_ms=60_000)
+    conn.commit()
+
+    partial = entities.album_detail(conn, album)
+    assert partial["total_duration"] is None
+
+    builders.make_track(conn, "t-dur-2", album_id=album, duration_ms=90_000)
+    conn.commit()
+
+    whole = entities.album_detail(conn, album)
+    assert whole["total_duration"] == "2:30"
+
+
+def test_album_duration_is_withheld_when_a_track_has_no_length(conn):
+    # source: ui-framework-W.md 9.17 -- `all(d is not None)`. Summing with a
+    # missing duration silently understates the album, and the count check
+    # alone would not notice.
+    album = builders.make_album(conn, total_tracks=2)
+    builders.make_track(conn, "t-dur-3", album_id=album, duration_ms=60_000)
+    builders.make_track(conn, "t-dur-4", album_id=album, duration_ms=None)
+    conn.commit()
+
+    assert entities.album_detail(conn, album)["total_duration"] is None
+
+
+def test_album_detail_loads_the_release_date_precision(conn):
+    # source: ui-framework-W.md 9.17 -- the identity table says so when a date
+    # is year- or month-precision, which is only possible if the column is
+    # selected. It was not before this page.
+    album = builders.make_album(
+        conn, release_date="2004", release_date_precision="year"
+    )
+    conn.commit()
+
+    assert entities.album_detail(conn, album)["album"]["release_date_precision"] == "year"

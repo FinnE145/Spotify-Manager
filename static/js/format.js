@@ -71,15 +71,43 @@ function makeExactDateSpan(isoValue) {
 }
 
 function applyRelativeTimes(root = document) {
+  // One pass over the tenure strip formats 3,700 cells from 37 distinct
+  // dates, and formatting -- not the DOM write -- was all of its cost:
+  // measured 130ms recomputing per cell against 1.7ms with this cache, where
+  // the assignment alone is 0.5ms.
+  //
+  // The cache is per-pass, not module-level: relative phrasing goes stale
+  // ("just now" does not stay true), and a long-lived page re-runs this after
+  // a fragment swap. Within one pass there is nothing to go stale against.
+  // formatRelativeTime itself stays pure, since other callers use it directly.
+  const cache = new Map();
+  const relative = (iso) => {
+    if (!cache.has(iso)) cache.set(iso, formatRelativeTime(iso));
+    return cache.get(iso);
+  };
   root.querySelectorAll("[data-datetime]").forEach((el) => {
     const iso = el.dataset.datetime;
-    el.textContent = formatRelativeTime(iso);
+    el.textContent = relative(iso);
     if (iso) el.title = iso;
   });
   root.querySelectorAll("[data-datetime-exact]").forEach((el) => {
     const iso = el.dataset.datetimeExact;
     el.textContent = formatExactTime(iso);
     if (iso) el.title = iso;
+  });
+  // Formats into the `title` rather than the text, for an element whose
+  // visible content is something else -- the tenure strip's cells, which show
+  // an ordinal and want to say what date that generation began.
+  //
+  // Built from the two data attributes every time rather than appended to
+  // whatever title is already there, so a second pass over the same element
+  // cannot double it up. That also means the date and the suffix are two
+  // attributes and not one packed string: at 3,700 cells the ISO dominates
+  // either way, and two named values are the ones you can read.
+  root.querySelectorAll("[data-datetime-title]").forEach((el) => {
+    const iso = el.dataset.datetimeTitle;
+    const suffix = el.dataset.titleSuffix || "";
+    el.title = [iso ? relative(iso) : "", suffix].filter(Boolean).join(" · ");
   });
 }
 

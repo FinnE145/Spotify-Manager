@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, generation_strip, score_display %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, generation_strip, score_display, cover_cell, breadcrumb_nav %}
 
 {% block title %}Symr — {{ rep.name if rep else "Group " ~ group_id }}{% endblock %}
 
@@ -49,37 +49,102 @@
         {% if rep and rep.duration_ms %} &middot; {{ "%d:%02d"|format(rep.duration_ms // 60000, (rep.duration_ms // 1000) % 60) }}{% endif %}
       </p>
       <p class="meta">
-        <span class="tier-chip {{ tier }}">{{ tier|capitalize }}</span>
+        {{ tier|capitalize }}
         &middot; {{ track_count }} track{{ "s" if track_count != 1 }}
         {% if score %} &middot; {{ score_display(score.all_time, score.recent) }}{% endif %}
       </p>
-      <p class="breadcrumb">
-        {% for b_tier in ('song', 'version', 'recording', 'release') %}
-        {% if b_tier == tier %}<strong>{{ b_tier|capitalize }}</strong>
-        {% else %}{{ entity_link(b_tier, breadcrumb[b_tier ~ '_id'], b_tier|capitalize) }}{% endif %}
-        {{ "›" if not loop.last }}
-        {% endfor %}
-      </p>
+      {# Bootstrap's own breadcrumb component. This was a <p class="breadcrumb">,
+         which silently picked up that component's `display: flex` -- and flex
+         trims whitespace inside an anonymous text item, so the " › " separators
+         rendered with no spaces around them however they were written. The
+         component supplies the divider itself. #}
+      {{ breadcrumb_nav(breadcrumb) }}
     </div>
   </div>
 
-  <section class="panel">
-    <h2>Plays</h2>
-    {{ play_stats(stats) }}
-  </section>
+  <div class="button-row">
+    <a href="{{ url_for('canonical_group_deep_link', group_id=group_id) }}"
+       class="btn btn-sm btn-outline-emphasis">Edit in canonical viewer <i class="bi bi-arrow-right"></i></a>
+  </div>
 
-  <section class="panel">
-    <h2>Playlists</h2>
+  <hr>
+
+  <h2>Plays</h2>
+  {{ play_stats(stats) }}
+
+  <hr>
+
+  <h2>Generations</h2>
+  {% if ordinals %}
+  <p class="meta">
+    Tenure {{ tenure }} generation{{ "s" if tenure != 1 }}
+    &middot; present in {{ total_generations }} total
+    &middot; {{ run_count }} run{{ "s" if run_count != 1 }}
+  </p>
+  <div class="tenure-scroll">
+  <table class="table table-sm mb-0"><tbody><tr>{{ generation_strip(ordinals, spans) }}</tr></tbody></table>
+  </div>
+  {% else %}
+  <p class="empty">Never present in a generation.</p>
+  {% endif %}
+
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#group-subtree"
+            aria-expanded="false" aria-controls="group-subtree">Subtree</button>
+  </h2>
+  <div class="collapse" id="group-subtree">
+    {{ subtree_node(tree) }}
+  </div>
+
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#group-members"
+            aria-expanded="false" aria-controls="group-members">
+      Member tracks ({{ member_tracks|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="group-members">
+    <table class="table table-sm table-hover align-middle">
+      <thead><tr><th></th><th>Track</th><th>Artists</th><th>Album</th><th>Duration</th><th>ISRC</th></tr></thead>
+      <tbody>
+        {% for t in member_tracks %}
+        <tr>
+          {{ cover_cell(t.album_image_url, 'song') }}
+          <td>{{ entity_link('track', t.track_id, t.name) }}</td>
+          <td>{{ artist_names(artist_credits.get(t.track_id, [])) }}</td>
+          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
+          <td class="muted">{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+          <td class="muted">{{ t.isrc or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#group-playlists"
+            aria-expanded="false" aria-controls="group-playlists">
+      Playlists ({{ playlists|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="group-playlists">
     {% if playlists %}
-    <table class="data-table">
-      <thead><tr><th>Playlist</th><th>Track</th><th>Added</th><th>Removed</th></tr></thead>
+    <table class="table table-sm table-hover align-middle">
+      <thead><tr><th></th><th>Playlist</th><th></th><th>Track</th><th>Added</th><th>Removed</th></tr></thead>
       <tbody>
         {% for p in playlists %}
         <tr class="{{ 'removed' if p.removed_at }}">
+          {{ cover_cell(p.playlist_image_url, 'playlist') }}
           <td>{{ entity_link('playlist', p.playlist_id, p.playlist_name) }}</td>
+          {{ cover_cell(tracks_by_id[p.track_id].album_image_url if p.track_id in tracks_by_id else none, 'song') }}
           <td>{{ entity_link('track', p.track_id, tracks_by_id[p.track_id].name if p.track_id in tracks_by_id else p.track_id) }}</td>
-          <td>{{ datetime_span(p.added_at) }}</td>
-          <td>{{ datetime_span(p.removed_at) }}</td>
+          <td class="muted">{{ datetime_span(p.added_at) }}</td>
+          <td class="muted">{{ datetime_span(p.removed_at) }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -87,50 +152,6 @@
     {% else %}
     <p class="empty">Played but never added to a playlist.</p>
     {% endif %}
-  </section>
-
-  <section class="panel">
-    <h2>Generations</h2>
-    {% if ordinals %}
-    <p class="meta">
-      Tenure {{ tenure }} generation{{ "s" if tenure != 1 }}
-      &middot; present in {{ total_generations }} total
-      &middot; {{ run_count }} run{{ "s" if run_count != 1 }}
-    </p>
-    <div class="tenure-scroll">
-    <table class="data-table"><tbody><tr>{{ generation_strip(ordinals, spans) }}</tr></tbody></table>
-    </div>
-    {% else %}
-    <p class="empty">Never present in a generation.</p>
-    {% endif %}
-  </section>
-
-  <section class="panel">
-    <h2>Subtree</h2>
-    {{ subtree_node(tree) }}
-  </section>
-
-  <section class="panel">
-    <h2>Member tracks</h2>
-    <table class="data-table">
-      <thead><tr><th>Track</th><th>Artists</th><th>Album</th><th>Duration</th><th>ISRC</th></tr></thead>
-      <tbody>
-        {% for t in member_tracks %}
-        <tr>
-          <td>{{ entity_link('track', t.track_id, t.name) }}</td>
-          <td>{{ artist_names(artist_credits.get(t.track_id, [])) }}</td>
-          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
-          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
-          <td>{{ t.isrc or "—" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
-
-  <section class="panel">
-    <h2>Edit</h2>
-    <p><a href="{{ url_for('canonical_group_deep_link', group_id=group_id) }}">Edit this group in the canonical viewer &rarr;</a></p>
-  </section>
+  </div>
 </main>
 {% endblock %}

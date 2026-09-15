@@ -6,42 +6,43 @@
 {% block content %}
 <main class="page">
   <h1>Scoring</h1>
-  <p class="meta">
-    Materialized version/recording/release/track scores (docs/specs/scoring-H.md).
-    Song, album, artist, playlist and arbitrary collections aggregate from these at query time
-    and are never materialized themselves.
+
+  <p id="recompute-status">
+    {% if recompute_status.finished_at %}
+    {% if recompute_status.outcome == 'ok' %}Succeeded{% else %}<span class="error">Failed</span>{% endif %}
+    &middot; {{ datetime_span(recompute_status.finished_at) }}
+    &middot; took {{ recompute_status.duration_seconds }}s
+    {% else %}
+    {# scoring.ensure_fresh() enqueues only when the fingerprint has actually
+       moved, so "the next page load runs one" would be a promise the code does
+       not make. #}
+    No recompute has run in this process yet. One is queued automatically when
+    anything it depends on changes.
+    {% endif %}
   </p>
+  <p id="recompute-error" class="error" {% if not recompute_status.error %}hidden{% endif %}>{{ recompute_status.error or "" }}</p>
 
-  <section class="panel">
-    <h2>Materialized counts</h2>
-    <table class="data-table">
-      <thead><tr><th>Tier</th><th>Scores</th></tr></thead>
-      <tbody>
-        {% for tier in ('version', 'recording', 'release', 'track') %}
-        <tr>
-          <td>{{ tier|capitalize }}</td>
-          <td data-tier-count="{{ tier }}">{{ "{:,}".format(tier_counts[tier]) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+  <div class="button-row">
+    <button id="recompute-btn" type="button" class="btn btn-sm btn-primary">Recompute scores</button>
+  </div>
 
-  <section class="panel">
-    <h2>Last recompute</h2>
-    <p id="recompute-status">
-      {% if recompute_status.finished_at %}
-      {% if recompute_status.outcome == 'ok' %}Succeeded{% else %}<span class="error">Failed</span>{% endif %}
-      &middot; {{ datetime_span(recompute_status.finished_at) }}
-      &middot; took {{ recompute_status.duration_seconds }}s
-      {% else %}
-      No recompute has run yet this process — the read-time backstop
-      (docs/specs/scoring-H.md §9.3) runs one on the very next page load regardless.
-      {% endif %}
-    </p>
-    <p id="recompute-error" class="error" {% if not recompute_status.error %}hidden{% endif %}>{{ recompute_status.error or "" }}</p>
-    <button id="recompute-btn" type="button">Recompute scores</button>
-  </section>
+  <hr>
+
+  <h2>Materialized counts</h2>
+  <div class="card">
+    <div class="card-body">
+      <table class="table table-sm align-middle mb-0">
+        <tbody>
+          {% for tier in ('version', 'recording', 'release', 'track') %}
+          <tr>
+            <th>{{ tier|capitalize }}</th>
+            <td data-tier-count="{{ tier }}">{{ "{:,}".format(tier_counts[tier]) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </main>
 <script src="{{ url_for('static', filename='js/scoring.js') }}"></script>
 {% endblock %}

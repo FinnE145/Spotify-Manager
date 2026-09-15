@@ -1,55 +1,69 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, generation_confirm_banner, entity_link %}
+{% from "_macros.html" import datetime_span, generation_confirm_banner, entity_link, cover_cell %}
 
 {% block title %}Symr — Generations{% endblock %}
 
 {% block content %}
 <main class="page">
-  <h1>Generations</h1>
-  <p class="meta">
-    The chain of current-favs playlists, numbered 1&ndash;36 and counting. A minor or patch
-    bump renames the active playlist in place; a major bump starts a new generation.
-    &middot; <a href="{{ url_for('dev_generations_tenure', tier=tier) }}">Tenure table &rarr;</a>
-  </p>
+  {# The tenure table gets a button rather than the `Name →` link the other dev
+     pages use for cross-links: this is the only page in the site that reaches
+     it, so it is the page's one outbound action, not one route among several. #}
+  <div class="d-flex justify-content-between align-items-center gap-3">
+    <h1>Generations</h1>
+    <a href="{{ url_for('dev_generations_tenure', tier=tier) }}"
+       class="btn btn-sm btn-outline-emphasis">Tenure table <i class="bi bi-arrow-right"></i></a>
+  </div>
 
   {{ generation_confirm_banner(pending_generation, "dev_generations") }}
 
-  <section class="panel">
-    <p class="toggle-links">
-      <a href="{{ url_for('dev_generations', tier='version') }}" class="{{ 'active' if tier == 'version' }}">Version</a>
-      &middot;
-      <a href="{{ url_for('dev_generations', tier='song') }}" class="{{ 'active' if tier == 'song' }}">Song</a>
-      <span class="meta">&mdash; tier for the counts below</span>
-    </p>
+  {# Real links, not Bootstrap's JS tab component: the tier decides what the
+     server counts, so each one is a page load at its own URL. The tabs' own
+     bottom rule is the divider above the table -- it needs no <hr> as well. #}
+  <ul class="nav nav-tabs">
+    <li class="nav-item">
+      <a class="nav-link {{ 'active' if tier == 'version' }}"
+         href="{{ url_for('dev_generations', tier='version') }}">Version</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {{ 'active' if tier == 'song' }}"
+         href="{{ url_for('dev_generations', tier='song') }}">Song</a>
+    </li>
+  </ul>
 
-    {% if gens %}
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Generation</th>
-          <th>Playlist</th>
-          <th>Span</th>
-          <th>{{ tier|capitalize }} groups</th>
-          <th>Carried in / new</th>
-          <th>Survived to next</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for g in gens %}
-        <tr>
-          <td>{{ entity_link('playlist', g.playlist_id, 'Generation ' ~ g.ordinal, {'generation': 1}) }}</td>
-          <td>{{ entity_link('playlist', g.playlist_id, g.name) }}</td>
-          <td>{{ datetime_span(g.started_at) }} &ndash; {{ datetime_span(g.ended_at) if g.ended_at else "ongoing" }}</td>
-          <td>{{ g.group_count }}</td>
-          <td>{{ g.carried_in }} carried / {{ g.new_in }} new</td>
-          <td>{{ g.survived_out if g.survived_out is not none else "—" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="empty">No generations yet &mdash; run <code>scripts/seed_generations.py</code>.</p>
-    {% endif %}
-  </section>
+  {% if gens %}
+  {# Newest first. Reversed here rather than in generations(), whose carried /
+     new / survived figures are computed from each generation's neighbours and
+     whose docstring promises ordinal order to its other callers. #}
+  <table class="table table-sm table-hover align-middle">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Playlist</th>
+        <th>#</th>
+        <th>Span</th>
+        <th>{{ tier|capitalize }} groups</th>
+        <th>Carried in</th>
+        <th>New</th>
+        <th>Survived to next</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in gens|reverse %}
+      <tr>
+        {{ cover_cell(g.image_url, 'playlist') }}
+        <td>{{ entity_link('playlist', g.playlist_id, g.name) }}</td>
+        <td>{{ entity_link('playlist', g.playlist_id, g.ordinal, {'generation': 1}) }}</td>
+        <td class="muted">{{ datetime_span(g.started_at) }} &ndash; {{ datetime_span(g.ended_at) if g.ended_at else "ongoing" }}</td>
+        <td>{{ g.group_count }}</td>
+        <td>{{ g.carried_in }}</td>
+        <td>{{ g.new_in }}</td>
+        <td>{{ g.survived_out if g.survived_out is not none else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No generations yet. Run <code>scripts/seed_generations.py</code>.</p>
+  {% endif %}
 </main>
 {% endblock %}

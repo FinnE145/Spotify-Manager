@@ -298,7 +298,12 @@ def create_app():
         if data["generation"] is not None and request.args.get("generation") == "1":
             tier = request.args.get("tier", "version")
             tier = tier if tier in ("version", "song") else "version"
-            gen_view = generations.generation_view(conn, data["generation"]["ordinal"], tier)
+            gen_view = generations.generation_view(
+                conn,
+                data["generation"]["ordinal"],
+                tier,
+                [r["track_id"] for r in data["rows"]],
+            )
 
         return render_template("entity_playlist.html", gen_view=gen_view, **data)
 

@@ -2,6 +2,22 @@
 
 {% block title %}Symr — Search{% endblock %}
 
+{# One section, as a collapse. `open` is Most Relevant only: it is the answer to
+   the query, and the four type sections are the drill-down. #}
+{% macro section(id, title, open=false) %}
+<section class="search-section" id="search-{{ id }}-section">
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse"
+            data-bs-target="#search-{{ id }}-collapse"
+            aria-expanded="{{ 'true' if open else 'false' }}"
+            aria-controls="search-{{ id }}-collapse">{{ title }}</button>
+  </h2>
+  <div class="collapse{{ ' show' if open }}" id="search-{{ id }}-collapse">
+    {{ caller() }}
+  </div>
+</section>
+{% endmacro %}
+
 {% block content %}
 <main class="page">
   {# No search box of its own: the navbar's is the only one, and it is the one with the
@@ -10,74 +26,70 @@
 
   {% if not q %}
   <p class="empty">Use the search box in the navbar.</p>
-  {% endif %}
+  {% else %}
 
-  {% if q %}
-  <section class="panel">
-    <h2>Most Relevant</h2>
+  {% call section('relevant', 'Most Relevant', open=true) %}
     {% set rows = most_relevant %}
     {% include "_search_combined.html" %}
-  </section>
+  {% endcall %}
 
-  <section class="panel search-section" id="search-songs-section">
-    <h2>Songs ({{ "{:,}".format(songs_total) }})</h2>
+  <hr>
+
+  {% call section('songs', 'Songs (' ~ "{:,}".format(songs_total) ~ ')') %}
     {% if songs %}
-    <table class="data-table">
+    <table class="table table-sm table-hover align-middle">
       <thead><tr><th></th><th>Track</th><th>Artists</th><th>Album</th><th>Score</th></tr></thead>
       <tbody id="search-songs-body">{% set rows = songs %}{% include "_search_songs_rows.html" %}</tbody>
     </table>
     {% if songs_total > songs|length %}
-    <button type="button" class="search-see-more" data-type="songs">See more</button>
+    <button type="button" class="btn btn-sm btn-link search-see-more" data-type="songs">See more</button>
     {% endif %}
     {% else %}
     <p class="empty">No songs match "{{ q }}".</p>
     {% endif %}
-  </section>
+  {% endcall %}
 
-  <section class="panel search-section" id="search-albums-section">
-    <h2>Albums ({{ "{:,}".format(albums_total) }})</h2>
+  {% call section('albums', 'Albums (' ~ "{:,}".format(albums_total) ~ ')') %}
     {% if albums %}
-    <table class="data-table">
+    <table class="table table-sm table-hover align-middle">
       <thead><tr><th></th><th>Album</th><th>Score</th></tr></thead>
       <tbody id="search-albums-body">{% set rows = albums %}{% include "_search_albums_rows.html" %}</tbody>
     </table>
     {% if albums_total > albums|length %}
-    <button type="button" class="search-see-more" data-type="albums">See more</button>
+    <button type="button" class="btn btn-sm btn-link search-see-more" data-type="albums">See more</button>
     {% endif %}
     {% else %}
     <p class="empty">No albums match "{{ q }}".</p>
     {% endif %}
-  </section>
+  {% endcall %}
 
-  <section class="panel search-section" id="search-artists-section">
-    <h2>Artists ({{ "{:,}".format(artists_total) }})</h2>
+  {% call section('artists', 'Artists (' ~ "{:,}".format(artists_total) ~ ')') %}
     {% if artists %}
-    <table class="data-table">
+    <table class="table table-sm table-hover align-middle">
       <thead><tr><th></th><th>Artist</th><th>Score</th></tr></thead>
       <tbody id="search-artists-body">{% set rows = artists %}{% include "_search_artists_rows.html" %}</tbody>
     </table>
     {% if artists_total > artists|length %}
-    <button type="button" class="search-see-more" data-type="artists">See more</button>
+    <button type="button" class="btn btn-sm btn-link search-see-more" data-type="artists">See more</button>
     {% endif %}
     {% else %}
     <p class="empty">No artists match "{{ q }}".</p>
     {% endif %}
-  </section>
+  {% endcall %}
 
-  <section class="panel search-section" id="search-playlists-section">
-    <h2>Playlists ({{ "{:,}".format(playlists_total) }})</h2>
+  {% call section('playlists', 'Playlists (' ~ "{:,}".format(playlists_total) ~ ')') %}
     {% if playlists %}
-    <table class="data-table">
+    <table class="table table-sm table-hover align-middle">
       <thead><tr><th></th><th>Playlist</th><th>Score</th></tr></thead>
       <tbody id="search-playlists-body">{% set rows = playlists %}{% include "_search_playlists_rows.html" %}</tbody>
     </table>
     {% if playlists_total > playlists|length %}
-    <button type="button" class="search-see-more" data-type="playlists">See more</button>
+    <button type="button" class="btn btn-sm btn-link search-see-more" data-type="playlists">See more</button>
     {% endif %}
     {% else %}
     <p class="empty">No playlists match "{{ q }}".</p>
     {% endif %}
-  </section>
+  {% endcall %}
   {% endif %}
 </main>
 {% endblock %}

@@ -1,48 +1,64 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, score_display %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, score_display, cover_cell %}
 
 {% block title %}Symr — {{ album.name }}{% endblock %}
 
 {% block content %}
 <main class="page">
+  {# Header order matches the track and group pages: who and what on the first
+     line, then what this entity is in Symr on the second. Release date sits
+     where the track page puts its album, and the runtime where it puts its
+     own duration. #}
   <div class="entity-header">
     {% if album.image_url %}<img class="cover-lg" src="{{ album.image_url }}" alt="">{% endif %}
     <div>
       <h1>{{ album.name }}</h1>
       <p class="meta">
         {% for a in artists %}{{ entity_link('artist', a.artist_id, a.name) }}{{ ", " if not loop.last }}{% endfor %}
-        {% if album.album_type %} &middot; {{ album.album_type|capitalize }}{% endif %}
         {% if album.release_date %} &middot; {{ album.release_date }}{% endif %}
+        {% if total_duration %} &middot; {{ total_duration }}{% endif %}
       </p>
       <p class="meta">
-        {{ known_count }} of {{ album.total_tracks if album.total_tracks is not none else "?" }} known
-        {% if album.external_url %} &middot; <a href="{{ album.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}
+        {{ album.album_type|capitalize if album.album_type else "Album" }}
+        &middot; {{ known_count }} of {{ album.total_tracks if album.total_tracks is not none else "?" }} known
+        {% if score %} &middot; {{ score_display(score.all_time, score.recent) }}{% endif %}
       </p>
-      {% if score %}<p class="meta">{{ score_display(score.all_time, score.recent) }}</p>{% endif %}
     </div>
   </div>
 
-  <section class="panel">
-    <h2>Tracklist</h2>
+  <hr>
+
+  <h2>Plays</h2>
+  {{ play_stats(stats) }}
+
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#album-tracklist"
+            aria-expanded="false" aria-controls="album-tracklist">
+      Tracklist ({{ rows|length + appended|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="album-tracklist">
     {% if not fetched %}
-    <p class="meta">Not fetched from Spotify yet — showing what Symr already knows.</p>
+    <p class="meta">Not fetched from Spotify yet. Showing what Symr already knows.</p>
     {% elif album.total_tracks and tracklist_count is not none and tracklist_count < album.total_tracks %}
     <p class="meta">First {{ tracklist_count }} of {{ album.total_tracks }}; Spotify pages beyond this and we don't follow them.</p>
     {% endif %}
     {% macro track_row(t) -%}
     <tr class="{{ '' if t.owned else 'unowned' }}">
-      <td>{{ t.track_number if t.track_number is not none else "" }}</td>
+      <td class="muted">{{ t.track_number if t.track_number is not none else "" }}</td>
       <td>
         {% if t.owned and t.version_id %}{{ entity_link('version', t.version_id, t.name) }}
         {% else %}{{ t.name }}{% endif %}
         {% if t.explicit %} <span class="badge explicit" title="Explicit">E</span>{% endif %}
       </td>
       <td>{% if t.owned %}{{ artist_names(track_artist_credits.get(t.track_id, [])) }}{% else %}{{ t.artists }}{% endif %}</td>
-      <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+      <td class="muted">{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
     </tr>
     {%- endmacro %}
     {% if rows or appended %}
-    <table class="data-table">
+    <table class="table table-sm table-hover align-middle">
       <thead><tr><th></th><th>Track</th><th>Artists</th><th>Duration</th></tr></thead>
       <tbody>
         {% for t in rows %}{{ track_row(t) }}{% endfor %}
@@ -57,25 +73,28 @@
     {% else %}
     <p class="empty">Nothing known about this album's tracklist.</p>
     {% endif %}
-  </section>
+  </div>
 
-  <section class="panel">
-    <h2>Plays</h2>
-    {{ play_stats(stats) }}
-  </section>
+  <hr>
 
-  <section class="panel">
-    <h2>Playlists</h2>
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#album-playlists"
+            aria-expanded="false" aria-controls="album-playlists">
+      Playlists ({{ playlists|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="album-playlists">
     {% if playlists %}
-    <table class="data-table">
-      <thead><tr><th>Playlist</th><th>Track</th><th>Added</th><th>Removed</th></tr></thead>
+    <table class="table table-sm table-hover align-middle">
+      <thead><tr><th></th><th>Playlist</th><th>Track</th><th>Added</th><th>Removed</th></tr></thead>
       <tbody>
         {% for p in playlists %}
         <tr class="{{ 'removed' if p.removed_at }}">
+          {{ cover_cell(p.playlist_image_url, 'playlist') }}
           <td>{{ entity_link('playlist', p.playlist_id, p.playlist_name) }}</td>
           <td>{{ entity_link('track', p.track_id, track_names.get(p.track_id, p.track_id)) }}</td>
-          <td>{{ datetime_span(p.added_at) }}</td>
-          <td>{{ datetime_span(p.removed_at) }}</td>
+          <td class="muted">{{ datetime_span(p.added_at) }}</td>
+          <td class="muted">{{ datetime_span(p.removed_at) }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -83,6 +102,31 @@
     {% else %}
     <p class="empty">None of the known tracks are in a playlist.</p>
     {% endif %}
-  </section>
+  </div>
+
+  <hr>
+
+  <h2>Spotify identity</h2>
+  <div class="card">
+    <div class="card-body">
+      <table class="table table-sm align-middle mb-0">
+        <tbody>
+          <tr><th>Album id</th><td><code>{{ album.album_id }}</code></td></tr>
+          <tr><th>Type</th><td>{{ album.album_type or "—" }}</td></tr>
+          <tr>
+            <th>Release date</th>
+            <td>{{ album.release_date or "—" }}{% if album.release_date_precision and album.release_date_precision != 'day' %}
+              <span class="muted">({{ album.release_date_precision }} precision)</span>{% endif %}</td>
+          </tr>
+          <tr><th>Total tracks</th><td>{{ album.total_tracks if album.total_tracks is not none else "—" }}</td></tr>
+          <tr>
+            <th>Tracklist fetched</th>
+            <td>{% if album.tracklist_pulled_at %}{{ datetime_span(album.tracklist_pulled_at) }}{% else %}never{% endif %}</td>
+          </tr>
+          <tr><th>Spotify link</th><td>{% if album.external_url %}<a href="{{ album.external_url }}" target="_blank" rel="noreferrer">open.spotify.com <i class="bi bi-box-arrow-up-right"></i></a>{% endif %}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </main>
 {% endblock %}

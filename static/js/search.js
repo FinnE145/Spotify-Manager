@@ -111,7 +111,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const type = btn.dataset.type;
       const q = new URLSearchParams(window.location.search).get("q") || "";
       const body = document.getElementById("search-" + type + "-body");
-      const section = document.getElementById("search-" + type + "-section");
       if (!body) return;
       btn.disabled = true;
       btn.textContent = "Loading…";
@@ -119,7 +118,6 @@ document.addEventListener("DOMContentLoaded", () => {
         .then((r) => r.json())
         .then((data) => {
           body.innerHTML = data.html;
-          if (section) section.classList.add("scrollable");
           btn.remove();
         })
         .catch(() => {

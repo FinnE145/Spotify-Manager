@@ -1,7 +1,26 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, generation_strip, score_display %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, generation_strip, score_display, cover_cell %}
 
 {% block title %}Symr — {{ artist.name }}{% endblock %}
+
+{# Tracks and Features render the same row; only which credit put the track
+   there differs (track_artist_role: primary means the artist is on the album
+   too, featured means somebody else is). #}
+{% macro version_rows(rows) -%}
+<table class="table table-sm table-hover align-middle">
+  <thead><tr><th></th><th>Track</th><th>Album</th><th>Duration</th></tr></thead>
+  <tbody>
+    {% for t in rows %}
+    <tr>
+      {{ cover_cell(t.album_image_url, 'song') }}
+      <td>{{ entity_link('version', t.version_id, t.name) }}</td>
+      <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
+      <td class="muted">{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{%- endmacro %}
 
 {% block content %}
 <main class="page">
@@ -10,69 +29,48 @@
     <div>
       <h1>{{ artist.name }}</h1>
       <p class="meta">
-        {{ version_count }} version{{ "s" if version_count != 1 }}
+        Artist
+        &middot; {{ version_count }} version{{ "s" if version_count != 1 }}
         &middot; {{ album_count }} album{{ "s" if album_count != 1 }}
-        {% if artist.external_url %} &middot; <a href="{{ artist.external_url }}" target="_blank" rel="noreferrer">open.spotify.com &rarr;</a>{% endif %}
+        {% if score %} &middot; {{ score_display(score.all_time, score.recent) }}{% endif %}
       </p>
-      {% if score %}<p class="meta">{{ score_display(score.all_time, score.recent) }}</p>{% endif %}
-      {% if merged_ids %}
-      <p class="meta">
-        Merged id{{ "s" if merged_ids|length != 1 }}: {{ merged_ids|join(", ") }}
-        &middot; <a href="{{ url_for('dev_artists') }}">manage in /dev/artists &rarr;</a>
-      </p>
-      {% endif %}
     </div>
   </div>
 
-  <section class="panel">
-    <h2>Tracks</h2>
-    <h3>Primary</h3>
-    {% if primary_tracks %}
-    <table class="data-table">
-      <thead><tr><th>Track</th><th>Album</th><th>Duration</th></tr></thead>
-      <tbody>
-        {% for t in primary_tracks %}
-        <tr>
-          <td>{{ entity_link('version', t.version_id, t.name) }}</td>
-          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
-          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="empty">None.</p>
-    {% endif %}
+  <hr>
 
-    <h3>Featured</h3>
-    {% if featured_tracks %}
-    <table class="data-table">
-      <thead><tr><th>Track</th><th>Album</th><th>Duration</th></tr></thead>
-      <tbody>
-        {% for t in featured_tracks %}
-        <tr>
-          <td>{{ entity_link('version', t.version_id, t.name) }}</td>
-          <td>{% if t.album_name %}{{ entity_link('album', t.album_id, t.album_name) }}{% endif %}</td>
-          <td>{{ "%d:%02d"|format(t.duration_ms // 60000, (t.duration_ms // 1000) % 60) if t.duration_ms else "" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="empty">None.</p>
-    {% endif %}
-  </section>
+  <h2>Plays</h2>
+  {{ play_stats(stats) }}
 
-  <section class="panel">
-    <h2>Albums</h2>
+  <hr>
+
+  <h2>Generations</h2>
+  {% if ordinals %}
+  <div class="tenure-scroll">
+  <table class="table table-sm mb-0"><tbody><tr>{{ generation_strip(ordinals, spans) }}</tr></tbody></table>
+  </div>
+  {% else %}
+  <p class="empty">Never present in a generation.</p>
+  {% endif %}
+
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#artist-albums"
+            aria-expanded="false" aria-controls="artist-albums">
+      Albums ({{ albums|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="artist-albums">
     {% if albums %}
-    <table class="data-table">
-      <thead><tr><th>Album</th><th>Release date</th></tr></thead>
+    <table class="table table-sm table-hover align-middle">
+      <thead><tr><th></th><th>Album</th><th>Release date</th></tr></thead>
       <tbody>
         {% for a in albums %}
         <tr>
+          {{ cover_cell(a.image_url, 'album') }}
           <td>{{ entity_link('album', a.album_id, a.name) }}</td>
-          <td>{{ a.release_date or "" }}</td>
+          <td class="muted">{{ a.release_date or "" }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -80,38 +78,85 @@
     {% else %}
     <p class="empty">No album credits.</p>
     {% endif %}
-  </section>
+  </div>
 
-  <section class="panel">
-    <h2>Playlists</h2>
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#artist-tracks"
+            aria-expanded="false" aria-controls="artist-tracks">
+      Tracks ({{ primary_tracks|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="artist-tracks">
+    {% if primary_tracks %}{{ version_rows(primary_tracks) }}
+    {% else %}<p class="empty">None.</p>{% endif %}
+  </div>
+
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#artist-features"
+            aria-expanded="false" aria-controls="artist-features">
+      Features ({{ featured_tracks|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="artist-features">
+    {% if featured_tracks %}{{ version_rows(featured_tracks) }}
+    {% else %}<p class="empty">Never credited on someone else's release.</p>{% endif %}
+  </div>
+
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#artist-playlists"
+            aria-expanded="false" aria-controls="artist-playlists">
+      Playlists ({{ playlists|length }})
+    </button>
+  </h2>
+  <div class="collapse" id="artist-playlists">
     {% if playlists %}
-    <table class="data-table">
-      <thead><tr><th>Playlist</th></tr></thead>
+    <table class="table table-sm table-hover align-middle">
+      <thead><tr><th></th><th>Playlist</th></tr></thead>
       <tbody>
         {% for p in playlists %}
-        <tr><td>{{ entity_link('playlist', p.playlist_id, p.playlist_name) }}</td></tr>
+        <tr>
+          {{ cover_cell(p.playlist_image_url, 'playlist') }}
+          <td>{{ entity_link('playlist', p.playlist_id, p.playlist_name) }}</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
     <p class="empty">None of their tracks are in a playlist.</p>
     {% endif %}
-  </section>
+  </div>
 
-  <section class="panel">
-    <h2>Generations</h2>
-    {% if ordinals %}
-    <div class="tenure-scroll">
-    <table class="data-table"><tbody><tr>{{ generation_strip(ordinals, spans) }}</tr></tbody></table>
+  <hr>
+
+  <h2>Spotify identity</h2>
+  <div class="card">
+    <div class="card-body">
+      <table class="table table-sm align-middle mb-0">
+        <tbody>
+          <tr><th>Artist id</th><td><code>{{ artist.artist_id }}</code></td></tr>
+          <tr>
+            <th>Image fetched</th>
+            <td>{% if artist.detail_pulled_at %}{{ datetime_span(artist.detail_pulled_at) }}{% else %}never{% endif %}</td>
+          </tr>
+          {% if merged_ids %}
+          <tr>
+            <th>Merged id{{ "s" if merged_ids|length != 1 }}</th>
+            <td>
+              {% for m in merged_ids %}<code>{{ m }}</code>{{ " " if not loop.last }}{% endfor %}
+              &middot; <a href="{{ url_for('dev_artists') }}">manage in /dev/artists <i class="bi bi-arrow-right"></i></a>
+            </td>
+          </tr>
+          {% endif %}
+          <tr><th>Spotify link</th><td>{% if artist.external_url %}<a href="{{ artist.external_url }}" target="_blank" rel="noreferrer">open.spotify.com <i class="bi bi-box-arrow-up-right"></i></a>{% endif %}</td></tr>
+        </tbody>
+      </table>
     </div>
-    {% else %}
-    <p class="empty">Never present in a generation.</p>
-    {% endif %}
-  </section>
-
-  <section class="panel">
-    <h2>Plays</h2>
-    {{ play_stats(stats) }}
-  </section>
+  </div>
 </main>
 {% endblock %}

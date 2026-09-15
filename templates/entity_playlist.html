@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, score_display %}
+{% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, score_display, cover_cell %}
 
 {% block title %}Symr — {{ playlist.name }}{% endblock %}
 
@@ -11,106 +11,120 @@
       <h1>{{ playlist.name }}</h1>
       {% if playlist.description %}<p class="meta">{{ playlist.description }}</p>{% endif %}
       <p class="meta">
-        Owner: {{ playlist.owner or "" }}
+        {{ playlist.owner or "" }}
         &middot; {{ playlist.track_count if playlist.track_count is not none else "?" }} tracks
-        &middot; last changed {% if playlist.last_changed_at %}{{ datetime_span(playlist.last_changed_at) }}{% else %}unknown{% endif %}
-        {% if playlist.tracks_pulled_at %}&middot; pulled {{ datetime_span(playlist.tracks_pulled_at) }}{% endif %}
-        {% if playlist.unfollowed_at %}&middot; <strong>unfollowed {{ datetime_span(playlist.unfollowed_at) }}</strong>{% endif %}
+        {% if totals.runtime %} &middot; {{ "%d:%02d:%02d"|format(totals.runtime // 3600000, (totals.runtime // 60000) % 60, (totals.runtime // 1000) % 60) }}{% endif %}
+        {% if score %} &middot; {{ score_display(score.all_time, score.recent) }}{% endif %}
       </p>
-      {% if score %}<p class="meta">{{ score_display(score.all_time, score.recent) }}</p>{% endif %}
-      <label class="checkbox-label">
-        <input type="checkbox" data-exclude-toggle data-playlist-id="{{ playlist.playlist_id }}" {{ 'checked' if playlist.excluded }}>
-        Exclude from pulls
-      </label>
-      {% if generation %}
+      {# Totals folded in here rather than given a section: it was two facts. #}
       <p class="meta">
-        Generation {{ generation.ordinal }}
-        &middot; {{ entity_link('playlist', playlist.playlist_id, 'View generation details &rarr;'|safe, {'generation': 1}) }}
+        Playlist
+        &middot; last changed {% if playlist.last_changed_at %}{{ datetime_span(playlist.last_changed_at) }}{% else %}unknown{% endif %}
+        {% if playlist.tracks_pulled_at %} &middot; pulled {{ datetime_span(playlist.tracks_pulled_at) }}{% endif %}
+        {% if totals.first_added %} &middot; added {{ datetime_span(totals.first_added) }} &ndash; {{ datetime_span(totals.last_added) }}{% endif %}
+        {% if playlist.unfollowed_at %} &middot; <strong>unfollowed {{ datetime_span(playlist.unfollowed_at) }}</strong>{% endif %}
       </p>
-      {% endif %}
     </div>
   </div>
 
+  <div class="button-row align-items-center">
+    <div class="form-check mb-0">
+      <input class="form-check-input" type="checkbox" id="exclude-toggle"
+             data-exclude-toggle data-playlist-id="{{ playlist.playlist_id }}" {{ 'checked' if playlist.excluded }}>
+      <label class="form-check-label" for="exclude-toggle">Exclude from pulls</label>
+    </div>
+
+    {# The generation overlay is a control, not a section: it turns one column
+       on in the tracklist below rather than rendering a second list of the
+       same tracks. #}
+    {% if generation %}
+    {# Through entity_link, not url_for: no template outside _macros.html
+       builds an entity href, and a test enforces it. #}
+    {% if gen_view %}
+    {{ entity_link('playlist', playlist.playlist_id,
+                   'Generation ' ~ gen_view.ordinal ~ ' on', {},
+                   'btn btn-sm btn-primary') }}
+    <ul class="nav nav-tabs ms-2">
+      <li class="nav-item">
+        {{ entity_link('playlist', playlist.playlist_id, 'Version',
+                       {'generation': 1, 'tier': 'version'},
+                       'nav-link active' if gen_view.tier == 'version' else 'nav-link') }}
+      </li>
+      <li class="nav-item">
+        {{ entity_link('playlist', playlist.playlist_id, 'Song',
+                       {'generation': 1, 'tier': 'song'},
+                       'nav-link active' if gen_view.tier == 'song' else 'nav-link') }}
+      </li>
+    </ul>
+    {% else %}
+    {{ entity_link('playlist', playlist.playlist_id,
+                   'Show generation ' ~ generation.ordinal, {'generation': 1},
+                   'btn btn-sm btn-outline-emphasis') }}
+    {% endif %}
+    {% endif %}
+  </div>
+
   {% if gen_view %}
-  <section class="panel">
-    <h2>Generation {{ gen_view.ordinal }}</h2>
-    <p class="meta">
-      {{ datetime_span(gen_view.span.started_at) }} &ndash;
-      {{ datetime_span(gen_view.span.ended_at) if gen_view.span.ended_at else "ongoing" }}
-      &middot; {{ gen_view.survived_out if gen_view.survived_out is not none else "—" }} survived into the next generation
-    </p>
-    <p class="toggle-links">
-      {{ entity_link('playlist', playlist.playlist_id, 'Version', {'generation': 1, 'tier': 'version'}, 'active' if gen_view.tier == 'version' else '') }}
-      &middot;
-      {{ entity_link('playlist', playlist.playlist_id, 'Song', {'generation': 1, 'tier': 'song'}, 'active' if gen_view.tier == 'song' else '') }}
-      <span class="meta">&mdash; tier</span>
-    </p>
-
-    <h3>Carried forward ({{ gen_view.carried|length }})</h3>
-    {% if gen_view.carried %}
-    <ul class="subtree-level">
-      {% for g in gen_view.carried %}
-      <li>{{ entity_link(gen_view.tier, g.group_id, g.name) }} <span class="leaf-meta">{{ g.artists }}</span></li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="empty">None.</p>
-    {% endif %}
-
-    <h3>New in this generation ({{ gen_view.new|length }})</h3>
-    {% if gen_view.new %}
-    <ul class="subtree-level">
-      {% for g in gen_view.new %}
-      <li>{{ entity_link(gen_view.tier, g.group_id, g.name) }} <span class="leaf-meta">{{ g.artists }}</span></li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="empty">None.</p>
-    {% endif %}
-  </section>
+  <p class="meta">
+    {{ datetime_span(gen_view.span.started_at) }} &ndash;
+    {{ datetime_span(gen_view.span.ended_at) if gen_view.span.ended_at else "ongoing" }}
+    &middot; {{ gen_view.carried_count }} carried, {{ gen_view.new_count }} new
+    &middot; {{ gen_view.survived_out if gen_view.survived_out is not none else "—" }} survived into the next generation
+  </p>
   {% endif %}
 
-  <section class="panel">
-    <h2>Totals</h2>
-    <p class="meta">
-      {% if totals.runtime %}{{ "%d:%02d:%02d"|format(totals.runtime // 3600000, (totals.runtime // 60000) % 60, (totals.runtime // 1000) % 60) }} total runtime{% endif %}
-      {% if totals.first_added %} &middot; added {{ datetime_span(totals.first_added) }} &ndash; {{ datetime_span(totals.last_added) }}{% endif %}
-    </p>
-  </section>
+  <hr>
 
-  <section class="panel">
-    <h2>Plays</h2>
-    {{ play_stats(stats) }}
-  </section>
+  <h2>Plays</h2>
+  {{ play_stats(stats) }}
 
-  {% if rows %}
-  <table class="data-table sortable" id="track-table">
-    <thead>
-      <tr>
-        <th data-sort="text">Track</th>
-        <th data-sort="text">Artist</th>
-        <th data-sort="text">Album</th>
-        <th data-sort="date">Added</th>
-        <th data-sort="date">Removed</th>
-        <th data-sort="num">Position</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr class="{{ 'removed' if r.removed_at }}">
-        <td>{% if version_by_track[r.track_id] %}{{ entity_link('version', version_by_track[r.track_id], r.name) }}{% else %}{{ r.name }}{% endif %}</td>
-        <td>{{ artist_names(artist_credits.get(r.track_id, [])) }}</td>
-        <td>{% if r.album_name %}{{ entity_link('album', r.album_id, r.album_name) }}{% endif %}</td>
-        <td>{{ datetime_span(r.added_at) }}</td>
-        <td>{{ datetime_span(r.removed_at) }}</td>
-        <td>{{ r.position if r.position is not none else "" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="empty">Not captured yet.</p>
-  {% endif %}
+  <hr>
+
+  <h2 class="collapse-heading">
+    <button type="button" class="btn" data-bs-toggle="collapse" data-bs-target="#playlist-tracks"
+            aria-expanded="true" aria-controls="playlist-tracks">
+      Tracks ({{ rows|length }})
+    </button>
+  </h2>
+  <div class="collapse show" id="playlist-tracks">
+    {% if rows %}
+    <table class="table table-sm table-hover align-middle" id="track-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Track</th>
+          <th>Artist</th>
+          <th>Album</th>
+          {% if gen_view %}<th>Generation {{ gen_view.ordinal }}</th>{% endif %}
+          <th>Added</th>
+          <th>Removed</th>
+          <th>Position</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="{{ 'removed' if r.removed_at }}">
+          {{ cover_cell(r.album_image_url, 'song') }}
+          <td>{% if version_by_track[r.track_id] %}{{ entity_link('version', version_by_track[r.track_id], r.name) }}{% else %}{{ r.name }}{% endif %}</td>
+          <td>{{ artist_names(artist_credits.get(r.track_id, [])) }}</td>
+          <td>{% if r.album_name %}{{ entity_link('album', r.album_id, r.album_name) }}{% endif %}</td>
+          {% if gen_view %}
+          <td class="muted">
+            {%- set label = gen_view.label_by_track.get(r.track_id) -%}
+            {%- if label == 'carried' %}Carried forward{% elif label == 'new' %}New{% endif -%}
+          </td>
+          {% endif %}
+          <td class="muted">{{ datetime_span(r.added_at) }}</td>
+          <td class="muted">{{ datetime_span(r.removed_at) }}</td>
+          <td class="muted">{{ r.position if r.position is not none else "" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">Not captured yet.</p>
+    {% endif %}
+  </div>
 </main>
 <script src="{{ url_for('static', filename='js/snapshot.js') }}"></script>
 {% endblock %}

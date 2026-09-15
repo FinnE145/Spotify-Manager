@@ -41,7 +41,7 @@ def generation_spans(conn):
     generations() and tenures()."""
     rows = conn.execute(
         """
-        SELECT g.ordinal, g.playlist_id, s.name,
+        SELECT g.ordinal, g.playlist_id, s.name, s.image_url,
                (SELECT MIN(m.added_at) FROM membership m
                 WHERE m.playlist_id = g.playlist_id AND m.removed_at IS NULL) AS started_at
         FROM generation g
@@ -95,6 +95,7 @@ def generations(conn, tier="version"):
                 "ordinal": span["ordinal"],
                 "playlist_id": span["playlist_id"],
                 "name": span["name"],
+                "image_url": span["image_url"],
                 "started_at": span["started_at"],
                 "ended_at": span["ended_at"],
                 "group_count": len(groups),
@@ -179,14 +180,20 @@ def tenures(conn, tier="version"):
     return result
 
 
-def generation_view(conn, ordinal, tier):
-    """One generation's carried/new split, rendered by
-    /playlist/<id>?generation=1 (docs/specs/generations-B.md).
+def generation_view(conn, ordinal, tier, track_ids):
+    """What /playlist/<id>?generation=1 overlays onto the tracklist
+    (docs/specs/generations-B.md, reshaped by ui-framework-W.md §9.19).
 
-    Which groups this generation shares with the one before it, which are
-    new to it, and how many of them survive into the one after -- None for
+    Returns a per-track label -- "carried" for a group this generation shares
+    with the one before it, "new" for one it does not -- plus the span and how
+    many groups survive into the next generation. `survived_out` is None for
     the newest generation, which has no next to survive into, and which the
     template renders differently from a genuine zero.
+
+    **Per track, not two lists of groups.** The page shows this as a column in
+    the tracklist it already renders, so building a `track_display` for every
+    carried and new group would be ~100 representative lookups per view for
+    rows nobody draws.
 
     tier is "version" or "song"; the route owns parsing it off the query
     string, and _tier_column whitelists it rather than interpolating."""
@@ -208,21 +215,26 @@ def generation_view(conn, ordinal, tier):
     prev_groups = _groups_at(spans[idx - 1]["ordinal"]) if idx > 0 else set()
     next_groups = _groups_at(spans[idx + 1]["ordinal"]) if idx + 1 < len(spans) else None
 
-    def _summaries(ids):
-        out = []
-        for gid in sorted(ids):
-            rid = canonical.representative(conn, gid)
-            if rid is None:
+    label_by_track = {}
+    if track_ids:
+        placeholders = ",".join("?" for _ in track_ids)
+        for row in conn.execute(
+            f"SELECT track_id, {column} AS group_id FROM track_group "
+            f"WHERE track_id IN ({placeholders})",
+            list(track_ids),
+        ):
+            gid = row["group_id"]
+            if gid is None or gid not in this_groups:
                 continue
-            out.append({"group_id": gid, **canonical.track_display(conn, rid)})
-        return out
+            label_by_track[row["track_id"]] = "carried" if gid in prev_groups else "new"
 
     return {
         "ordinal": ordinal,
         "tier": tier,
         "span": spans[idx],
-        "carried": _summaries(this_groups & prev_groups),
-        "new": _summaries(this_groups - prev_groups),
+        "label_by_track": label_by_track,
+        "carried_count": sum(1 for v in label_by_track.values() if v == "carried"),
+        "new_count": sum(1 for v in label_by_track.values() if v == "new"),
         "survived_out": len(this_groups & next_groups) if next_groups is not None else None,
     }
 

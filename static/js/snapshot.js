@@ -3,39 +3,6 @@
     return fetch(path, options).then((r) => r.json());
   }
 
-  // ---------- sortable tables (playlist / track detail pages) ----------
-
-  document.querySelectorAll("table.sortable").forEach((table) => {
-    const tbody = table.querySelector("tbody");
-    table.querySelectorAll("th[data-sort]").forEach((th, colIndex) => {
-      let ascending = true;
-      th.addEventListener("click", () => {
-        const rows = Array.from(tbody.querySelectorAll("tr"));
-        const type = th.dataset.sort;
-        rows.sort((a, b) => {
-          if (type === "date") {
-            // Compare the underlying ISO timestamp, not the relative-time
-            // text (which doesn't sort chronologically as a string).
-            const ael = a.children[colIndex].querySelector("[data-datetime]");
-            const bel = b.children[colIndex].querySelector("[data-datetime]");
-            const av = ael ? ael.dataset.datetime : "";
-            const bv = bel ? bel.dataset.datetime : "";
-            return av < bv ? -1 : av > bv ? 1 : 0;
-          }
-          const av = a.children[colIndex].textContent.trim();
-          const bv = b.children[colIndex].textContent.trim();
-          if (type === "num") {
-            return (parseFloat(av) || 0) - (parseFloat(bv) || 0);
-          }
-          return av.localeCompare(bv);
-        });
-        if (!ascending) rows.reverse();
-        ascending = !ascending;
-        rows.forEach((row) => tbody.appendChild(row));
-      });
-    });
-  });
-
   // ---------- exclude toggles (index playlist table + playlist detail header) ----------
 
   document.querySelectorAll("[data-exclude-toggle]").forEach((el) => {

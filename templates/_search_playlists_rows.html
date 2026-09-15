@@ -4,7 +4,7 @@
 <tr>
   {{ cover_cell(p.image_url, 'playlist') }}
   <td>{{ entity_link('playlist', p.playlist_id, p.name) }}</td>
-  <td>{{ score_display(p.score) }}</td>
+  <td>{{ score_display(p.score, label=false) }}</td>
 </tr>
 {% else %}
 <tr><td colspan="3" class="empty">No playlists match.</td></tr>

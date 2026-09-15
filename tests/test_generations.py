@@ -740,10 +740,15 @@ def test_generation_view_splits_carried_from_new_against_the_previous_generation
     _present(conn, second, "t-carried", position=0)
     _present(conn, second, "t-new", position=1)
 
-    view = generations.generation_view(conn, 2, "version")
+    view = generations.generation_view(
+        conn, 2, "version", ["t-carried", "t-new", "t-dropped"]
+    )
 
-    assert [g["track_id"] for g in view["carried"]] == ["t-carried"]
-    assert [g["track_id"] for g in view["new"]] == ["t-new"]
+    assert view["label_by_track"]["t-carried"] == "carried"
+    assert view["label_by_track"]["t-new"] == "new"
+    # Present in generation 1 but not this one -- it gets no label at all,
+    # rather than being mislabelled as dropped-but-carried.
+    assert "t-dropped" not in view["label_by_track"]
 
 
 def test_generation_view_treats_the_first_generation_as_entirely_new(conn):
@@ -761,10 +766,10 @@ def test_generation_view_treats_the_first_generation_as_entirely_new(conn):
     _present(conn, first, "t-first", position=0)
     _present(conn, last, "t-first", position=0)
 
-    view = generations.generation_view(conn, 1, "version")
+    view = generations.generation_view(conn, 1, "version", ["t-first"])
 
-    assert view["carried"] == []
-    assert [g["track_id"] for g in view["new"]] == ["t-first"]
+    assert view["label_by_track"] == {"t-first": "new"}
+    assert view["carried_count"] == 0
 
 
 def test_generation_view_reports_survived_out_as_none_only_for_the_newest(conn):
@@ -785,26 +790,34 @@ def test_generation_view_reports_survived_out_as_none_only_for_the_newest(conn):
     _present(conn, first, "t-early", position=0)
     _present(conn, second, "t-late", position=0)
 
-    assert generations.generation_view(conn, 1, "version")["survived_out"] == 0
-    assert generations.generation_view(conn, 2, "version")["survived_out"] is None
+    assert generations.generation_view(conn, 1, "version", [])["survived_out"] == 0
+    assert generations.generation_view(conn, 2, "version", [])["survived_out"] is None
 
 
-def test_generation_view_at_song_tier_collapses_two_versions_of_one_song(conn):
-    # source: generations-B.md -- tier is a whitelisted column lookup, and
-    # song vs version is a real difference rather than a label: two version
-    # groups under one song count as two rows at version tier and one at
-    # song tier. Same fixture, both tiers, so a hard-coded version_id
-    # cannot pass.
+def test_a_new_version_of_a_carried_song_is_new_at_version_tier_and_carried_at_song(conn):
+    # source: generations-B.md's rollup tier, reshaped by ui-framework-W.md
+    # §9.19 -- the tier is not a label, it changes what the column *says* about
+    # a given track. Generation 1 holds one version of a song; generation 2
+    # holds a different version of the same song. At version tier that second
+    # version is new; at song tier the song was already there, so it is
+    # carried. Same fixture, same track, opposite answers -- a tier that was
+    # ignored, or hard-coded to version_id, fails one of them.
     first_group = builders.make_group(conn, ["t-v1"])
     builders.make_group(conn, ["t-v2"], song=first_group["song"])
     conn.commit()
 
-    playlist = _gen(conn, 1)
-    _present(conn, playlist, "t-v1", position=0)
-    _present(conn, playlist, "t-v2", position=1)
+    first = _gen(conn, 1)
+    second = _gen(conn, 2)
+    _present(conn, first, "t-v1", position=0)
+    _present(conn, second, "t-v2", position=0)
 
-    assert len(generations.generation_view(conn, 1, "version")["new"]) == 2
-    assert len(generations.generation_view(conn, 1, "song")["new"]) == 1
+    at_version = generations.generation_view(conn, 2, "version", ["t-v2"])
+    at_song = generations.generation_view(conn, 2, "song", ["t-v2"])
+
+    assert at_version["label_by_track"]["t-v2"] == "new"
+    assert at_song["label_by_track"]["t-v2"] == "carried"
+    assert (at_version["new_count"], at_version["carried_count"]) == (1, 0)
+    assert (at_song["new_count"], at_song["carried_count"]) == (0, 1)
 
 
 def test_generation_view_rejects_a_tier_that_is_not_a_column(conn):
@@ -815,7 +828,7 @@ def test_generation_view_rejects_a_tier_that_is_not_a_column(conn):
     _gen(conn, 1)
 
     with pytest.raises(ValueError):
-        generations.generation_view(conn, 1, "release_id; DROP TABLE generation")
+        generations.generation_view(conn, 1, "release_id; DROP TABLE generation", [])
 
 
 def test_generation_view_reports_the_ordinal_it_was_asked_for(conn):
@@ -828,8 +841,8 @@ def test_generation_view_reports_the_ordinal_it_was_asked_for(conn):
     # ordinal inside the function, so they stay right when it is dropped.
     _gen_chain(conn, 3)
 
-    assert generations.generation_view(conn, 1, "version")["ordinal"] == 1
-    assert generations.generation_view(conn, 3, "version")["ordinal"] == 3
+    assert generations.generation_view(conn, 1, "version", [])["ordinal"] == 1
+    assert generations.generation_view(conn, 3, "version", [])["ordinal"] == 3
 
 
 def test_generation_view_returns_the_span_of_that_generation_not_another(conn):
@@ -842,7 +855,7 @@ def test_generation_view_returns_the_span_of_that_generation_not_another(conn):
     # rather than from the span.
     _gen_chain(conn, 3)
 
-    span = generations.generation_view(conn, 2, "version")["span"]
+    span = generations.generation_view(conn, 2, "version", [])["span"]
 
     assert span["ordinal"] == 2
     assert span["started_at"] == "2026-02-01T00:00:00Z"

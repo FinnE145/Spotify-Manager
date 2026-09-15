@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import entity_link, generation_strip, score_display %}
+{% from "_macros.html" import entity_link, generation_strip, score_display, cover_cell %}
 
 {% block title %}Symr — Tenure{% endblock %}
 
@@ -12,71 +12,69 @@
   <h1>Tenure</h1>
   <p class="meta">
     <a href="{{ url_for('dev_generations', tier=tier) }}">&larr; Generations</a>
-    &middot; {{ "{:,}".format(total) }} group{{ "s" if total != 1 }} ever present in a generation
-    &middot; a low tenure on recent material means it hasn't had the chance yet, not that it failed
   </p>
 
-  <section class="panel">
-    <p class="toggle-links">
-      <a href="{{ url_for('dev_generations_tenure', tier='version', sort=sort, page=1) }}" class="{{ 'active' if tier == 'version' }}">Version</a>
-      &middot;
-      <a href="{{ url_for('dev_generations_tenure', tier='song', sort=sort, page=1) }}" class="{{ 'active' if tier == 'song' }}">Song</a>
-      <span class="meta">&mdash; tier</span>
-    </p>
-    <p class="meta">
-      Sort by {{ sort_link('tenure', 'tenure') }}, {{ sort_link('total', 'total generations') }},
-      {{ sort_link('runs', 'runs') }}, or {{ sort_link('score', 'score') }} &mdash; each descending.
-    </p>
+  {# Same tabs as /dev/generations, and for the same reason: the tier is a
+     server-side count, so each is a page load at its own URL. #}
+  <ul class="nav nav-tabs">
+    <li class="nav-item">
+      <a class="nav-link {{ 'active' if tier == 'version' }}"
+         href="{{ url_for('dev_generations_tenure', tier='version', sort=sort, page=1) }}">Version</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {{ 'active' if tier == 'song' }}"
+         href="{{ url_for('dev_generations_tenure', tier='song', sort=sort, page=1) }}">Song</a>
+    </li>
+  </ul>
 
-    {% if rows %}
-    <div class="tenure-scroll">
-    <table class="data-table" id="tenure-table">
-      <thead>
-        <tr>
-          <th>Track</th>
-          <th>Tenure</th>
-          <th>Total</th>
-          <th>Runs</th>
-          <th>First</th>
-          <th>Last</th>
-          <th>Days</th>
-          <th>Score</th>
-          <th colspan="{{ generation_count }}">Generations</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in rows %}
-        <tr>
-          <td>
-            {% if r.representative %}
-            {{ entity_link(tier, r.group_id, r.representative.name) }}
-            <span class="leaf-meta">{{ r.representative.artists }}</span>
-            {% else %}
-            <span class="muted">group {{ r.group_id }}</span>
-            {% endif %}
-          </td>
-          <td>{{ r.tenure }}</td>
-          <td>{{ r.total_generations }}</td>
-          <td>{{ r.run_count }}</td>
-          <td>{{ r.first_ordinal }}</td>
-          <td>{{ r.last_ordinal }}</td>
-          <td>{{ r.days }} day{{ "s" if r.days != 1 }}</td>
-          <td>{{ score_display(r.score) }}</td>
-          {{ generation_strip(r.present_ordinals, spans) }}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
+  {% if rows %}
+  <p class="meta mt-3">
+    Sort by {{ sort_link('tenure', 'tenure') }}, {{ sort_link('total', 'total generations') }},
+    {{ sort_link('runs', 'runs') }}, or {{ sort_link('score', 'score') }}. All descending.
+  </p>
 
-    <p class="meta">
-      Page {{ page }} of {{ total_pages }}
-      {% if page > 1 %}&middot; <a href="{{ url_for('dev_generations_tenure', tier=tier, sort=sort, page=page-1) }}">&larr; Prev</a>{% endif %}
-      {% if page < total_pages %}&middot; <a href="{{ url_for('dev_generations_tenure', tier=tier, sort=sort, page=page+1) }}">Next &rarr;</a>{% endif %}
-    </p>
-    {% else %}
-    <p class="empty">No tenure data yet &mdash; seed the generations first.</p>
-    {% endif %}
-  </section>
+  <div class="tenure-scroll">
+  <table class="table table-sm table-hover align-middle" id="tenure-table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Track</th>
+        <th>Tenure</th>
+        <th>Span</th>
+        <th>Score</th>
+        <th colspan="{{ generation_count }}">Generations</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        {{ cover_cell(r.representative.album_image_url if r.representative else none, 'song') }}
+        <td>
+          {% if r.representative %}
+          {{ entity_link(tier, r.group_id, r.representative.name) }}
+          <span class="leaf-meta">{{ r.representative.artists }}</span>
+          {% else %}
+          <span class="muted">group {{ r.group_id }}</span>
+          {% endif %}
+        </td>
+        <td>{{ r.tenure }}</td>
+        <td class="muted span-cell">{{ r.span }}</td>
+        <td>{{ score_display(r.score, label=false) }}</td>
+        {{ generation_strip(r.present_ordinals, spans) }}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <p class="meta">
+    Page {{ page }} of {{ total_pages }} &middot;
+    {{ "{:,}".format(total) }} group{{ "s" if total != 1 }}
+    {% if page > 1 %}&middot; <a href="{{ url_for('dev_generations_tenure', tier=tier, sort=sort, page=page-1) }}">&larr; Prev</a>{% endif %}
+    {% if page < total_pages %}&middot; <a href="{{ url_for('dev_generations_tenure', tier=tier, sort=sort, page=page+1) }}">Next &rarr;</a>{% endif %}
+  </p>
+  {% else %}
+  <p class="empty">No tenure data yet. Seed the generations first.</p>
+  {% endif %}
 </main>
 {% endblock %}
