@@ -15,7 +15,7 @@
   {% set t = g.tracks[tid] %}
   <div class="tree-leaf">
     {% if t.album_image_url %}<img class="cover" src="{{ t.album_image_url }}" alt="">{% endif %}
-    <span class="leaf-title"><strong>{{ artist_names(artist_credits.get(tid, [])) }}</strong> — {{ entity_link('track', tid, t.title) }} {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}</span>
+    <span class="leaf-title"><strong>{{ artist_names(artist_credits.get(tid, [])) }}</strong> &middot; {{ entity_link('track', tid, t.title) }} {{ explicit_badge(t.explicit) }}{{ not_in_library(t.live_count) }}</span>
     <span class="leaf-meta">{{ t.album or "" }} &middot; {{ t.live_count }} playlist{{ "s" if t.live_count != 1 }}</span>
   </div>
   {% endfor %}

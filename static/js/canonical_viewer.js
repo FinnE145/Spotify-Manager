@@ -95,7 +95,7 @@
           return;
         }
         if (!data.groups_closed) {
-          agStatus.textContent = `Nothing to auto-group — none of the ${data.queue_total} queue item(s) qualify.`;
+          agStatus.textContent = `Nothing to auto-group: none of the ${data.queue_total} queue item(s) qualify.`;
           agReset();
           return;
         }

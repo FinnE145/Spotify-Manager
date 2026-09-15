@@ -70,7 +70,7 @@
     reimportBtn.disabled = blocked || !hasUpload;
     busyNote.hidden = !blockingJob;
     if (blockingJob) {
-      busyNote.textContent = `${JOB_NAMES[blockingJob] || blockingJob} is running — imports wait for it.`;
+      busyNote.textContent = `${JOB_NAMES[blockingJob] || blockingJob} is running. Imports wait for it.`;
     }
     progressEl.hidden = !running;
   }
@@ -79,7 +79,7 @@
     if (status.phase === "extracting") return "Extracting the export zip…";
     let label = `Parsing files: ${status.files_done}/${status.files_total}`;
     if (status.current_file) label += ` (${status.current_file})`;
-    return `${label} — ${status.rows_read.toLocaleString()} rows read, ${status.rows_inserted.toLocaleString()} inserted`;
+    return `${label} · ${status.rows_read.toLocaleString()} rows read, ${status.rows_inserted.toLocaleString()} inserted`;
   }
 
   function showDone(status) {
@@ -93,7 +93,7 @@
       `${status.rows_inserted.toLocaleString()} inserted`;
     summary.textContent = status.error
       ? `Import failed after ${counts}: ${status.error}`
-      : `Import finished — ${counts}.`;
+      : `Import finished: ${counts}.`;
     progressLabel.appendChild(summary);
 
     const reloadLink = document.createElement("a");
@@ -158,7 +158,7 @@
 
   function failed(e) {
     errorEl.hidden = false;
-    errorEl.textContent = `Request failed: ${e}. The dev server may have restarted — try again.`;
+    errorEl.textContent = `Request failed: ${e}. The dev server may have restarted. Try again.`;
     setRunning(false);
   }
 

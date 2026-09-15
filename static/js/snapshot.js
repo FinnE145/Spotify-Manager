@@ -142,8 +142,8 @@
       if (status.retry_at) {
         progressLabel.append(
           captureNote
-            ? `Rate limited — ${captureNote}. Resume `
-            : `${noun} failed: Rate limited by Spotify — retry `
+            ? `Rate limited after ${captureNote}. Resume `
+            : `${noun} failed: rate limited by Spotify. Retry `
         );
         progressLabel.appendChild(makeDateSpan(status.retry_at));
       } else {
@@ -158,10 +158,10 @@
     const summary = document.createElement("span");
     if (status.phase === "stopped") {
       // A deliberate stop is not a fault and must not read as one.
-      summary.textContent = captureNote ? `Stopped — ${captureNote}.` : `${noun} stopped.`;
+      summary.textContent = captureNote ? `Stopped after ${captureNote}.` : `${noun} stopped.`;
     } else {
       summary.textContent = failed.length
-        ? `${noun} finished — ${failed.length} ${unit}(s) failed:`
+        ? `${noun} finished with ${failed.length} ${unit}(s) failed:`
         : `${noun} finished.`;
     }
     progressLabel.appendChild(summary);
@@ -274,7 +274,7 @@
       })
       .catch((e) => {
         errorEl.hidden = false;
-        errorEl.textContent = `Request failed: ${e}. The dev server may have restarted — try again.`;
+        errorEl.textContent = `Request failed: ${e}. The dev server may have restarted. Try again.`;
       });
   }
 

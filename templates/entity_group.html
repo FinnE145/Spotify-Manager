@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_macros.html" import datetime_span, play_stats, entity_link, artist_names, generation_strip, score_display, cover_cell, breadcrumb_nav %}
 
-{% block title %}Symr — {{ rep.name if rep else "Group " ~ group_id }}{% endblock %}
+{% block title %}Symr | {{ rep.name if rep else "Group " ~ group_id }}{% endblock %}
 
 {% macro subtree_node(node) -%}
 {%- if node.versions is defined -%}

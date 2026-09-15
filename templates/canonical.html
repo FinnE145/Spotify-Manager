@@ -2,7 +2,7 @@
 {% from "_macros.html" import datetime_span, entity_link, artist_names, edit_link,
                               explicit_badge, not_in_library, listing_cap_note, score_display %}
 
-{% block title %}Symr — Canonical Tracks{% endblock %}
+{% block title %}Symr | Canonical Tracks{% endblock %}
 
 {% macro artist_links(track_id) -%}
 {{ artist_names(artist_credits.get(track_id, [])) }}
@@ -84,7 +84,7 @@
       {%- if last_auto_run.undone_at %} &middot; undone {{ datetime_span(last_auto_run.undone_at) }}{% endif %}
     </p>
     {% if last_auto_run.undoable %}
-    <p class="warn small">Undo restores the whole grouping to how it was before that run — including
+    <p class="warn small">Undo restores the whole grouping to how it was before that run, including
       any review you have decided since. One level deep only.</p>
     {% endif %}
     {% endif %}
@@ -193,7 +193,7 @@
             {% if g.representative %}{{ entity_link('track', g.representative.track_id, g.representative.name) }}
             {% else %}?{% endif %}
             {% if g.pinned %}<span class="rep-marker pinned" title="Pinned representative"><i class="bi bi-star-fill"></i></span>{% endif %}
-            — {{ artist_links(g.representative.track_id) if g.representative else "" }}
+            <span class="leaf-meta">{{ artist_links(g.representative.track_id) if g.representative else "" }}</span>
           </span>
           <span class="leaf-meta">{{ g.track_count }} tracks &middot; {{ score_display(g.score) }} &middot; {{ entity_link('song', g.song_id, 'song ' ~ g.song_id) }}</span>
           {{ auto_badge(g.song_id, auto_grouped) }}

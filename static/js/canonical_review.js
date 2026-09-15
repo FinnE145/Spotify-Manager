@@ -114,7 +114,7 @@
       items = data.items;
       queueNameEl.textContent =
         data.queue === "pending"
-          ? "Tier review — cross-artist assignments"
+          ? "Tier review: cross-artist assignments"
           : data.queue === "ad-hoc"
             ? "Ad-hoc item"
             : "Main queue";
@@ -524,7 +524,13 @@
     if (!item) return;
 
     const artists = [...new Set(item.track_ids.map((tid) => item.tracks[tid].artists))].join(" / ");
-    itemTitle.textContent = `${item.base} — ${artists}`;
+    // The artists are weight-and-colour separated from the title, not
+    // punctuated off it (ui-framework-W.md §9b's em-dash rule).
+    itemTitle.textContent = item.base;
+    const artistSpan = document.createElement("span");
+    artistSpan.className = "leaf-meta";
+    artistSpan.textContent = artists;
+    itemTitle.append(" ", artistSpan);
 
     if (draggedInNote.length) {
       draggedInNoteEl.hidden = false;

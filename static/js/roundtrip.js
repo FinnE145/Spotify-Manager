@@ -84,7 +84,7 @@
     reconcileBtn.disabled = Boolean(status.active_job) || !status.reconcilable;
     busyNote.hidden = !otherJob;
     if (otherJob) {
-      busyNote.textContent = `${JOB_NAMES[status.active_job] || status.active_job} is running — one job at a time.`;
+      busyNote.textContent = `${JOB_NAMES[status.active_job] || status.active_job} is running. One job at a time.`;
     }
   }
 
@@ -113,7 +113,7 @@
     if (status.phase === "guard") return "Verifying the loader playlist…";
     if (status.phase === "clearing") return "Clearing the loader playlist…";
     let label = `Batch ${status.batch_done}/${status.batch_total}`;
-    if (status.current) label += ` — ${status.current}`;
+    if (status.current) label += ` · ${status.current}`;
     if (status.phase === "reconciling") {
       return (
         `Reconciling · ${label} · ${status.reconciled} matched, ` +
@@ -176,7 +176,7 @@
 
     const summary = document.createElement("span");
     if (status.outcome === "rate_limited") {
-      summary.textContent = `Rate limited after ${totals} — retry `;
+      summary.textContent = `Rate limited after ${totals}. Retry `;
       liveLine.appendChild(summary);
       if (status.retry_at) liveLine.appendChild(makeDateSpan(status.retry_at));
     } else if (status.outcome === "error") {
@@ -184,19 +184,19 @@
       liveLine.appendChild(summary);
     } else if (status.outcome === "stopped") {
       // A deliberate stop is not a fault and must not render as one.
-      summary.textContent = `Stopped — ${totals}.`;
+      summary.textContent = `Stopped after ${totals}.`;
       liveLine.appendChild(summary);
     } else if (status.outcome === "breaker") {
-      summary.textContent = `Stopped by the circuit breaker (three consecutive failed batches) — ${totals}.`;
+      summary.textContent = `Stopped by the circuit breaker (three consecutive failed batches) after ${totals}.`;
       liveLine.appendChild(summary);
     } else {
-      summary.textContent = `Run finished — ${totals}.`;
+      summary.textContent = `Run finished: ${totals}.`;
       liveLine.appendChild(summary);
     }
 
     if (status.left_in_playlist) {
       const left = document.createElement("span");
-      left.textContent = ` ${status.left_in_playlist} item(s) were left in the loader playlist — clear them by hand in Spotify if you want to.`;
+      left.textContent = ` ${status.left_in_playlist} item(s) were left in the loader playlist. Clear them by hand in Spotify if you want to.`;
       liveLine.appendChild(left);
     }
 
@@ -211,7 +211,7 @@
         link.rel = "noreferrer";
         link.textContent = id;
         li.appendChild(link);
-        li.appendChild(document.createTextNode(` — ${f.reason}`));
+        li.appendChild(document.createTextNode(`: ${f.reason}`));
         list.appendChild(li);
       });
       liveLine.appendChild(list);
@@ -226,7 +226,7 @@
 
   function backfillPhaseLabel(status) {
     let label = `${status.albums_done}/${status.albums_total} albums`;
-    if (status.current_album) label += ` — ${status.current_album}`;
+    if (status.current_album) label += ` · ${status.current_album}`;
     return `${label} · ${status.uris_queued} uri(s) queued, ${status.requests} requests spent`;
   }
 
@@ -239,17 +239,17 @@
 
     const summary = document.createElement("span");
     if (status.outcome === "rate_limited") {
-      summary.textContent = `Rate limited after ${totals} — retry `;
+      summary.textContent = `Rate limited after ${totals}. Retry `;
       liveLine.appendChild(summary);
       if (status.retry_at) liveLine.appendChild(makeDateSpan(status.retry_at));
     } else if (status.outcome === "error") {
       summary.textContent = `Run failed after ${totals}: ${status.error}`;
       liveLine.appendChild(summary);
     } else if (status.outcome === "stopped") {
-      summary.textContent = `Stopped — ${totals}.`;
+      summary.textContent = `Stopped after ${totals}.`;
       liveLine.appendChild(summary);
     } else {
-      summary.textContent = `Finished — ${totals}.`;
+      summary.textContent = `Finished: ${totals}.`;
       liveLine.appendChild(summary);
     }
 
@@ -336,7 +336,7 @@
       })
       .catch((e) => {
         errorEl.hidden = false;
-        errorEl.textContent = `Request failed: ${e}. The dev server may have restarted — try again.`;
+        errorEl.textContent = `Request failed: ${e}. The dev server may have restarted. Try again.`;
         button.disabled = false;
       });
   }
@@ -414,7 +414,7 @@
         })
         .catch((e) => {
           backfillError.hidden = false;
-          backfillError.textContent = `Request failed: ${e}. The dev server may have restarted — try again.`;
+          backfillError.textContent = `Request failed: ${e}. The dev server may have restarted. Try again.`;
           btn.disabled = false;
         });
     });

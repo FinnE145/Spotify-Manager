@@ -693,7 +693,7 @@
       })
       .catch((e) => {
         pullBtn.disabled = false;
-        statusEl.textContent = `Request failed: ${e}. The dev server may have restarted — try again.`;
+        statusEl.textContent = `Request failed: ${e}. The dev server may have restarted. Try again.`;
       });
   });
 

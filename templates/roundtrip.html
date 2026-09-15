@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% from "_macros.html" import datetime_span, spotify_track_link %}
 
-{% block title %}Symr — Round-trip{% endblock %}
+{% block title %}Symr | Round-trip{% endblock %}
 
 {% block content %}
 <main class="page">
   <h1>Foreign-track round-trip</h1>
   <p class="warn">
-    Writes to Spotify — replaces the contents of the private <strong>{{ loader_name }}</strong>
-    playlist, and nothing else.
+    Writes to Spotify. Replaces the contents of the private <strong>{{ loader_name }}</strong>
+    playlist only.
   </p>
 
   <p class="meta">
@@ -168,9 +168,8 @@
   <section>
     <h2>Manual aliases</h2>
     <p class="meta">
-      Spotify served a different track for these URIs without saying what it replaced, and the
-      title and artist didn't match closely enough to decide automatically. Candidates share the
-      normalized title — pick the right one, or leave it alone.
+      Spotify served a different track for these URIs without naming what it replaced, and title
+      and artist did not match closely enough to alias automatically.
     </p>
     <table class="table table-sm table-hover align-middle">
       <thead>
@@ -188,7 +187,7 @@
               <option value="">— choose —</option>
               {% for c in row.candidates %}
               <option value="{{ c.track_id }}">
-                {{ c.name }} — {{ c.artists }}{% if c.album %} [{{ c.album }}{% if c.release_year %}, {{ c.release_year }}{% endif %}]{% endif %}
+                {{ c.name }} &middot; {{ c.artists }}{% if c.album %} [{{ c.album }}{% if c.release_year %}, {{ c.release_year }}{% endif %}]{% endif %}
               </option>
               {% endfor %}
             </select>
@@ -214,7 +213,7 @@
        neither was where you were looking. Each row is tagged with its source. #}
     <h2>Live feed</h2>
     <ol id="roundtrip-log" class="event-log"></ol>
-    <p id="roundtrip-log-empty" class="empty">Nothing yet — the feed fills in as a run goes.</p>
+    <p id="roundtrip-log-empty" class="empty">Empty until a run starts.</p>
   </section>
 
   <hr>
@@ -243,7 +242,7 @@
       </tbody>
     </table>
     {% else %}
-    <p class="empty">None — no run has failed to resolve a URI.</p>
+    <p class="empty">No run has failed to resolve a URI.</p>
     {% endif %}
     <div class="button-row">
       <button id="roundtrip-clear-failures-btn" type="button" class="btn btn-sm btn-outline-secondary" {{ 'disabled' if not failures }}>
