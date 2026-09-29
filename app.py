@@ -1,5 +1,6 @@
 import json
 import secrets
+from urllib.parse import urlsplit
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
@@ -73,7 +74,7 @@ def create_app():
     # Endpoints reachable without a Spotify login. Everything else is gated.
     _PUBLIC_ENDPOINTS = {"login", "callback", "static"}
 
-    # First of app's three before_request hooks -- load-bearing order
+    # First of app's four before_request hooks -- load-bearing order
     # (docs/specs/partial-pulls-J.md §4.3): require_login below already calls
     # get_spotify_client(), which can itself trigger a token-refresh POST, so
     # the context label has to be set before that happens. Unconditional,
@@ -82,6 +83,62 @@ def create_app():
     @app.before_request
     def set_api_context():
         api_log.api_context.set(request.endpoint)
+
+    # Second hook: refuses a state-changing request another site's page made
+    # Finn's browser send (docs/specs/cross-site-writes.md §2) -- Go 1.25's
+    # net/http.CrossOriginProtection algorithm. Nothing else stops one: the
+    # login guard checks for a cached Spotify token on the *server*, not for
+    # anything about the browser asking.
+    #
+    # Placed after set_api_context, which only labels a contextvar and does no
+    # work on the request's behalf -- so it stays first and unconditional, and
+    # anything on the rejection path is still logged under this request's
+    # label rather than one left on the thread by the last. Placed before
+    # require_login, whose get_spotify_client() can fire a token-refresh POST
+    # to Spotify, and before refresh_scores, which can enqueue a recompute: a
+    # forged request must be refused before either does anything for it
+    # (§4). Deliberately not exempting _PUBLIC_ENDPOINTS -- they are all GET
+    # today, so they pass anyway, and a future public write is covered.
+    @app.before_request
+    def reject_cross_origin_writes():
+        # §2.1: safe methods always pass.
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return None
+        # §2.2: when present, Sec-Fetch-Site decides alone. same-site is
+        # refused too -- another *.fmje.dev host is a different origin. An
+        # empty value counts as absent, as in Go.
+        fetch_site = request.headers.get("Sec-Fetch-Site")
+        if fetch_site:
+            if fetch_site in ("same-origin", "none"):
+                return None
+            return _cross_origin_rejection()
+        # §2.3: otherwise Origin's host:port must equal Host. Never the
+        # scheme -- behind Caddy the browser's Origin is https while this
+        # process sees http. `Origin: null` parses to an empty netloc, which
+        # can never equal a Host. One that will not parse at all is refused,
+        # not a 500 -- as in Go, only a parsed, matching Origin passes.
+        origin = request.headers.get("Origin")
+        if origin:
+            try:
+                origin_netloc = urlsplit(origin).netloc.lower()
+            except ValueError:
+                return _cross_origin_rejection()
+            if origin_netloc == request.host.lower():
+                return None
+            return _cross_origin_rejection()
+        # §2.4: neither header -- not a browser acting for another page.
+        return None
+
+    def _cross_origin_rejection():
+        # §2.5: a 403 through the one error path -- JSON for /api/*,
+        # error.html for pages.
+        detail = (
+            f"Cross-origin {request.method} refused: this request did not come "
+            "from a Symr page."
+        )
+        if request.path.startswith("/api/"):
+            return api_error("cross_origin_request_rejected", 403, detail=detail)
+        return render_error(403, "Forbidden", detail=detail)
 
     @app.before_request
     def require_login():

@@ -51,8 +51,9 @@ host-and-port (its netloc) equals the request's `Host` header, compared case-ins
 **The scheme is never compared** — behind Caddy the browser's `Origin` is
 `https://symr.fmje.dev` while Flask sees `http`, so a scheme-sensitive comparison would refuse
 every write in production. Anything else is rejected: a different host, the same host on a
-different port, and `Origin: null` (an opaque origin — a sandboxed iframe, a `data:` URL — whose
-empty netloc can never equal a `Host`).
+different port, `Origin: null` (an opaque origin — a sandboxed iframe, a `data:` URL — whose
+empty netloc can never equal a `Host`), and an `Origin` that does not parse at all (a 403, not a
+500 — as in Go, only a parsed, matching `Origin` passes).
 
 Scheme-blindness is safe here for the reason Go accepts it: the only thing it could let through
 is an `http://` page on Symr's own host and port, and there is no such page that is not Symr

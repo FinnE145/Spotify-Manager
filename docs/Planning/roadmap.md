@@ -10,13 +10,13 @@
 
 ## Spec index
 
-What each of the 24 indexed specs in `docs/specs/` actually covers, and the code it's
+What each of the 25 indexed specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
 a lookup from now on rather than a re-derivation. `codebase-health-P.md` itself isn't in the
-24 — it's the standing approach doc for this step, not an audited spec (see its own §0), which
-is why `docs/specs/` holds 25 files against 24 rows.
+25 — it's the standing approach doc for this step, not an audited spec (see its own §0), which
+is why `docs/specs/` holds 26 files against 25 rows.
 
 **Every new spec gets a row here as it is written**, with `no` in the P1 column — that step
 postdates the audit. `mutation-sweep-S.md` was missed when it landed and is added back below;
@@ -52,6 +52,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `better-search-L.md` | Two-stage fuzzy matcher (trigram prefilter → token coverage), cross-type ranking, the navbar dropdown | `search.py`, `app.py` (`/search`, `/api/search*`), `templates/search.html`, `static/js/search.js` | L | no |
 | `better-search-L2.md` | The matcher's relevance formula: the `FUZZY_FLOOR` gate, per-query-token coverage, and album search-result dedupe. **Supersedes L §4.4/§4.6/§10.1.** Its spec says "no template change"; Verify added three on request — the page's own search box removed, artist credits in Most Relevant, and `cover_cell` | `search.py`, `templates/_macros.html` + the five `_search_*` fragments, `templates/base.html`, `static/css/style.css` | L2 | no |
 | `ui-framework-W.md` | Bootstrap 5.3.8 as the design system: vendoring, the three-state theme, the per-page conversion briefs (§9), and the site copy pass absorbed from **V**. Written page-by-page as the work lands, so §9 is a record rather than a plan | `templates/` (all of them), `static/css/style.css`, `static/js/theme.js`, `static/{css,js}/vendor/` | W | no |
+| `cross-site-writes.md` | Refuses state-changing requests another site's page makes Finn's browser send (Go 1.25's `CrossOriginProtection`: `Sec-Fetch-Site`, then a scheme-blind `Origin`/`Host` match); the gap Q §12's reachability argument left open | `app.py` (`reject_cross_origin_writes`, the second `before_request` hook) | standalone | no |
 
 ---
 
