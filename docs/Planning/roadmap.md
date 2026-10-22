@@ -10,13 +10,13 @@
 
 ## Spec index
 
-What each of the 25 indexed specs in `docs/specs/` actually covers, and the code it's
+What each of the 26 indexed specs in `docs/specs/` actually covers, and the code it's
 authoritative for — built during P1 (`docs/codebase-health/P1_spec_audit.md`) after tracing a
 cross-module question (which spec introduced `jobs.py`'s single-lock design?) through four
 files before landing on the answer. This table exists so that question, and ones like it, are
 a lookup from now on rather than a re-derivation. `codebase-health-P.md` itself isn't in the
-25 — it's the standing approach doc for this step, not an audited spec (see its own §0), which
-is why `docs/specs/` holds 26 files against 25 rows.
+26 — it's the standing approach doc for this step, not an audited spec (see its own §0), which
+is why `docs/specs/` holds 27 files against 26 rows.
 
 **Every new spec gets a row here as it is written**, with `no` in the P1 column — that step
 postdates the audit. `mutation-sweep-S.md` was missed when it landed and is added back below;
@@ -53,6 +53,7 @@ existed); the rest map onto the lettered order above. **P1 audited** tracks
 | `better-search-L2.md` | The matcher's relevance formula: the `FUZZY_FLOOR` gate, per-query-token coverage, and album search-result dedupe. **Supersedes L §4.4/§4.6/§10.1.** Its spec says "no template change"; Verify added three on request — the page's own search box removed, artist credits in Most Relevant, and `cover_cell` | `search.py`, `templates/_macros.html` + the five `_search_*` fragments, `templates/base.html`, `static/css/style.css` | L2 | no |
 | `ui-framework-W.md` | Bootstrap 5.3.8 as the design system: vendoring, the three-state theme, the per-page conversion briefs (§9), and the site copy pass absorbed from **V**. Written page-by-page as the work lands, so §9 is a record rather than a plan | `templates/` (all of them), `static/css/style.css`, `static/js/theme.js`, `static/{css,js}/vendor/` | W | no |
 | `cross-site-writes.md` | Refuses state-changing requests another site's page makes Finn's browser send (Go 1.25's `CrossOriginProtection`: `Sec-Fetch-Site`, then a scheme-blind `Origin`/`Host` match); the gap Q §12's reachability argument left open | `app.py` (`reject_cross_origin_writes`, the second `before_request` hook) | standalone | no |
+| `api-Z1.md` | The v1 JSON API: entities, search, filterable/sortable lists for every type (Y's query engine), generations, plays + timeline, status; three DB-only writes; no Spotify spend unless `spotify_request=1` | `api.py` (the `api` Blueprint), `resources.py` | Z1 | no |
 
 ---
 
@@ -181,8 +182,12 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
       DONE               DONE
 
   ──► W (UI clean-up: adopt a CSS framework — V's site writing clean-up folded in) ✅
-  ──► Y (entity browser — every entity type as one sortable, filterable, paginated list)
+  ──► Z1 (the v1 JSON API — entities, search, lists, generations, plays)
+  ──► Y (entity browser — the browse UI over Z1's list endpoints)
+  ──► Z2 (convert existing pages onto the API where incremental loading helps)
   ──► X (table standardisation — one way to render a table of entities)
+  ──► AB (real authentication — the prerequisite for anything outside the tailnet)
+  ──► AA (the MCP server, reachable from claude.ai)
 
   ──► U (extras: songdoku)
 ```
@@ -245,6 +250,19 @@ The block above had `F/G ──► L`. There is no dependency in either directio
 prerequisites for search, and search is not one for them. O in particular is still gated on data
 rather than work — it waits for the `api_request` log to catch a real lockout — so time spent on L
 is not time O is blocked by. Recorded here rather than silently reordering the diagram.
+
+**Z1 sits directly after W, ahead of Y — Finn's call, 2026-09-29, when he added it.** Y was next
+and was about to be planned. The API goes first because Y's whole query engine (filters, multi-key
+sort, pagination over every entity type) is exactly what the API's list endpoints are. Building it
+once, as the API, lets Y shrink to the UI over it rather than build that engine as page code that Z2
+would then have to move. **Z2 follows Y** because Y is built API-first from the start and needs no
+conversion; Z2 converts the pages that predate the API. **X follows Z2**, since its tables will
+render from API data. **AB and AA sit after X**, Finn's call: the desk dashboard project that will
+use the API runs on `fe-pro` inside the tailnet, so nothing reachable from outside is needed yet.
+
+**Labels after Z are two letters: AA, AB, …** (Finn's call, 2026-09-29, when Z ran out). They are
+labels, not an order, like every letter above: AB, authentication, sits **before** AA, the MCP
+server, because the MCP must be reachable from claude.ai, which trips Q §12.
 
 **Y sits directly after W, ahead of X — Finn's call, 2026-09-15, when he added it.** X had been
 next; Y jumps it. The two are entangled either way: a browser whose whole point is sorting and
@@ -1290,6 +1308,59 @@ at most, the framework's own optional JS — nothing that needs a build step.
 
 ---
 
+## Z1 — The v1 JSON API
+
+**Specced** → `docs/specs/api-Z1.md`. Planned 2026-09-29 – 10-21 on `feat/api-Z`, which also carries Z2.
+
+Finn's brain-dump: *"as we are just about to do step Y, entity pages, and are moving towards
+implementing other main site pages, it would be good to have an API. that will also work well with a
+future mcp server"*, and later, *"a desk dashboard project that may want to use this api in the
+future as a way to search my songs and get info without wasting spotify requests."*
+
+A Flask Blueprint at `/api/v1` (`api.py`) over Flask-free builders (`resources.py`) that Z2's
+server-rendered pages will call in-process, so pages and API never compute the same thing twice.
+It covers entities (one summary shape per type, reused everywhere), search, filterable and
+multi-key-sortable lists for all eight types (Y's query engine, moved here), generations, plays and
+a play timeline (with a per-request `tz`, default `America/Toronto`), and `/status`. It has exactly
+three writes, all DB-only. **It spends no Spotify requests unless a caller passes
+`spotify_request=1`**, and v1 is exempt from the Spotify-token login guard, so a lapsed token
+doesn't take down the dashboard. **The round-trip is never exposed through v1**, as a rule. The
+spec is authoritative; this paragraph is only a pointer.
+
+Found while planning it, and fixed on its own branch, verified and merged 2026-10-21: **cross-site
+writes** (`docs/specs/cross-site-writes.md`). Any page open in Finn's browser could make it POST to
+Symr, including starting the round-trip, because the login guard checks for a Spotify token rather
+than for anything about the request.
+
+---
+
+## Z2 — Convert existing pages onto the API
+
+**Not specced.** Own `/symr-plan` session, on `feat/api-Z` (a sub-step stays on its letter's
+branch). Added 2026-09-29 at Finn's call: *"i dont wanna duplicate all this code … Some need it more
+than others, as some its better to just load right away, while others are slow and could use the
+incremental load from an api."*
+
+What it inherits from Z1:
+
+- **Two ways for a page to use the API, chosen per page.** A page better rendered at once keeps
+  server-rendering, but from `resources.py`'s builders in-process (no HTTP hop). A slow page, or one
+  whose filters and sorts shouldn't reload it, fetches the v1 endpoints from JS. Z2's plan session
+  decides which page is which.
+- **`CLAUDE.md`'s Tech Stack line** ("server-rendered Jinja templates + vanilla JS") becomes
+  partly untrue with the first JS-rendered page, and Z2 updates it.
+- **The album and artist pages keep first-view-only fetching** (`entity-pages-K.md`), while
+  v1's `spotify_request=1` always fetches (Z1 §4.4). The converted page makes its own first-view
+  check and passes the flag only then. The album page also passes `queue_unowned=1` on every view to
+  keep M §4.4's behaviour, which v1 makes opt-in.
+- **The internal `/api/*` endpoints** (Z1 §3.3) may move into v1 one by one as their pages convert.
+  Nothing obliges it, and the round-trip never moves (Z1 §3.2).
+- **Template-only structures** (the breadcrumb's dropdown labels, formatted durations, the
+  generation strip's `spans`) are deliberately not in v1's representations. Z2 derives them from
+  the facts v1 returns.
+
+---
+
 ## X — Table standardisation
 
 **Not specced.** Own `/symr-plan` session. Placed immediately after **W**, at Finn's call on
@@ -1337,8 +1408,8 @@ Two traps worth carrying into the spec, both found the hard way in W:
 **Y lands before this and changes what "sorting" has to mean here** (added 2026-09-15). The
 click-to-sort owed back from `/playlist/<id>` reordered the rows already on the page — right for a
 table that is all there, wrong for Y's paginated lists, where reordering one page of a hundred is
-not a sort. Y will have settled its own answer (server-side, `?sort=`, an ordered list of keys) by
-the time X runs; X's job is to decide whether that is *the* answer for every table or whether a
+not a sort. Z1 has settled that answer for the API (server-side, `sort=`, an ordered list of keys with a
+unique-key tie-breaker, `api-Z1.md` §5.5/§7.4) and Y builds its table on it; X's job is to decide whether that is *the* answer for every table or whether a
 fully-present table keeps a client-side sort as well, and to make the renderer carry a secondary
 key either way rather than leaving it Y's private feature.
 
@@ -1354,69 +1425,42 @@ minimal filter box included — like search but a simple exact spelling match on
 And the use that motivates it: *"see all songs by half alive, over 2 mins, and then sort them by
 memberships, tie broken by plays."*
 
-**What it is.** One page per entity type — song / version / recording / release / track / album /
-artist / playlist, the same eight `entity_link` knows — listing *every* row of that type, paginated,
-with a column for each thing Symr already stores or derives about it (what the entity page shows,
-plus the numbers H, B and C make cheap: score on both horizons, plays total / 30d / 7d, live
-memberships, tenure and generation count, duration, release year, member count for a group), each
-column sortable and resizable, and a filter on top. The entity pages answer "tell me about this
-one"; `/search` answers "which one did I mean"; nothing today answers "show me all of them, in
-this order", and the closest things — `/dev/generations/tenure`'s two sort links, `/dev/canonical`'s
-capped listing — are one-type, one-column corners of it.
+**Reduced in scope on 2026-09-29: Z1 now owns the query engine, and Y is the UI over it.** Z1
+(`docs/specs/api-Z1.md` §7) built `GET /api/v1/<type>` for all eight types, settling every question
+this section used to leave open:
+- the filter set;
+- the three name filters (`q` prefix, `q_contains`, `q_full`, all on `normalize.base_string`, so
+  *half alive* finds **half•alive**);
+- multi-key server-side sort (`sort=-memberships,-plays`, with a unique-key tie-breaker);
+- pagination (50 a page, 200 max);
+- date-ranged plays (`from`/`to`, `tz`);
+- each item's `metrics` (plays, memberships, generations, tenure), which are Y's columns.
 
-**The open design question Finn raised at the same time, recorded rather than decided:** should
-this be integrated into search — *"or add more queries?"* — instead of being its own page? The
-starting position for the plan session:
+The motivating example is
+`/api/v1/songs?artist=<half•alive's id>&min_ms=120000&sort=-memberships,-plays`.
+**Read Z1 §7 before planning Y; don't re-derive any of it.**
 
-- **They are different query shapes, and folding one into the other muddies both.** Search (L/L2)
-  is a *finder*: fuzzy, ranked by relevance × score, capped, tolerant of typos, and it must stay
-  that way to be as-you-type. The browser is a *filter*: exact criteria, the full set, ordered by a
-  column. A fuzzy match cannot be a filter you then sort the whole set by — every row is a "maybe".
-- **But the filter should borrow search's spelling.** "Exact match" ought to mean equality on
-  `normalize.base_string`, not on the raw string — Finn typed *half alive* for **half•alive** in
-  the very sentence that asked for exact matching, and L's accent/punctuation folding is what makes
-  that hit. Prefix on the normalised form is probably the right minimum, exact is too strict for
-  the thing he actually wants.
-- **"More queries" is the interesting half, and it is field filters, not more search.** The
-  motivating example is two filters (artist = X, duration > 2:00) and a two-key sort, none of which
-  is a search problem. A small typed filter set decided in plan — artist, duration, membership
-  count, generation, tenure, has-ISRC — is closer to what was asked for than a grammar; the
-  plan session should pick the handful and stop.
-- **Search and browser can point at each other cheaply.** A type section on `/search` can link to
-  "all *songs* matching this" in the browser; an artist page can link to its tracks in the browser
-  sorted by whatever. Neither needs the other rebuilt.
+What is left for Y:
 
-**Constraints the plan session inherits, all measured elsewhere:**
-
-- **A view is a URL.** Type, filters, sort keys and page all live in the query string
-  (`?artist=…&min_ms=120000&sort=memberships,-plays&page=3`), the way `/dev/canonical`'s `?q=`
-  and `/playlist/<id>?generation=1` already work — bookmarkable, shareable across the two machines,
-  and it makes sorting server-side by construction, which is the only kind that is correct on a
-  paginated list. That is also what makes the two-key sort trivial: the parameter is an ordered
-  list. (A client-side stable sort — click plays, then click memberships — gets tie-breaking for
-  free on a table that is all present, and is worth X knowing about, but it is not this page.)
-- **Sorting a whole type by a derived number is the one place "work proportional to what's
-  rendered" is knowingly broken, exactly as `/dev/canonical`'s ranking already breaks it.** Song,
-  album, artist and playlist scores are never materialised (H); `song_scores()` combines every
-  song group at query time in ~160–280ms and is the precedent — measure before assuming album and
-  artist cost the same, and before assuming plays do (`entities.play_stats` is per-page and
-  per-track-set; sorting 13.6k tracks by 30-day plays wants one aggregate query, not 13.6k calls).
-  Filters cut the set before the sort and should be applied in SQL for that reason.
-- **Column widths are per-viewer state, not data**: `localStorage` is the right home (the theme
-  toggle set the pattern), and a plain `mousedown` on a header edge is enough — no grid library.
-  W §2.2's rule stands: a session that wants one measures the need first.
-- **Every row links through `entity_link` and every cover through `cover_cell`**, the same as
-  everywhere else; a browser that rendered its own row shape would be the drift X exists to end.
-  Deleted playlists and their memberships stay excluded (W §9.14b), the same as every other listing.
-- **Y runs before X, so its table is the one X will generalise from.** Build it as the reference,
-  not as a one-off: plain `.table`, the shared row-state vocabulary (`removed`, `unfollowed`,
-  `unowned`), sort and resize behaviour kept in a small separate JS file with no page-specific
-  assumptions, and the column definitions as data (name, key, formatter, sortable) rather than as
-  eight hand-written `<thead>`s — because X's first move will be to lift exactly that into the one
-  renderer, and anything Y hard-wires is what X has to unpick.
-- Where it lives in the navbar — a new top-level **Browse**, or under the Analytics stub — is the
-  plan session's, along with page size and whether the eight types are one route with `?type=` or
-  eight.
+- **The page, built API-first:** it fetches the list endpoint from JS, so a filter or sort change
+  doesn't reload the page, and keeps the view in the URL (`replaceState`, the way
+  `canonical_viewer.js` syncs `?cross=`) so a view is still bookmarkable.
+- **Column resize:** per-viewer state in `localStorage` (the theme toggle set the pattern), via a
+  plain `mousedown` on a header edge. No grid library: W §2.2's rule stands, so a session that wants
+  one measures the need first.
+- **The filter controls and the sort UI** over Z1's params, including how a secondary sort key is
+  chosen.
+- **Rows still link through `entity_link` and covers through `cover_cell`**. A JS-rendered table
+  has to reach the same markup, which is the first real instance of the question Z2 owns:
+  server-rendered fragment or client-side rendering.
+- **Y is the reference table X generalises from.** Build it with plain `.table`, the shared row-state
+  vocabulary (`removed`, `unfollowed`, `unowned`), sort and resize kept in a small separate JS file
+  with no page-specific assumptions, and column definitions as data rather than eight hand-written
+  `<thead>`s.
+- **Where it lives in the navbar** (a new top-level **Browse**, or under the Analytics stub), and
+  whether the eight types are one page with a type switcher or eight.
+- **Search and browser can point at each other cheaply:** a `/search` type section can link to
+  "all *songs* matching this" in the browser with `q_contains`.
 
 ---
 
@@ -1497,6 +1541,57 @@ Wide open at this stage: daily-vs-anytime, how a guess is checked (exact track m
 satisfying both criteria?), scoring/sharing, and how criteria get picked so the same grid isn't
 trivially easy or impossible on a library this size. All Extras-page and game-design questions
 for the eventual `/symr-plan` session, not decided here.
+
+---
+
+## AB — Real authentication
+
+**Not specced.** Own `/symr-plan` session. Added 2026-09-29, at Finn's call, as the prerequisite for
+**AA**: the MCP server must be reachable from claude.ai, whose connectors call from Anthropic's
+servers. That means a URL reachable from outside the tailnet, which is exactly Q §12's tripwire:
+*"real authentication becomes a prerequisite, not a follow-up, and it becomes its own roadmap step."*
+This is that step.
+
+What it inherits:
+
+- **Today Symr has no notion of who is asking.** The login guard checks that a Spotify token exists
+  on the server; v1 skips even that (Z1 §4.1); and every device on the tailnet has full access,
+  including the internal job endpoints. The defences that exist are the tailnet, the loopback-only
+  Docker publish, Caddy bound to the tailnet interface, the OAuth state check, the session secret
+  with no fallback, and the cross-site write check (`docs/specs/cross-site-writes.md`).
+- **401 is reserved for this step.** Z1 deliberately answers a lapsed *server-side* Spotify sign-in
+  with 503, not 401 (`api-Z1.md` §4.4), so that 401 can mean "your credentials are wrong" here.
+- **Machine clients are the main case:** the MCP server, and potentially the desk dashboard (which
+  runs on `fe-pro` inside the tailnet and does not need this step to use Z1). Browser sessions and
+  API callers likely want different mechanisms; that is this step's to decide. Security is the
+  exception to KISS (`CLAUDE.md`), so this is done fully, not minimally.
+- **What becomes reachable, and how.** Whether only v1 (and the MCP) is exposed beyond the tailnet
+  or the whole site, and the shape of the exposure (Caddy on a public interface, Tailscale Funnel,
+  something else), is this step's decision, read against Q §3.3 and §12. Q §12's tripwire sentence
+  still names "a public hostname, a reverse proxy" as triggers, wording that predates Caddy on
+  `symr.fmje.dev` (tailnet-bound), and is worth rewording here.
+
+---
+
+## AA — MCP server
+
+**Not specced.** Own `/symr-plan` session, after **AB**. Added 2026-09-29: the API in Z1 was planned
+*"that will also work well with a future mcp server"*, and Finn wants it usable from claude.ai too.
+
+What it inherits:
+
+- **Its data source is Z1's v1 API.** The things Finn named as most important for it are
+  generations, play history, top songs by score, plays or memberships (optionally within a date
+  range), and quick lookup of specific entities. All are v1 endpoints already: lists with `sort` and
+  `from`/`to`, `/plays`, `/plays/timeline`, `/generations`, search, details and `/status`.
+- **Hand-designed tools, not one per endpoint.** Z1 deliberately has no OpenAPI document, on the
+  reasoning that a model does better with a handful of task-shaped tools with written descriptions
+  than with dozens shaped like endpoints. `GET /api/v1/` (the self-describing index) is the reference
+  the tool descriptions are written from.
+- **Spending Spotify requests is opt-in and loud** (`spotify_request=1`, Z1 §4.4). Whether the MCP
+  ever passes it, and whether it may trigger anything on the internal endpoints (a refresh, never a
+  full pull, never the round-trip, per Z1 §3.2/§3.3), is this step's decision.
+- Where it runs (on `fe-pro` beside Symr is the obvious candidate) and which transport, decided here.
 
 ---
 
