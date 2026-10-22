@@ -114,16 +114,18 @@ def create_app():
             return _cross_origin_rejection()
         # §2.3: otherwise Origin's host:port must equal Host. Never the
         # scheme -- behind Caddy the browser's Origin is https while this
-        # process sees http. `Origin: null` parses to an empty netloc, which
-        # can never equal a Host. One that will not parse at all is refused,
-        # not a 500 -- as in Go, only a parsed, matching Origin passes.
+        # process sees http. `Origin: null` parses to an empty netloc, which is
+        # refused outright: Werkzeug reports a missing or invalid Host as "",
+        # so an equality test alone would pass `null` against one. One that
+        # will not parse at all is refused, not a 500 -- as in Go, only a
+        # parsed, matching Origin passes.
         origin = request.headers.get("Origin")
         if origin:
             try:
                 origin_netloc = urlsplit(origin).netloc.lower()
             except ValueError:
                 return _cross_origin_rejection()
-            if origin_netloc == request.host.lower():
+            if origin_netloc and origin_netloc == request.host.lower():
                 return None
             return _cross_origin_rejection()
         # §2.4: neither header -- not a browser acting for another page.

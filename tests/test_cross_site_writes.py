@@ -174,6 +174,44 @@ def test_a_null_origin_is_refused(client, starts):
     assert starts == []
 
 
+def test_a_null_origin_is_refused_even_when_werkzeug_reports_no_host(client, starts):
+    # source: docs/specs/cross-site-writes.md §2.3 -- `Origin: null` is
+    # refused. Werkzeug reports a Host with invalid characters (or none at
+    # all) as "", and null's netloc is "" too, so a bare equality test passes
+    # this one.
+    resp = client.post(ROUNDTRIP_START, base_url="http://bad host", headers={"Origin": "null"})
+
+    assert _refused(resp)
+    assert starts == []
+
+
+def test_the_origin_host_comparison_ignores_case(client, starts):
+    # source: docs/specs/cross-site-writes.md §2.3 -- netloc against Host,
+    # "compared case-insensitively". A case-sensitive comparison refuses this.
+    resp = client.post(
+        ROUNDTRIP_START,
+        base_url="http://symr.fmje.dev",
+        headers={"Origin": "https://SYMR.fmje.dev"},
+    )
+
+    assert resp.get_json() == {"started": True}
+    assert starts == [{"reconcile_only": False}]
+
+
+def test_an_empty_sec_fetch_site_falls_through_to_origin(client, starts):
+    # source: docs/specs/cross-site-writes.md §2.2 -- "a present-but-empty
+    # header counts as absent and falls through to §2.3". Testing presence
+    # rather than emptiness refuses this matching-Origin request.
+    resp = client.post(
+        ROUNDTRIP_START,
+        base_url="http://symr.fmje.dev",
+        headers={"Sec-Fetch-Site": "", "Origin": "https://symr.fmje.dev"},
+    )
+
+    assert resp.get_json() == {"started": True}
+    assert starts == [{"reconcile_only": False}]
+
+
 def test_an_unparseable_origin_is_refused_not_a_500(client, starts):
     # source: docs/specs/cross-site-writes.md §2.3 -- "an Origin that does not
     # parse at all (a 403, not a 500)". urlsplit raises on an unclosed IPv6
@@ -280,3 +318,14 @@ def test_a_refused_request_never_reaches_the_login_guard_or_the_score_backstop(
     assert client_calls == []
     assert fresh_calls == []
     assert starts == []
+
+
+@pytest.mark.parametrize("path", ["/api/no-such-route", "/api/roundtrip/status"])
+def test_a_cross_site_write_to_no_route_or_a_get_only_route_is_403(client, path):
+    # source: docs/specs/cross-site-writes.md §4 -- the hook runs before URL
+    # dispatch raises its 404/405, so a cross-site write is a 403 whatever it
+    # targets. An implementation skipping requests with no matched endpoint
+    # answers 404 / 405 here.
+    resp = client.post(path, headers={"Sec-Fetch-Site": "cross-site"})
+
+    assert _refused(resp)

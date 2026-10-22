@@ -52,8 +52,12 @@ host-and-port (its netloc) equals the request's `Host` header, compared case-ins
 `https://symr.fmje.dev` while Flask sees `http`, so a scheme-sensitive comparison would refuse
 every write in production. Anything else is rejected: a different host, the same host on a
 different port, `Origin: null` (an opaque origin — a sandboxed iframe, a `data:` URL — whose
-empty netloc can never equal a `Host`), and an `Origin` that does not parse at all (a 403, not a
-500 — as in Go, only a parsed, matching `Origin` passes).
+netloc is empty), and an `Origin` that does not parse at all (a 403, not a 500 — as in Go, only
+a parsed, matching `Origin` passes). **An empty netloc is refused outright, not by the equality
+test:** Werkzeug's `request.host` is `""` for a missing Host or one with invalid characters, so
+equality alone would pass `null` against it. (Go would pass that pair, comparing `"" == ""`; no
+browser sends an empty Host, so this is a stricter corner, not a divergence that matters.
+Found at Verify.)
 
 Scheme-blindness is safe here for the reason Go accepts it: the only thing it could let through
 is an `http://` page on Symr's own host and port, and there is no such page that is not Symr
@@ -142,5 +146,9 @@ The clauses a plausible wrong implementation would get wrong, each pinned by its
 - `Sec-Fetch-Site: same-origin` passes even with a foreign `Origin` beside it (§2.2) — an
   implementation consulting `Origin` whenever it is present refuses it.
 - A cross-site `POST` to `/dev/generations/confirm` is rejected with `error.html`, not JSON (§2.5).
+- Added at Verify, each for a mutant that survived the original file: an empty `Sec-Fetch-Site`
+  falls through to `Origin` (§2.2); the `Origin`/`Host` comparison ignores case (§2.3);
+  `Origin: null` is refused against an empty `request.host` (§2.3); a cross-site write to an
+  unknown or `GET`-only route is a 403, not a 404/405 (§4).
 - Neither header passes (§2.4) — also what keeps `test_routes.py`'s sweep green, since the Flask
   test client sends neither.
