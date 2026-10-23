@@ -105,6 +105,7 @@ def discover(conn):
         "generation_playlist": one(
             "SELECT playlist_id FROM generation ORDER BY ordinal", "generation"
         ),
+        "generation_ordinal": one("SELECT ordinal FROM generation ORDER BY ordinal", "generation"),
     }
 
 
@@ -253,6 +254,45 @@ CASES = (
     Case("create_label", "POST", "/api/label", json={"text": "New", "x": 5, "y": 6}),
     Case("update_label", "PATCH", "/api/label/{label}", json={"text": "Renamed"}),
     Case("delete_label", "DELETE", "/api/label/{label}"),
+    # -- The v1 JSON API (docs/specs/api-Z1.md; Tests 20) ------------------
+    Case("api.index", "GET", "/api/v1/"),
+    Case("api.status", "GET", "/api/v1/status"),
+    Case("api.search", "GET", "/api/v1/search?q=ab", variant="sections"),
+    Case("api.search", "GET", "/api/v1/search?q=ab&type=songs", variant="type"),
+    Case("api.list_tracks", "GET", "/api/v1/tracks"),
+    Case("api.list_albums", "GET", "/api/v1/albums"),
+    Case("api.list_artists", "GET", "/api/v1/artists"),
+    Case("api.list_playlists", "GET", "/api/v1/playlists"),
+    Case("api.list_songs", "GET", "/api/v1/songs"),
+    Case("api.list_versions", "GET", "/api/v1/versions"),
+    Case("api.list_recordings", "GET", "/api/v1/recordings"),
+    Case("api.list_releases", "GET", "/api/v1/releases"),
+    Case("api.track_detail", "GET", "/api/v1/tracks/{track}"),
+    Case("api.album_detail", "GET", "/api/v1/albums/{album}"),
+    Case("api.artist_detail", "GET", "/api/v1/artists/{artist}"),
+    Case("api.playlist_detail", "GET", "/api/v1/playlists/{playlist}"),
+    Case("api.song_detail", "GET", "/api/v1/songs/{song}"),
+    Case("api.version_detail", "GET", "/api/v1/versions/{version}"),
+    Case("api.recording_detail", "GET", "/api/v1/recordings/{recording}"),
+    Case("api.release_detail", "GET", "/api/v1/releases/{release}"),
+    Case("api.playlist_items", "GET", "/api/v1/playlists/{playlist}/items"),
+    Case("api.plays", "GET", "/api/v1/plays"),
+    Case("api.plays_timeline", "GET", "/api/v1/plays/timeline"),
+    Case("api.generations_index", "GET", "/api/v1/generations"),
+    Case("api.generations_pending", "GET", "/api/v1/generations/pending"),
+    Case("api.generation_detail", "GET", "/api/v1/generations/{generation_ordinal}"),
+    # Writes. Confirm/decline with nothing pending is the 400 path -- still
+    # non-5xx; the semantics are test_api_writes.py's.
+    Case("api.playlist_exclude", "PATCH", "/api/v1/playlists/{playlist}", json={"excluded": False}),
+    Case(
+        "api.generations_confirm", "POST", "/api/v1/generations/pending/confirm",
+        json={"playlist_id": "{generation_playlist}"},
+    ),
+    Case(
+        "api.generations_decline", "POST", "/api/v1/generations/pending/decline",
+        json={"playlist_id": "{generation_playlist}"},
+    ),
+    Case("api.song_pin", "PUT", "/api/v1/songs/{song}/representative", json={"track_id": "{track}"}),
     # -- Query-string variants --------------------------------------------
     #
     # Every case above issues a query-string-free path, so an alternate render
@@ -326,6 +366,15 @@ CASES = (
     # /callback's two argument-driven refusals. Neither reaches Spotify: both
     # abort before the token exchange, which is why the third arm (a valid
     # state carrying a code) is deliberately absent.
+    # v1 variants (Tests 20). `spotify_request=1` is deliberately absent: with
+    # the suite's blocked sockets it is a 503 by design, which this sweep's
+    # non-5xx rule would read as a failure -- Tests 3 covers it instead.
+    Case("api.album_detail", "GET", "/api/v1/albums/{album}?queue_unowned=1", variant="queue_unowned"),
+    Case("api.list_tracks", "GET", "/api/v1/tracks?q_contains=zzz&explicit=1", variant="filter"),
+    Case("api.list_songs", "GET", "/api/v1/songs?sort=-memberships,-plays&per_page=5", variant="multi_sort"),
+    Case("api.list_songs", "GET", "/api/v1/songs?from=2025-03-01&to=2025-03-31&tz=UTC&sort=-plays", variant="window"),
+    Case("api.plays_timeline", "GET", "/api/v1/plays/timeline?bucket=week&tz=UTC&from=2025-03-01&to=2025-03-31", variant="week"),
+    Case("api.generation_detail", "GET", "/api/v1/generations/{generation_ordinal}?tier=song", variant="song"),
     Case("callback", "GET", "/callback?error=access_denied", golden=False, variant="error"),
     Case("callback", "GET", "/callback?state=mismatched", golden=False, variant="bad_state"),
 )

@@ -221,6 +221,7 @@ import db  # noqa: E402
 import entities  # noqa: E402
 import fakes  # noqa: E402
 import jobs  # noqa: E402
+import resources  # noqa: E402
 import roundtrip  # noqa: E402
 import scoring  # noqa: E402
 import scrobble  # noqa: E402
@@ -454,7 +455,7 @@ def recompute_calls(monkeypatch):
 # source reaches none of them -- each has to be rebound individually, and a
 # module missing from this list silently gets the real client (which, with no
 # cached token, returns None and makes the code under test quietly no-op).
-_SPOTIFY_CLIENT_IMPORTERS = (app_module, backfill, entities, roundtrip, scrobble, snapshot)
+_SPOTIFY_CLIENT_IMPORTERS = (app_module, backfill, entities, resources, roundtrip, scrobble, snapshot)
 
 
 @pytest.fixture
