@@ -578,8 +578,9 @@ def test_sorts_on_duration_release_date_and_name(client, conn):
     build(conn)
 
     assert names(get(client, "/api/v1/tracks?sort=-duration")) == ["Zebra", "Zebra (Live)", "Aardvark", "half•alive"]
-    assert names(get(client, "/api/v1/tracks?sort=release_date")) == ["Zebra", "half•alive", "Aardvark", "Zebra (Live)"] or \
-        names(get(client, "/api/v1/tracks?sort=release_date"))[0] == "Zebra"
+    # Aardvark and Zebra (Live) share al-a's date, so the §5.5 id tie-break
+    # (t-aard < t-zeb-live) decides them: the order is fully determined.
+    assert names(get(client, "/api/v1/tracks?sort=release_date")) == ["Zebra", "half•alive", "Aardvark", "Zebra (Live)"]
     assert names(get(client, "/api/v1/songs?sort=release_date"))[0] == "Zebra"
     assert names(get(client, "/api/v1/albums?sort=-release_date")) == ["Alpha Album", "Half Album", "Zed Album"]
     # case-insensitive: lowercase "half-alive" sorts between "Aardvark" and "Zebra"
@@ -898,3 +899,126 @@ def test_an_artists_detail_counts_versions_and_lists_albums(client, conn):
     assert [a["id"] for a in artist["albums"]] == ["al-a"]
     assert "tracks" not in artist and "members" not in artist
     assert get(client, "/api/v1/versions?artist=ar-beta")["total"] == 3
+
+
+# -- The rest of the filter and sort table (§7.3, §7.4) -----------------------------------------------------------------------------
+
+
+def _generations_fixture(conn):
+    """Half•alive's track in generations 1-2 (one run of two); Aardvark's in 3,
+    5 and 7 (three runs of one); Zebra in none -- so the generation count, the
+    tenure and the score each order the songs differently."""
+    build(conn)
+    for ordinal, track in ((1, "t-half"), (2, "t-half"), (3, "t-aard"), (5, "t-aard"), (7, "t-aard")):
+        make_generation(conn, ordinal)
+        playlist = conn.execute("SELECT playlist_id FROM generation WHERE ordinal = ?", (ordinal,)).fetchone()[0]
+        make_membership(conn, playlist, track)
+
+
+def test_the_generation_filter_on_albums_and_artists(client, conn):
+    # source: api-Z1.md §7.3 -- `generation` applies to album and artist too
+    # ("present in this generation"), through their owned / credited tracks.
+    _generations_fixture(conn)
+
+    assert names(get(client, "/api/v1/albums?generation=1")) == ["Half Album"]
+    assert names(get(client, "/api/v1/albums?generation=3")) == ["Alpha Album"]
+    assert names(get(client, "/api/v1/artists?generation=1")) == ["half•alive"]
+    assert names(get(client, "/api/v1/artists?generation=5")) == ["Beta"]
+
+
+def test_the_name_filters_on_playlists(client, conn):
+    # source: api-Z1.md §7.2 -- the three name filters apply to a playlist's name.
+    build(conn)
+    make_playlist(conn, "pl-max", "Maximal")
+    make_playlist(conn, "pl-mix", "Mix")
+
+    assert names(get(client, "/api/v1/playlists?q=ma")) == ["Maximal"]
+    assert names(get(client, "/api/v1/playlists?q_contains=ix")) == ["Mix"]
+    assert names(get(client, "/api/v1/playlists?q_full=mix")) == ["Mix"]
+
+
+def test_recent_score_and_generations_sorts(client, conn):
+    # source: api-Z1.md §7.4 -- `recent_score` is the recent horizon (not the
+    # all-time one), `generations` the number of generations present in.
+    _generations_fixture(conn)
+    aard_version = conn.execute(
+        "SELECT version_id FROM track_group WHERE track_id = 't-aard'").fetchone()[0]
+    conn.execute("UPDATE score SET recent = 95.0 WHERE tier = 'version' AND group_id = ?", (str(aard_version),))
+    conn.execute("UPDATE score SET recent = 95.0 WHERE tier = 'track' AND group_id = 't-aard'")
+    conn.commit()
+
+    assert names(get(client, "/api/v1/versions?sort=-score&per_page=1")) == ["Zebra"]
+    assert names(get(client, "/api/v1/versions?sort=-recent_score&per_page=1")) == ["Aardvark"]
+    assert names(get(client, "/api/v1/tracks?sort=-recent_score&per_page=1")) == ["Aardvark"]
+    assert names(get(client, "/api/v1/songs?sort=-generations")) == ["Aardvark", "half•alive", "Zebra"]
+    assert names(get(client, "/api/v1/songs?sort=-tenure")) == ["half•alive", "Aardvark", "Zebra"]
+
+
+def test_name_sorts_on_artists_and_playlists(client, conn):
+    # source: api-Z1.md §7.4 -- `name` (case-insensitive) on every type; an
+    # artist list holds canonical artists only, so "Beta Alt" is not a row.
+    build(conn)
+    make_playlist(conn, "pl-max", "maximal")
+    make_playlist(conn, "pl-mix", "Mix")
+    make_playlist(conn, "pl-a", "Zed")
+
+    assert names(get(client, "/api/v1/artists?sort=name")) == ["Alpha", "Beta", "half•alive"]
+    assert names(get(client, "/api/v1/artists?sort=-name")) == ["half•alive", "Beta", "Alpha"]
+    assert names(get(client, "/api/v1/playlists?sort=name")) == ["maximal", "Mix", "Zed"]
+    assert names(get(client, "/api/v1/playlists?sort=-name")) == ["Zed", "Mix", "maximal"]
+
+
+def test_a_groups_duration_is_its_representatives_not_its_longest_members(client, conn):
+    # source: api-Z1.md §7.3, §7.4 -- "a group's [duration] is its
+    # representative's". Zebra (Live) is made the song's longest member but
+    # stays the lower-scoring one, so the representative is still the 300s
+    # "Zebra" -- a rule reading any member, or the longest, disagrees here.
+    build(conn)
+    conn.execute("UPDATE track SET duration_ms = 400000 WHERE track_id = 't-zeb-live'")
+    conn.commit()
+
+    assert names(get(client, "/api/v1/songs?min_ms=350000")) == []
+    assert names(get(client, "/api/v1/songs?max_ms=300000&sort=name")) == ["Aardvark", "half•alive", "Zebra"]
+    assert names(get(client, "/api/v1/songs?sort=-duration")) == ["Zebra", "Aardvark", "half•alive"]
+    assert names(get(client, "/api/v1/songs?sort=duration")) == ["half•alive", "Aardvark", "Zebra"]
+
+
+# -- The large-id path (resources._IN_LIMIT) ------------------------------------------------------------------------------------------
+
+
+_PARITY_PATHS = [
+    f"/api/v1/{plural}?sort={key}&per_page=200"
+    for plural in ("tracks", "songs", "versions", "recordings", "releases", "albums", "artists")
+    for key in ("-score", "-plays", "-memberships", "-generations", "-tenure", "name")
+] + [
+    "/api/v1/playlists?sort=-plays", "/api/v1/playlists?sort=name",
+    "/api/v1/songs?sort=-duration", "/api/v1/songs?sort=release_date",
+    "/api/v1/songs?min_plays=1&min_memberships=1&min_ms=1",
+    "/api/v1/songs?sort=-plays&from=2025-01-01&tz=UTC",
+    "/api/v1/tracks/t-zeb", "/api/v1/albums/al-a", "/api/v1/artists/ar-beta",
+    "/api/v1/playlists/pl-1",
+]
+
+
+def test_the_large_id_path_returns_exactly_what_the_small_one_does(client, conn, monkeypatch):
+    # source: characterization -- above resources._IN_LIMIT ids every query
+    # drops its IN list, runs over the whole table and filters in Python.
+    # That is the path every real whole-type list takes (12k songs) and the
+    # one the small fixture never reaches, so it is forced here (limit 0) and
+    # compared, whole response against whole response, with the normal path.
+    _generations_fixture(conn)
+    make_playlist(conn, "pl-1", "One")
+    for track, n in (("t-aard", 1), ("t-zeb", 2), ("t-zeb-live", 4), ("t-half", 8)):
+        make_membership(conn, "pl-1", track)
+        for _ in range(n):
+            make_play(conn, track, ts="2025-03-05T15:00:00Z")
+
+    small = {path: get(client, path) for path in _PARITY_PATHS}
+    # Not vacuous: every metric the comparison covers is non-zero somewhere.
+    song_metrics = [i["metrics"] for i in small["/api/v1/songs?sort=-score&per_page=200"]["items"]]
+    assert all(any(m[k] for m in song_metrics) for k in ("memberships", "generations", "tenure"))
+    assert any(m["plays"]["total"] for m in song_metrics)
+
+    monkeypatch.setattr(resources, "_IN_LIMIT", 0)
+    for path in _PARITY_PATHS:
+        assert get(client, path) == small[path], path
