@@ -161,6 +161,14 @@ Consequences that shape everything below:
 
 Track object is ~1,756 bytes and carries, beyond what `track` stores today: **artist ids** (on both `artists` and `album.artists`), `release_date` + precision, `album_type`, `track_number`, `disc_number`, `total_tracks`, `linked_from`, `is_playable`.
 
+### The v1 API's whole-type list cost (measured 2026-10-23, Z1's Verify)
+
+Every unfiltered `GET /api/v1/<type>` on every sort key runs **under 500ms** against the real
+library (13.6k tracks, ~12k songs, 6.3k albums, 4.4k artists, 94k plays). The slowest is artists
+sorted by plays (~390ms); tracks and the four group tiers take 30–160ms. The per-type table is in
+`docs/specs/api-Z1.md` §7.5. It is the baseline for Y's page loads, and for anything that adds a
+sort key or a metric.
+
 ---
 
 ## Order
@@ -182,7 +190,7 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
       DONE               DONE
 
   ──► W (UI clean-up: adopt a CSS framework — V's site writing clean-up folded in) ✅
-  ──► Z1 (the v1 JSON API — entities, search, lists, generations, plays)
+  ──► Z1 (the v1 JSON API — entities, search, lists, generations, plays) ✅
   ──► Y (entity browser — the browse UI over Z1's list endpoints)
   ──► Z2 (convert existing pages onto the API where incremental loading helps)
   ──► X (table standardisation — one way to render a table of entities)
@@ -196,11 +204,11 @@ A (capture) ──► I (detection on the artist model) ──► C (ingest) ─
 (`docs/specs/codebase-health-P.md`) is a standing *approach* document rather than a contract —
 read its §0 before treating it like any other spec. Each part merges into `main` on its own.
 
-**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S, T, L, L2 and W have landed** — P in all three of
+**A, I, C, D, E, B, K, H, M, N, J, P, Q, R, S, T, L, L2, W and Z1 have landed** — P in all three of
 its parts, verified and merged 2026-08-22; Q verified and merged 2026-08-23; R verified and merged
 2026-08-24; S verified and merged 2026-08-28; T verified and merged 2026-08-28; L verified and
 merged 2026-08-29; L2 verified and merged 2026-08-30, closing the `L2_handoff.md` follow-up L
-left; W (with V folded in) verified and merged 2026-09-15. Their
+left; W (with V folded in) verified and merged 2026-09-15; Z1 verified and merged 2026-10-23. Their
 sections below are marked, and each points at the spec that is authoritative for what actually
 shipped — read the spec, not the summary here, before touching any of them.
 
@@ -1308,9 +1316,18 @@ at most, the framework's own optional JS — nothing that needs a build step.
 
 ---
 
-## Z1 — The v1 JSON API
+## Z1 — The v1 JSON API ✅ DONE
 
-**Specced** → `docs/specs/api-Z1.md`. Planned 2026-09-29 – 10-21 on `feat/api-Z`, which also carries Z2.
+**Verified and merged 2026-10-23 → `docs/specs/api-Z1.md` is authoritative for what shipped.**
+Planned 2026-09-29 – 10-21 on `feat/api-Z`, which also carries Z2. Read the spec, not this entry.
+Verify amended it in four places to match what was built:
+- missing scores are `null`, not the page's `0.0` (§5.1);
+- name filters also remove spaces after `base_string` (§7.2);
+- `/generations` is a `{items, total}` envelope with a `tier` param (§9.3);
+- §7.5 now holds the timings.
+
+Verify also added tests for the large-id path (`resources._IN_LIMIT`), which every real whole-type
+list takes and no small fixture reached.
 
 Finn's brain-dump: *"as we are just about to do step Y, entity pages, and are moving towards
 implementing other main site pages, it would be good to have an API. that will also work well with a
@@ -1429,8 +1446,8 @@ memberships, tie broken by plays."*
 (`docs/specs/api-Z1.md` §7) built `GET /api/v1/<type>` for all eight types, settling every question
 this section used to leave open:
 - the filter set;
-- the three name filters (`q` prefix, `q_contains`, `q_full`, all on `normalize.base_string`, so
-  *half alive* finds **half•alive**);
+- the three name filters (`q` prefix, `q_contains`, `q_full`, all on `normalize.base_string` with
+  spaces removed, so *half alive* finds **half•alive**);
 - multi-key server-side sort (`sort=-memberships,-plays`, with a unique-key tie-breaker);
 - pagination (50 a page, 200 max);
 - date-ranged plays (`from`/`to`, `tz`);

@@ -222,7 +222,12 @@ first-view check and passes the flag only on a first view.
   exactly as stored; booleans as JSON booleans (SQLite's 0/1 converted); counts as integers. **No
   formatted strings** (`"4:32"`, `"10 mo."`, thousands separators): formatting is the page's job.
 - **Scores:** `{"all_time": float, "recent": float}` in display space, exactly the numbers the pages
-  show, unrounded. An entity with no materialized score gets the same fallback its page uses today.
+  show, unrounded. **An entity with no materialized score has `score: null`.** This was Finn's call during
+  Implement, recorded here at Verify. It replaces "the same fallback its page uses today": the album
+  page falls back to `0.0`, but a zero is a real, computed score and "no score" is not. For song, album, artist and playlist, which are
+  aggregated at query time, that means none of the entity's versions has a materialized score. A
+  `score` / `recent_score` sort treats `null` as lower than every number, so it comes last in a
+  descending sort and first in an ascending one.
 - **Plays:** `{"total": int, "past_30d": int|null, "past_7d": int|null, "window": int|null,
   "data_through": str|null}`.
   - The two rolling windows keep `entities.play_stats`' semantics: `null` when the play data ends
@@ -424,9 +429,12 @@ Three mutually exclusive params. Passing more than one is a 400.
 - **`q_contains`**: it contains the query anywhere.
 - **`q_full`**: it equals the query, with nothing either side.
 
-All three compare `normalize.base_string` of both sides. Accents and punctuation are folded, so
-`half alive` matches **half•alive** under any of the three, which is why it is `q_full` and not
-"exact". The docstring says so.
+All three compare `normalize.base_string` of both sides **with every space then removed**. Accents,
+punctuation and spaces are folded, so `half alive` matches **half•alive** under any of the three,
+which is why it is `q_full` and not "exact". The docstring says so. (Amended at Verify: removing
+the spaces was Finn's call during Implement. `base_string` alone *deletes* punctuation without
+spacing it, `half•alive` → `halfalive`, so a spaced query could never have matched and this
+section's own example was unreachable.)
 
 What name they match:
 - a track's name;
@@ -491,6 +499,33 @@ aggregates over a whole type, are **unmeasured**.
   optimise silently. Report the measurement.
 - Filters must cut the set in SQL before any per-entity Python runs.
 - Metrics and summaries are built for the page slice only.
+
+**Measured at Verify, 2026-10-23.** Implement recorded only the worst case, ~410ms, and only in
+`CLAUDE.md`'s map. These are medians of three, in-process
+through the test client, against a `VACUUM INTO` copy of the laptop's `symr.db`: 13,607 tracks,
+11,936 songs, 12,243 versions, 12,448 recordings, 13,241 releases, 6,300 albums, 4,355 artists,
+153 playlists, 94,418 plays. Every unfiltered whole-type request on every sort key is **under
+500ms**, so nothing hit the stop-and-ask:
+
+| type | slowest key | ms | other keys |
+|---|---|---|---|
+| artists | `-plays` | 387 | `score` / `recent_score` 345–364, `memberships` / `generations` / `tenure` ~295, `name` 115 |
+| playlists | `-plays` | 291 | `score` / `recent_score` ~200, `name` 141 (the 50-row page's playlist scores dominate) |
+| albums | `-plays` | 178 | `score` / `recent_score` ~172, the rest 33–84 |
+| songs | `-plays` | 159 | `score` 113, `name` 82, the rest 65–79 |
+| versions / recordings / releases | `-plays` | 142 | the rest 47–74 |
+| tracks | `-plays` | 133 | the rest 30–47 |
+
+`/search?q=taylor` took 240ms, `/plays/timeline?bucket=week` over the whole history 130ms and
+`/status` 16ms.
+
+The 900-id cutover in `resources._IN_LIMIT` matters here: above it a query drops its `IN` list and
+filters in Python, and every whole-type list takes that path. A test forces it on the small fixture
+and checks it returns exactly what the normal path does.
+
+§5.3's container check also passed at Verify. `python:3.14.5-slim` (Debian 13.5) on `fe-pro` ships
+`/usr/share/zoneinfo`, and `ZoneInfo("America/Toronto")` resolves there with the right DST offsets.
+No `tzdata` package was added.
 
 ---
 
@@ -562,12 +597,15 @@ Takes the same filters as §9.1, plus `bucket=day|week|month` (default `month`).
 
 ### 9.3 Generations
 
-- **`GET /api/v1/generations`**: every generation in ordinal order, each one
-  `{ordinal, name, playlist: <summary>, started_at, ended_at, version_count, song_count, carried,
-  new}`. `ended_at` is `null` for the active generation. The counts are the ones
-  `generations.generations()` derives.
+- **`GET /api/v1/generations?tier=version|song`** (default `version`): `{items, total}`, every
+  generation in ordinal order, each one `{ordinal, name, playlist: <summary>, started_at, ended_at,
+  version_count, song_count, carried, new}`. `ended_at` is `null` for the active generation. The
+  counts are the ones `generations.generations()` derives: `version_count` and `song_count` are
+  fixed, while `carried` / `new` are counted at `tier`. (Amended at Verify: the `{items, total}`
+  envelope and the `tier` param were added in Implement. The confirm/decline writes in §11 return
+  this same shape.)
 - **`GET /api/v1/generations/<ordinal>?tier=version|song`** (default `version`): that row plus
-  `items`: one entry per group present, each `{group: <version or song summary>, label}`, where
+  `tier` (echoed) and `items`: one entry per group present, each `{group: <version or song summary>, label}`, where
   `label` is `carried` or `new`, ordered by score descending. Also `survived_out`, which is `null`
   for the newest generation (as `generation_view` has it). Same carried/new rule as
   `generations.generation_view`. This is the only unpaginated list in the API, because a generation
