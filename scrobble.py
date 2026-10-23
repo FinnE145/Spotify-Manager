@@ -47,6 +47,13 @@ _POLL_INTERVAL_SECONDS = 100 * 60
 _next_wake_at = None
 
 
+def next_wake_at():
+    """When the poller next wakes, or None when no poller runs in this process
+    (always so on the laptop) -- the public read of `_next_wake_at` for the v1
+    API's /status (docs/specs/api-Z1.md §10)."""
+    return _next_wake_at
+
+
 def start():
     """Spawns the daemon poller thread. Called only from serve.py -- the
     container entrypoint -- never from app.py's app.run() laptop dev loop

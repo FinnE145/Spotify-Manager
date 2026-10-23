@@ -101,30 +101,45 @@ def playlists_for_tracks(conn, track_ids):
     ).fetchall()
 
 
-def fetch_album_tracklist(conn, album_id):
-    """One request to GET /v1/albums/{id} on first view (tracklist_pulled_at
-    IS NULL only -- never re-fetched automatically): stores the tracklist as
-    returned, capped at Spotify's own 50-item first page. A failed attempt --
-    429, network, 404 -- still stamps tracklist_pulled_at with tracklist_json
-    left NULL, so it counts as "tried" and isn't retried on every subsequent
-    view (P1-016); the page always renders from what the DB already has
-    either way. No client at all (not logged in) doesn't stamp anything --
-    that's not a real attempt.
+class FetchOutcome(str):
+    """What fetch_album_tracklist / fetch_artist_image report
+    (docs/specs/api-Z1.md §4.4): "no_client", "failed" or "fetched". A str so
+    callers can compare it directly; `.error` is the exception behind a
+    "failed" (None otherwise), for the v1 API's 502 detail. The entity pages
+    and backfill.py ignore the return value entirely."""
 
-    Queuing wanted_uri rows is queue_wanted_uris()'s job, not this one's --
-    a caller runs both (docs/specs/grouping-fixes-backfill-M.md §4.4)."""
+    def __new__(cls, value, error=None):
+        outcome = super().__new__(cls, value)
+        outcome.error = error
+        return outcome
+
+
+def fetch_album_tracklist(conn, album_id):
+    """One request to GET /v1/albums/{id}: stores the tracklist as returned,
+    capped at Spotify's own 50-item first page. **Whether to call it at all is
+    the caller's check** -- the entity pages and backfill.py skip it once
+    tracklist_pulled_at is set, so a page view never re-fetches (P1-016); the
+    v1 API's spotify_request=1 deliberately never checks (api-Z1.md §4.4). A
+    failed attempt -- 429, network, 404 -- still stamps tracklist_pulled_at
+    with tracklist_json left NULL, so it counts as "tried"; the page always
+    renders from what the DB already has either way. No client at all (not
+    logged in) doesn't stamp anything -- that's not a real attempt.
+
+    Returns a FetchOutcome. Queuing wanted_uri rows is queue_wanted_uris()'s
+    job, not this one's -- a caller runs both
+    (docs/specs/grouping-fixes-backfill-M.md §4.4)."""
     sp = get_spotify_client()
     if sp is None:
-        return
+        return FetchOutcome("no_client")
     try:
         album = sp.album(album_id)
-    except Exception:
+    except Exception as e:
         conn.execute(
             "UPDATE album SET tracklist_pulled_at = ? WHERE album_id = ?",
             (jobs.now_iso(), album_id),
         )
         conn.commit()
-        return
+        return FetchOutcome("failed", e)
 
     items = (album.get("tracks") or {}).get("items") or []
     conn.execute(
@@ -132,6 +147,7 @@ def fetch_album_tracklist(conn, album_id):
         (json.dumps(items, separators=(",", ":")), jobs.now_iso(), album_id),
     )
     conn.commit()
+    return FetchOutcome("fetched")
 
 
 def queue_wanted_uris(conn, album_id, source):
@@ -174,27 +190,27 @@ def queue_wanted_uris(conn, album_id, source):
 
 
 def fetch_artist_image(conn, artist_id):
-    """One request to GET /v1/artists/{id} on first view (detail_pulled_at
-    IS NULL only): stores the largest image url and stamps detail_pulled_at
-    regardless of whether an image came back, so a future visit doesn't
-    re-fetch. genres/followers/popularity are absent from this endpoint for
-    this app and aren't worth storing. A failed attempt -- 429, network, 404
-    -- also stamps detail_pulled_at (image_url left NULL), so it counts as
-    "tried" rather than retrying on every subsequent view (P1-016), same as
+    """One request to GET /v1/artists/{id}: stores the largest image url and
+    stamps detail_pulled_at regardless of whether an image came back, so a
+    page's next visit doesn't re-fetch (the first-view check is the caller's,
+    exactly as for fetch_album_tracklist). genres/followers/popularity are
+    absent from this endpoint for this app and aren't worth storing. A failed
+    attempt -- 429, network, 404 -- also stamps detail_pulled_at (image_url
+    left NULL), so it counts as "tried" (P1-016), same as
     fetch_album_tracklist. No client at all (not logged in) doesn't stamp
-    anything -- that's not a real attempt."""
+    anything -- that's not a real attempt. Returns a FetchOutcome."""
     sp = get_spotify_client()
     if sp is None:
-        return
+        return FetchOutcome("no_client")
     try:
         artist = sp.artist(artist_id)
-    except Exception:
+    except Exception as e:
         conn.execute(
             "UPDATE artist SET detail_pulled_at = ? WHERE artist_id = ?",
             (jobs.now_iso(), artist_id),
         )
         conn.commit()
-        return
+        return FetchOutcome("failed", e)
 
     # Largest by width, not images[0] -- Spotify's ordering is undocumented
     # and not guaranteed to be largest-first (P1-016).
@@ -205,6 +221,7 @@ def fetch_artist_image(conn, artist_id):
         (image_url, jobs.now_iso(), artist_id),
     )
     conn.commit()
+    return FetchOutcome("fetched")
 
 
 # -- One detail function per entity page (P3_refactor.md §4.1) -------------

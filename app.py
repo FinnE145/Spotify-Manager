@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
+import api
 import api_log
 import artists
 import backfill
@@ -68,6 +69,10 @@ def create_app():
     db.init_db()
 
     app.teardown_appcontext(db.close_db)
+
+    # The v1 JSON API (docs/specs/api-Z1.md §2.1) -- the one Blueprint in the
+    # app; every other route is registered below.
+    app.register_blueprint(api.bp, url_prefix="/api/v1")
 
     # -- Auth guard ---------------------------------------------------
 
@@ -145,6 +150,14 @@ def create_app():
     @app.before_request
     def require_login():
         if request.endpoint in _PUBLIC_ENDPOINTS:
+            return None
+        # docs/specs/api-Z1.md §4.1: the whole v1 Blueprint is exempt, reads
+        # and writes alike -- nothing in it needs the token, and a dashboard or
+        # an MCP can't sign in again. Keyed on the Blueprint, not the /api/
+        # prefix: the 45 internal /api/* endpoints keep the guard. It has to
+        # return before get_spotify_client(), which can fire a token-refresh
+        # POST that a v1 request must never cause (§4.3).
+        if request.blueprint == "api":
             return None
         if get_spotify_client() is None:
             # An /api/* caller wants JSON like every other /api/* error
