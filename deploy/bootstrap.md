@@ -8,6 +8,11 @@ Machine facts this assumes (measured 2026-08-23, don't re-derive): `fe-pro` is r
 over Tailscale as `fe-pro.tail78f5ec.ts.net` / `100.64.132.111`, `finne` is uid:gid `1000:1000`,
 `/srv` has 864 G free and is where Symr lives, and port 45660 is free on the host.
 
+**Since 2026-11 (fe-pro's phase 2) the container and the backup run as `svc` (uid:gid
+`2003:2003`), not `finne`.** `svc` owns `data/` and `/var/backups/symr`; the stack directory,
+`repo/` and `symr.env` stay `finne`'s. The `chown`s below are written for that. `~/SERVER.md`
+("Accounts") is the reference.
+
 Steps 1, 2, 9 and 10 describe the Caddy front (2026-09-15). The original bootstrap on 2026-08-23
 used `tailscale serve` instead — `docs/specs/host-on-fe-pro-Q.md` §3.1 records both and why it
 changed; nothing in the Symr container differs between the two.
@@ -97,6 +102,7 @@ rm /tmp/symr-transfer.db
 
 rsync -az .spotipy_cache fe-pro:/srv/stacks/symr/data/.spotipy_cache
 rsync -az data/streaming_history fe-pro:/srv/stacks/symr/data/
+ssh -t fe-pro "sudo chown -R svc:svc /srv/stacks/symr/data && sudo chmod 750 /srv/stacks/symr/data"
 ```
 
 Check the row counts match on both sides before going further — `track`, `play`,
@@ -140,7 +146,7 @@ The repo is already on the server from step 4, so the units are copied from ther
 from the laptop. Use `ssh -t`: every `sudo` here prompts for a password.
 
 ```bash
-ssh -t fe-pro "sudo mkdir -p /var/backups/symr && sudo chown 1000:1000 /var/backups/symr"
+ssh -t fe-pro "sudo install -d -m 750 -o svc -g svc /var/backups/symr"
 ssh -t fe-pro "sudo cp /srv/stacks/symr/repo/deploy/symr-backup.{service,timer} /etc/systemd/system/ && \
   sudo systemctl daemon-reload && \
   sudo systemctl enable --now symr-backup.timer"
@@ -168,7 +174,11 @@ FROM caddy:2-builder AS builder
 RUN xcaddy build --with github.com/caddy-dns/cloudflare
 FROM caddy:2
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+RUN setcap cap_net_bind_service=+ep /usr/bin/caddy
 ```
+
+(The `setcap` line since 2026-11: Caddy runs as `svc` with only `NET_BIND_SERVICE`, and copying
+the binary over drops the stock image's file capability.)
 
 `Caddyfile` — **the `bind` line is the security boundary.** Caddy runs with `network_mode: host`
 so it can reach Symr's loopback-only port, which also means it could listen on every interface;

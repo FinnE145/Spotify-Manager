@@ -1,10 +1,30 @@
 # docs/specs/host-on-fe-pro-Q.md §7.2. Install to /etc/systemd/system/,
 # paired with symr-backup.timer (which triggers this; do not `enable` this
-# unit directly). Runs as finne -- symr.db is owned by uid 1000 on the host.
+# unit directly). Runs as svc (2003), which owns symr.db on the host (SERVER.md,
+# "Accounts").
 [Unit]
 Description=Symr database backup (VACUUM INTO, 30-day retention)
 
 [Service]
 Type=oneshot
-User=finne
+User=svc
+Group=svc
 ExecStart=/srv/stacks/symr/repo/deploy/backup.sh
+# Backups are 640 svc:svc; finne reads them through the svc group (deploy.sh's pull).
+UMask=0027
+
+# It reads the database and writes one file. data/ has to be writable, not read-only:
+# a reader of a WAL-mode database writes its -shm file, even for VACUUM INTO.
+ProtectSystem=strict
+ReadWritePaths=/var/backups/symr /srv/stacks/symr/data
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

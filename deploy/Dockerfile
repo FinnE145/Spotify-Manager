@@ -11,10 +11,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Matches finne's uid:gid on the host, so bind-mounted files under /data stay
-# Finn-owned rather than becoming root-owned.
-RUN groupadd --gid 1000 symr && useradd --uid 1000 --gid 1000 --create-home symr && chown -R 1000:1000 /app
-USER 1000:1000
+# svc (2003), fe-pro's shared account for ordinary web services (SERVER.md,
+# "Accounts"), which owns /srv/stacks/symr/data on the host. Every writable
+# path is under /data (host-on-fe-pro-Q.md §4.4), so /app stays root-owned:
+# the service can't rewrite its own code. No bytecode cache for the same reason.
+ENV PYTHONDONTWRITEBYTECODE=1
+RUN groupadd --gid 2003 svc && useradd --uid 2003 --gid 2003 --create-home svc
+USER 2003:2003
 
 EXPOSE 45660
 
