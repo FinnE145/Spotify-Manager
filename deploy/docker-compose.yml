@@ -1,5 +1,8 @@
 # docs/specs/host-on-fe-pro-Q.md §4.2. Run from /srv/stacks/symr/repo/deploy on
 # fe-pro: `docker compose -f docker-compose.yml up -d --build`.
+# The project name. Without it Compose names the project after the directory, "deploy", which symr's and settlers'
+# deploy directories share, so each saw the other's container as an orphan (and --remove-orphans would delete it).
+name: symr
 services:
   symr:
     build: { context: .., dockerfile: deploy/Dockerfile }
